@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync, exec } = require('child_process');
+const auth = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -125,9 +126,9 @@ function getStats() {
   };
 }
 
-function getProcesses() {
+function getProcesses(onlyUser = null) {
   return new Promise((resolve) => {
-    exec('ps aux --sort=-%cpu | head -16', { timeout: 3000 }, (err, stdout) => {
+    exec('ps aux --sort=-%cpu', { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       if (err || !stdout) return resolve([]);
       const lines = stdout.trim().split('\n').slice(1);
       const rows = lines.map((l) => {
@@ -139,8 +140,8 @@ function getProcesses() {
           rss: p[5], stat: p[7], start: p[8],
           cmd: p.slice(10).join(' ').slice(0, 120),
         };
-      }).filter(Boolean);
-      resolve(rows);
+      }).filter((r) => r && (!onlyUser || r.user === onlyUser));
+      resolve(rows.slice(0, 15));
     });
   });
 }
@@ -187,17 +188,69 @@ function send(res, code, body, type = 'application/json') {
   res.end(body);
 }
 
+function readBody(req, limit = 4096) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function serveFile(res, file) {
+  const fp = path.join(PUBLIC_DIR, file);
+  if (!fp.startsWith(PUBLIC_DIR) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) {
+    return send(res, 404, 'not found', 'text/plain');
+  }
+  send(res, 200, fs.readFileSync(fp), MIME[path.extname(fp)] || 'application/octet-stream');
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
   if (p === '/api/health') return send(res, 200, JSON.stringify({ ok: true, time: Date.now() }));
+
+  // ---- auth ----
+  if (p === '/api/login' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await auth.login(req, body && body.username, body && body.password);
+    if (!r.ok) return send(res, r.status, JSON.stringify({ error: r.error }));
+    res.setHeader('Set-Cookie', r.setCookie);
+    return send(res, 200, JSON.stringify({ user: r.user, admin: r.admin }));
+  }
+  if (p === '/api/logout' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', auth.logout(req));
+    return send(res, 200, JSON.stringify({ ok: true }));
+  }
+  if (p === '/login' || p === '/login.html') {
+    if (auth.getSession(req)) { res.writeHead(302, { Location: '/' }); return res.end(); }
+    return serveFile(res, '/login.html');
+  }
+
+  const session = auth.getSession(req);
+  if (!session) {
+    if (p.startsWith('/api/')) return send(res, 401, JSON.stringify({ error: 'Unauthorized' }));
+    res.writeHead(302, { Location: '/login' });
+    return res.end();
+  }
+
+  if (p === '/api/me') return send(res, 200, JSON.stringify(session));
   if (p === '/api/stats') {
     const s = lastStats && (Date.now() - lastStats.time < SAMPLE_INTERVAL_MS * 1.5) ? lastStats : getStats();
     if (!lastStats || s !== lastStats) lastStats = s;
     return send(res, 200, JSON.stringify(s));
   }
-  if (p === '/api/processes') return send(res, 200, JSON.stringify({ time: Date.now(), rows: await getProcesses() }));
+  if (p === '/api/processes') {
+    const rows = await getProcesses(session.admin ? null : session.user);
+    return send(res, 200, JSON.stringify({ time: Date.now(), rows }));
+  }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
@@ -206,11 +259,7 @@ const server = http.createServer(async (req, res) => {
 
   let file = p === '/' ? '/index.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
-  const fp = path.join(PUBLIC_DIR, file);
-  if (!fp.startsWith(PUBLIC_DIR) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) {
-    return send(res, 404, 'not found', 'text/plain');
-  }
-  send(res, 200, fs.readFileSync(fp), MIME[path.extname(fp)] || 'application/octet-stream');
+  serveFile(res, file);
 });
 
 server.listen(PORT, HOST, () => console.log(`vps-monitor on http://${HOST}:${PORT}`));

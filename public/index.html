@@ -27,6 +27,10 @@ code{color:#9fd}
 <span class="sub" id="host">—</span>
 <span class="sub" id="uptime">—</span>
 <span class="sub">auto-refresh 3s · <code>/api/stats</code></span>
+<span style="margin-left:auto;display:flex;gap:10px;align-items:center">
+<span class="sub" id="who">—</span>
+<button id="logout" style="background:#242c38;color:var(--tx);border:0;border-radius:8px;padding:5px 12px;cursor:pointer">Logout</button>
+</span>
 </header>
 <div class="wrap">
 <div class="card c3"><div class="mut">CPU <span id="cores"></span></div><div class="big" id="cpu">—</div><div class="bar"><i id="cpuBar"></i></div><div class="mut" id="load">—</div></div>
@@ -42,7 +46,13 @@ const $=id=>document.getElementById(id);
 const fmtGB=b=>(b/1073741824).toFixed(1)+'G';
 const fmtMB=b=>b>1073741824?fmtGB(b):(b/1048576).toFixed(0)+'M';
 let chart;
-async function j(u){const r=await fetch(u);return r.json()}
+async function j(u){
+ const r=await fetch(u);
+ if(r.status===401){location.href='/login';throw new Error('unauthorized')}
+ return r.json();
+}
+j('/api/me').then(m=>{$('who').textContent=m.user+(m.admin?' (admin)':'')}).catch(()=>{});
+$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login'};
 async function stats(){
  try{
   const s=await j('/api/stats');
