@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VPS Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0f1115;--card:#171b22;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--ok:#2fbf71;--warn:#f5a524;--bad:#f31260}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:16px 20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}header .sub{color:var(--mut);font-size:12px}
+.wrap{padding:0 20px 30px;display:grid;gap:14px;grid-template-columns:repeat(12,1fr)}
+.card{background:var(--card);border:1px solid #232a35;border-radius:12px;padding:14px}
+.c3{grid-column:span 3}.c4{grid-column:span 4}.c6{grid-column:span 6}.c12{grid-column:span 12}
+@media(max-width:900px){.c3,.c4,.c6{grid-column:span 12}}
+.big{font-size:28px;font-weight:700}.mut{color:var(--mut);font-size:12px}
+.bar{height:8px;background:#242c38;border-radius:99px;overflow:hidden;margin-top:8px}.bar>i{display:block;height:100%;background:var(--ac)}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #232a35}th{color:var(--mut);font-weight:600}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;background:#242c38}.pill.ok{background:rgba(47,191,113,.2);color:var(--ok)}.pill.down{background:rgba(243,18,96,.2);color:var(--bad)}
+code{color:#9fd}
+</style>
+</head>
+<body>
+<header>
+<h1>VPS Monitor</h1>
+<span class="sub" id="host">—</span>
+<span class="sub" id="uptime">—</span>
+<span class="sub">auto-refresh 3s · <code>/api/stats</code></span>
+</header>
+<div class="wrap">
+<div class="card c3"><div class="mut">CPU <span id="cores"></span></div><div class="big" id="cpu">—</div><div class="bar"><i id="cpuBar"></i></div><div class="mut" id="load">—</div></div>
+<div class="card c3"><div class="mut">Memory</div><div class="big" id="mem">—</div><div class="bar"><i id="memBar"></i></div><div class="mut" id="memDet">—</div></div>
+<div class="card c3"><div class="mut">Disk /</div><div class="big" id="disk">—</div><div class="bar"><i id="diskBar"></i></div><div class="mut" id="diskDet">—</div></div>
+<div class="card c3"><div class="mut">Network (total)</div><div class="big" id="net">—</div><div class="mut" id="swap">—</div><div class="mut" id="time">—</div></div>
+<div class="card c6"><h3 style="margin:0 0 8px">History (last 2h)</h3><canvas id="hist" height="120"></canvas></div>
+<div class="card c6"><h3 style="margin:0 0 8px">Services</h3><div id="svc" style="display:flex;gap:8px;flex-wrap:wrap"></div><div class="mut" style="margin-top:8px">nginx · mysql · php8.4-fpm · mosquitto · redis · ssh via <code>systemctl is-active</code></div></div>
+<div class="card c12"><h3 style="margin:0 0 8px">Top processes</h3><table><thead><tr><th>PID</th><th>USER</th><th>CPU%</th><th>MEM%</th><th>CMD</th></tr></thead><tbody id="procs"></tbody></table></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const fmtGB=b=>(b/1073741824).toFixed(1)+'G';
+const fmtMB=b=>b>1073741824?fmtGB(b):(b/1048576).toFixed(0)+'M';
+let chart;
+async function j(u){const r=await fetch(u);return r.json()}
+async function stats(){
+ try{
+  const s=await j('/api/stats');
+  $('host').textContent=s.hostname+' · '+s.cpu.cores+' cores · '+s.cpu.model.slice(0,28);
+  const up=Math.floor(s.uptime);const d=Math.floor(up/86400),h=Math.floor(up%86400/3600),m=Math.floor(up%3600/60);
+  $('uptime').textContent=`up ${d}d ${h}h ${m}m`;
+  $('cores').textContent=`(${s.cpu.cores} cores)`;
+  $('cpu').textContent=s.cpu.pct+'%';$('cpuBar').style.width=s.cpu.pct+'%';
+  $('load').textContent=`load ${s.load.l1} ${s.load.l5} ${s.load.l15}`;
+  $('mem').textContent=s.mem.pct+'%';$('memBar').style.width=s.mem.pct+'%';
+  $('memDet').textContent=`${fmtMB(s.mem.used)} / ${fmtMB(s.mem.total)}`;
+  $('disk').textContent=s.disk.pct+'%';$('diskBar').style.width=s.disk.pct+'%';
+  $('diskDet').textContent=`${fmtGB(s.disk.used)} / ${fmtGB(s.disk.total)} avail ${fmtGB(s.disk.avail)}`;
+  $('net').textContent=`↓ ${fmtMB(s.net.rx)} ↑ ${fmtMB(s.net.tx)}`;
+  $('swap').textContent=`swap ${(s.mem.swapUsed/1048576).toFixed(0)}M / ${(s.mem.swapTotal/1048576).toFixed(0)}M`;
+  $('time').textContent=new Date(s.time).toLocaleString();
+ }catch(e){}
+}
+async function procs(){
+ try{
+  const d=await j('/api/processes');
+  $('procs').innerHTML=d.rows.map(r=>`<tr><td>${r.pid}</td><td>${r.user}</td><td>${r.cpu}</td><td>${r.mem}</td><td><code>${r.cmd.replace(/</g,'&lt;')}</code></td></tr>`).join('');
+ }catch(e){}
+}
+async function svc(){
+ try{
+  const d=await j('/api/services');
+  $('svc').innerHTML=d.services.map(s=>`<span class="pill ${s.active?'ok':'down'}">${s.active?'●':'○'} ${s.name}</span>`).join('');
+ }catch(e){}
+}
+async function hist(){
+ try{
+  const d=await j('/api/history?limit=720');
+  const labels=d.points.map(p=>new Date(p.t).toLocaleTimeString());
+  const data={
+   labels,
+   datasets:[
+    {label:'CPU %',data:d.points.map(p=>p.cpu),borderColor:'#4da3ff',pointRadius:0,tension:.3},
+    {label:'MEM %',data:d.points.map(p=>p.mem),borderColor:'#2fbf71',pointRadius:0,tension:.3},
+    {label:'Load1 x10',data:d.points.map(p=>p.l1*10),borderColor:'#f5a524',pointRadius:0,tension:.3,borderDash:[4,4]},
+   ]};
+  if(!chart)chart=new Chart($('hist'),{type:'line',data,options:{animation:false,scales:{y:{min:0,max:100}}}});
+  else{chart.data=data;chart.update()}
+ }catch(e){}
+}
+stats();procs();svc();hist();
+setInterval(stats,3000);setInterval(procs,5000);setInterval(svc,15000);setInterval(hist,30000);
+</script>
+</body>
+</html>
