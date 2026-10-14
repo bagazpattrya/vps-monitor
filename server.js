@@ -1715,6 +1715,20 @@ const server = http.createServer(async (req, res) => {
     ];
     for (const [k, c] of checks) if (!c.ok) return send(res, 400, JSON.stringify({ error: `${k}: ${c.error}` }));
     if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
+    // Samakan dengan policy MySQL validate_password MEDIUM + check_user_name (cek di awal agar gagal cepat, bukan di tengah deploy).
+    {
+      const pw = body.dbPass;
+      const need = [];
+      if (!/[a-z]/.test(pw)) need.push('huruf kecil');
+      if (!/[A-Z]/.test(pw)) need.push('huruf besar');
+      if (!/[0-9]/.test(pw)) need.push('angka');
+      if (!/[^A-Za-z0-9]/.test(pw)) need.push('karakter spesial');
+      if (need.length) return send(res, 400, JSON.stringify({ error: `dbPass kurang: ${need.join(', ')} (syarat MySQL MEDIUM)` }));
+      const low = pw.toLowerCase();
+      for (const u of [String(body.dbUser || '').toLowerCase(), String(body.dbName || '').toLowerCase()]) {
+        if (u && u.length >= 4 && low.includes(u)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh mengandung nama user/database (ditolak MySQL)' }));
+      }
+    }
     const projectType = body.projectType === 'existing' ? 'existing' : 'new';
     const sqlPath = projectType === 'existing' ? String(body.sqlPath || '').trim() : '';
     if (projectType === 'existing') {

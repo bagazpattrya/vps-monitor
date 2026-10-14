@@ -2676,11 +2676,16 @@ $('cronList').addEventListener('click', (e) => {
 });
 $('depDryRun').addEventListener('click', () => depSubmit(true));
 $('depGenPass').addEventListener('click', () => {
-  // 16 karakter tanpa yang bermasalah di shell/SQL: tanpa ' " \ $ ` !
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%-_?';
+  // 16 karakter, DIJAMIN lolos policy MySQL MEDIUM: atas+kecil+angka+spesial, tanpa yang bermasalah di shell/SQL.
+  const up = 'ABCDEFGHJKLMNPQRSTUVWXYZ', lo = 'abcdefghijkmnopqrstuvwxyz', dg = '23456789', sp = '!@#%-_?';
+  const all = up + lo + dg + sp;
   const buf = new Uint32Array(16);
   crypto.getRandomValues(buf);
-  $('depDbPass').value = Array.from(buf, x => chars[x % chars.length]).join('');
+  const pick = (s, i) => s[buf[i] % s.length];
+  const arr = [pick(up, 0), pick(lo, 1), pick(dg, 2), pick(sp, 3)];
+  for (let i = 4; i < 16; i++) arr.push(pick(all, i));
+  for (let i = arr.length - 1; i > 0; i--) { const j = buf[i] % (i + 1); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  $('depDbPass').value = arr.join('');
 });
 $('depStart').addEventListener('click', () => depSubmit(false));
 $('deployJobsRefresh').addEventListener('click', () => deployJobsRefresh(false));
