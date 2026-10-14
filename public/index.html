@@ -1358,13 +1358,13 @@ select.input { appearance: auto; max-width: 100%; }
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--mut)">Folder di /var/www*<br><input id="depDir" class="input" style="width:100%" placeholder="myclient-app" /></label>
       <label style="font-size:12px;color:var(--mut)">Repo (org internal)*<br><input id="depRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/repo.git" /></label>
-      <label style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" placeholder="main" /></label>
+      <label style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" value="main" /></label>
       <label style="font-size:12px;color:var(--mut)">Domain produksi*<br><input id="depDomain" class="input" style="width:100%" placeholder="myclient.com" /></label>
-      <label style="font-size:12px;color:var(--mut)">Deployer (user Linux, anggota www-data)*<br><input id="depDeployer" class="input" style="width:100%" placeholder="zae" /></label>
+      <label style="font-size:12px;color:var(--mut)">Deployer (user Linux, anggota www-data)*<br><input id="depDeployer" class="input" style="width:100%" value="bagaz" /></label>
       <label style="font-size:12px;color:var(--mut)">Tipe project<br><select id="depType" class="input" style="width:100%"><option value="new">Baru (migrate --force)</option><option value="existing">Existing (import SQL dari path server)</option></select></label>
       <label style="font-size:12px;color:var(--mut)">DB name*<br><input id="depDbName" class="input" style="width:100%" placeholder="client_db" /></label>
       <label style="font-size:12px;color:var(--mut)">DB user*<br><input id="depDbUser" class="input" style="width:100%" placeholder="client_user" /></label>
-      <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><span style="display:flex;gap:6px"><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /><button class="btn-sm" id="depGenPass" title="Generate password acak 16 karakter">🎲</button></span></label>
+      <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><span style="display:flex;gap:6px"><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /><button class="btn-sm" id="depShowPass" title="Lihat/sembunyikan">👁</button><button class="btn-sm" id="depCopyPass" title="Copy">⧉</button><button class="btn-sm" id="depGenPass" title="Generate password acak 16 karakter">🎲</button></span></label>
       <label style="font-size:12px;color:var(--mut)">Path SQL di server (existing only)<br><input id="depSqlPath" class="input" style="width:100%" placeholder="/var/backups/mysql/client_db_backup....sql.gz" /></label>
       <label style="font-size:12px;color:var(--mut)">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
       <label style="font-size:12px;color:var(--mut)">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
@@ -2675,6 +2675,36 @@ $('cronList').addEventListener('click', (e) => {
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
 $('depDryRun').addEventListener('click', () => depSubmit(true));
+// Auto-fill berantai: repo -> folder -> dbName/dbUser. Field yang sudah diketik manual tidak dioverride.
+const depAuto = { folder: true, dbName: true, dbUser: true };
+for (const [id, key] of [['depDir', 'folder'], ['depDbName', 'dbName'], ['depDbUser', 'dbUser']]) {
+  $(id).addEventListener('input', () => { depAuto[key] = false; });
+}
+function depRepoName() {
+  const m = $('depRepo').value.trim().match(/[:/]([^/:]+?)(\.git)?$/);
+  return m ? m[1] : '';
+}
+$('depRepo').addEventListener('input', () => {
+  const name = depRepoName();
+  if (name && depAuto.folder && !$('depDir').value) { $('depDir').value = name; depCascadeFolder(); }
+});
+function depCascadeFolder() {
+  const f = $('depDir').value.trim();
+  if (!f) return;
+  if (depAuto.dbName && !$('depDbName').value) $('depDbName').value = `${f}_db`;
+  if (depAuto.dbUser && !$('depDbUser').value) $('depDbUser').value = `${f}_user_sql`;
+}
+$('depDir').addEventListener('input', depCascadeFolder);
+$('depShowPass').addEventListener('click', () => {
+  const el = $('depDbPass');
+  el.type = el.type === 'password' ? 'text' : 'password';
+});
+$('depCopyPass').addEventListener('click', async () => {
+  const v = $('depDbPass').value;
+  if (!v) return alert('Password masih kosong');
+  try { await navigator.clipboard.writeText(v); alert('Password tercopy'); }
+  catch { $('depDbPass').select(); document.execCommand('copy'); alert('Password tercopy'); }
+});
 $('depGenPass').addEventListener('click', () => {
   // 16 karakter, DIJAMIN lolos policy MySQL MEDIUM: atas+kecil+angka+spesial, tanpa yang bermasalah di shell/SQL.
   const up = 'ABCDEFGHJKLMNPQRSTUVWXYZ', lo = 'abcdefghijkmnopqrstuvwxyz', dg = '23456789', sp = '!@#%-_?';
