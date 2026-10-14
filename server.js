@@ -957,12 +957,12 @@ function readFsFile(filePath, maxBytes = 524_288) {
 }
 
 // ---- Backup Monitoring & Download helpers ----
+// Hanya direktori backup MySQL sungguhan. Sengaja TIDAK fallback ke /var/backups
+// (isinya backup system dpkg/alternatives, bukan dump MySQL) agar panel tidak
+// menampilkan file yang salah. Set BACKUP_DIR di ecosystem.config.js bila beda lokasi.
 const BACKUP_CANDIDATES = [
   process.env.BACKUP_DIR,
-  '/home/zae/backups',
-  '/var/backups',
-  '/backups',
-  '/backup'
+  '/home/zae/backups'
 ].filter(Boolean);
 
 function getBackupRootDir() {
@@ -1224,18 +1224,26 @@ const server = http.createServer(async (req, res) => {
     if (!full.startsWith(root + path.sep) && full !== root) {
       return send(res, 400, 'Invalid backup file path', 'text/plain');
     }
-    if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
+    // Tolak symlink yang keluar dari root (path.join + startsWith tidak resolve symlink).
+    let real = null;
+    try { real = fs.realpathSync(full); } catch { return send(res, 404, 'Backup file not found', 'text/plain'); }
+    let realRoot = root;
+    try { realRoot = fs.realpathSync(root); } catch {}
+    if (!real.startsWith(realRoot + path.sep) && real !== realRoot) {
+      return send(res, 400, 'Invalid backup file path', 'text/plain');
+    }
+    if (!fs.existsSync(real) || fs.statSync(real).isDirectory()) {
       return send(res, 404, 'Backup file not found', 'text/plain');
     }
-    const stat = fs.statSync(full);
-    const filename = path.basename(full);
+    const stat = fs.statSync(real);
+    const filename = path.basename(real);
     audit(session.user, 'backup.download', rel, `size=${stat.size}`);
     res.writeHead(200, {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
       'Content-Length': stat.size,
     });
-    fs.createReadStream(full).pipe(res);
+    fs.createReadStream(real).pipe(res);
     return;
   }
   if (p === '/api/fs/list') {
