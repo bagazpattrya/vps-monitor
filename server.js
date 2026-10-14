@@ -1076,7 +1076,7 @@ function runManualBackup() {
   });
 }
 
-// ---- Auto Deploy (Laravel Git-based SOP, Phase 1: temp subdomain) ----
+// ---- Auto Deploy (Laravel Git-based SOP, langsung ke domain produksi) ----
 // Prinsip permission (anti bootstrap/cache 500):
 // - root hanya untuk: mysql, nginx, certbot, supervisor, cron, chown.
 // - git clone / composer / artisan SELALU sebagai deployer (user:www-data).
