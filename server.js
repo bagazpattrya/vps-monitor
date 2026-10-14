@@ -1085,6 +1085,7 @@ const server = http.createServer(async (req, res) => {
     const targetDir = url.searchParams.get('path') || SCAN_ROOT;
     try {
       const data = listFsDirectory(targetDir);
+      audit(session.user, 'fs.list', data.current, `entries=${data.entries.length}`);
       return send(res, 200, JSON.stringify(data));
     } catch (err) {
       return send(res, 400, JSON.stringify({ error: err.message }));
@@ -1096,6 +1097,7 @@ const server = http.createServer(async (req, res) => {
     if (!targetFile) return send(res, 400, JSON.stringify({ error: 'Path required' }));
     try {
       const data = readFsFile(targetFile);
+      audit(session.user, 'fs.read', data.path, `size=${data.size}`);
       return send(res, 200, JSON.stringify(data));
     } catch (err) {
       return send(res, 400, JSON.stringify({ error: err.message }));
