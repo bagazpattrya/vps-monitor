@@ -3,6 +3,7 @@
 // Passwords are verified with PAM's unix_chkpwd helper, which only works for
 // arbitrary users when the process runs as root.
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
@@ -14,6 +15,7 @@ const MAX_FAILS = 5;
 const LOCK_MS = 15 * 60_000;
 const CHKPWD_CANDIDATES = ['/usr/sbin/unix_chkpwd', '/sbin/unix_chkpwd', '/usr/lib/unix_chkpwd'];
 const USERNAME_RE = /^[a-z_][a-z0-9_.-]{0,31}$/i;
+const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
 const sessions = new Map(); // token -> { user, admin, exp }
 const fails = new Map();    // key -> { n, until }
@@ -126,6 +128,152 @@ function cookieHeader(req, value, maxAgeSec) {
   return `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}` + (isSecure(req) ? '; Secure' : '');
 }
 
+// ---- App Users (Virtual web panel users, independent of OS Linux accounts) ----
+function loadAppUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) return [];
+    const raw = fs.readFileSync(USERS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAppUsers(users) {
+  const dir = path.dirname(USERS_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), { mode: 0o600 });
+}
+
+function hashPassword(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+      if (err) return reject(err);
+      resolve(derivedKey.toString('hex'));
+    });
+  });
+}
+
+async function verifyPassword(password, salt, expectedHash) {
+  try {
+    const key = await hashPassword(password, salt);
+    const a = Buffer.from(key, 'hex');
+    const b = Buffer.from(expectedHash, 'hex');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+function revokeUserSessions(username) {
+  const lower = String(username).toLowerCase();
+  for (const [token, s] of sessions.entries()) {
+    if (s.user && s.user.toLowerCase() === lower) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function listAppUsers() {
+  return loadAppUsers().map((u) => ({
+    username: u.username,
+    admin: !!u.admin,
+    disabled: !!u.disabled,
+    createdAt: u.createdAt || null,
+    updatedAt: u.updatedAt || null,
+  }));
+}
+
+async function createAppUser(username, password, admin = false) {
+  const name = String(username || '').trim();
+  if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(name)) {
+    return { ok: false, error: 'Username must be 3-32 alphanumeric characters (. _ - allowed)' };
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    return { ok: false, error: 'Password must be at least 6 characters long' };
+  }
+  const users = loadAppUsers();
+  if (users.some((u) => u.username.toLowerCase() === name.toLowerCase())) {
+    return { ok: false, error: 'Username already exists' };
+  }
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = await hashPassword(password, salt);
+  const newUser = {
+    username: name,
+    salt,
+    hash,
+    admin: Boolean(admin),
+    disabled: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  users.push(newUser);
+  saveAppUsers(users);
+  return {
+    ok: true,
+    user: {
+      username: newUser.username,
+      admin: newUser.admin,
+      disabled: newUser.disabled,
+      createdAt: newUser.createdAt,
+    },
+  };
+}
+
+async function updateAppUser(username, changes = {}) {
+  const name = String(username || '').trim();
+  const users = loadAppUsers();
+  const idx = users.findIndex((u) => u.username.toLowerCase() === name.toLowerCase());
+  if (idx === -1) return { ok: false, error: 'User not found' };
+
+  const target = users[idx];
+  let sessionRevokeNeeded = false;
+
+  if (typeof changes.admin === 'boolean') {
+    target.admin = changes.admin;
+  }
+  if (typeof changes.disabled === 'boolean') {
+    target.disabled = changes.disabled;
+    if (target.disabled) sessionRevokeNeeded = true;
+  }
+  if (changes.password) {
+    if (typeof changes.password !== 'string' || changes.password.length < 6) {
+      return { ok: false, error: 'Password must be at least 6 characters long' };
+    }
+    const newSalt = crypto.randomBytes(16).toString('hex');
+    target.salt = newSalt;
+    target.hash = await hashPassword(changes.password, newSalt);
+    sessionRevokeNeeded = true;
+  }
+
+  target.updatedAt = Date.now();
+  users[idx] = target;
+  saveAppUsers(users);
+  if (sessionRevokeNeeded) revokeUserSessions(target.username);
+
+  return {
+    ok: true,
+    user: {
+      username: target.username,
+      admin: target.admin,
+      disabled: target.disabled,
+      updatedAt: target.updatedAt,
+    },
+  };
+}
+
+function deleteAppUser(username) {
+  const name = String(username || '').trim();
+  const users = loadAppUsers();
+  const filtered = users.filter((u) => u.username.toLowerCase() !== name.toLowerCase());
+  if (filtered.length === users.length) return { ok: false, error: 'User not found' };
+  saveAppUsers(filtered);
+  revokeUserSessions(name);
+  return { ok: true };
+}
+
 // Resolves { ok, status, error?, setCookie?, user?, admin? }
 async function login(req, name, password) {
   const key = clientIp(req);
@@ -140,6 +288,22 @@ async function login(req, name, password) {
   };
 
   if (typeof name !== 'string' || typeof password !== 'string' || !password || password.length > 256 || password.includes('\0')) return bad();
+
+  // 1. Check local application users first
+  const appUsers = loadAppUsers();
+  const appUser = appUsers.find((u) => u.username.toLowerCase() === name.toLowerCase());
+  if (appUser) {
+    if (appUser.disabled) return { ok: false, status: 403, error: 'Account is disabled' };
+    const valid = await verifyPassword(password, appUser.salt, appUser.hash);
+    if (!valid) return bad();
+
+    fails.delete(key);
+    const token = crypto.randomBytes(32).toString('hex');
+    sessions.set(token, { user: appUser.username, admin: !!appUser.admin, exp: Date.now() + SESSION_TTL_MS });
+    return { ok: true, status: 200, user: appUser.username, admin: !!appUser.admin, setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
+  }
+
+  // 2. Fallback to local Linux system accounts
   const user = lookupUser(name);
   // Always run the password check so unknown vs. known users are indistinguishable by timing.
   const valid = await checkPassword(user ? user.name : 'nobody-' + crypto.randomBytes(4).toString('hex'), password);
@@ -163,4 +327,13 @@ setInterval(() => {
   for (const [k, f] of fails) if (f.until && f.until < now) fails.delete(k);
 }, 60_000).unref();
 
-module.exports = { login, logout, getSession };
+module.exports = {
+  login,
+  logout,
+  getSession,
+  listAppUsers,
+  createAppUser,
+  updateAppUser,
+  deleteAppUser,
+  loadAppUsers,
+};

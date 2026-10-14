@@ -828,6 +828,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/workers" class="nav-link" data-view="workers"><span class="dot"></span>Workers &amp; Cron</a>
   <a href="#/git" class="nav-link" data-view="git"><span class="dot"></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes"><span class="dot"></span>Processes</a>
+  <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <div class="nav-foot">
     Microspace VPS Monitor
   </div>
@@ -1180,6 +1181,42 @@ select.input { appearance: auto; max-width: 100%; }
     </div>
   </div>
   </div><!-- /view-processes -->
+
+  <!-- VIEW: USERS -->
+  <div class="view-pane" id="view-users">
+    <div class="card c12" id="usersCard">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>User Management</span>
+          <span class="badge" id="userCount">0</span>
+        </h3>
+        <div class="proc-controls">
+          <button class="btn ok" id="btnOpenAddUser" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">+ Tambah User Panel</button>
+          <button class="btn" id="usersRefresh">Refresh</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--mut);margin-bottom:14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+        Manajemen user level aplikasi untuk web panel. Password di-hash menggunakan <code>crypto.scrypt</code>. Eksekusi perintah Linux (Git pull / worker / cron) di server VPS tetap berjalan menggunakan kredensial dan UID pengguna OS.
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th>Dibuat</th>
+              <th>Terakhir Diubah</th>
+              <th style="text-align:right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="usersList">
+            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat data pengguna...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-users -->
 </main>
 
 <div class="modal-backdrop" id="gitModal">
@@ -1232,6 +1269,71 @@ select.input { appearance: auto; max-width: 100%; }
   </div>
 </div>
 
+<!-- Modal Tambah User -->
+<div class="modal-backdrop" id="addUserModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span>Tambah User Web Panel</span>
+      <button class="btn" id="addUserModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <form id="addUserForm" style="padding:16px;display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Username (3-32 karakter)</label>
+        <input id="addUsername" class="input" style="width:100%" placeholder="contoh: dev_team" required pattern="^[a-zA-Z0-9_.-]{3,32}$" />
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Password (min. 6 karakter)</label>
+        <input id="addPassword" type="password" class="input" style="width:100%" placeholder="••••••••" required minlength="6" />
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+        <input type="checkbox" id="addAdmin" style="cursor:pointer" />
+        <label for="addAdmin" style="font-size:13px;cursor:pointer">Role Administrator (Akses Git pull, workers &amp; user management)</label>
+      </div>
+      <div id="addUserErr" style="font-size:12px;color:var(--bad);display:none"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+        <button type="button" class="btn" id="addUserCancel">Batal</button>
+        <button type="submit" class="btn-batch" id="addUserSubmit">Simpan User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Edit User -->
+<div class="modal-backdrop" id="editUserModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="editUserTitle">Edit User</span>
+      <button class="btn" id="editUserModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <form id="editUserForm" style="padding:16px;display:flex;flex-direction:column;gap:12px">
+      <input type="hidden" id="editUsername" />
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Username</label>
+        <div id="editUsernameDisplay" style="font-weight:600;font-size:14px;color:var(--tx)">—</div>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Ganti Password (kosongkan jika tidak ingin ganti)</label>
+        <input id="editPassword" type="password" class="input" style="width:100%" placeholder="Password baru (min. 6 karakter)" minlength="6" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="editAdmin" style="cursor:pointer" />
+          <span>Role Administrator</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="editDisabled" style="cursor:pointer" />
+          <span style="color:var(--warn)">Nonaktifkan Akun (Disabled)</span>
+        </label>
+      </div>
+      <div id="editUserErr" style="font-size:12px;color:var(--bad);display:none"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+        <button type="button" class="btn" id="editUserCancel">Batal</button>
+        <button type="submit" class="btn-batch" id="editUserSubmit">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 
@@ -1278,9 +1380,66 @@ async function j(u) {
   return r.json();
 }
 
+let isAdmin = false;
 j('/api/me').then(m => {
+  isAdmin = !!m.admin;
   $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.admin ? '<span class="role">admin</span>' : ''}`;
+  if (m.admin && $('navLinkUsers')) $('navLinkUsers').style.display = '';
+  if (!m.admin && currentView() === 'users') location.hash = '#/overview';
 }).catch(() => {});
+
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Request gagal');
+  return d;
+}
+
+// ---- User Management ----
+let rawUsers = [];
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function fmtUserDate(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return '—'; }
+}
+async function users() {
+  if (!isAdmin) return;
+  try {
+    const d = await j('/api/users');
+    rawUsers = d.users || [];
+    renderUsers();
+  } catch {
+    $('usersList').innerHTML = '<tr><td colspan="6" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat data pengguna</td></tr>';
+  }
+}
+function renderUsers() {
+  $('userCount').textContent = rawUsers.length;
+  if (!rawUsers.length) {
+    $('usersList').innerHTML = '<tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Belum ada user panel. Tambahkan user pertama.</td></tr>';
+    return;
+  }
+  $('usersList').innerHTML = rawUsers.map(u => `
+    <tr>
+      <td><strong>${escHtml(u.username)}</strong></td>
+      <td>${u.admin ? '<span class="pill ok">admin</span>' : '<span class="pill">viewer</span>'}</td>
+      <td>${u.disabled ? '<span class="pill down">disabled</span>' : '<span class="pill ok">active</span>'}</td>
+      <td style="color:var(--mut)">${fmtUserDate(u.createdAt)}</td>
+      <td style="color:var(--mut)">${fmtUserDate(u.updatedAt)}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn-sm" data-edit-user="${escHtml(u.username)}">Edit</button>
+        <button class="btn-sm" data-reset-user="${escHtml(u.username)}" title="Nonaktif / aktifkan akun">${u.disabled ? 'Aktifkan' : 'Nonaktif'}</button>
+        <button class="btn-sm danger" data-del-user="${escHtml(u.username)}">Hapus</button>
+      </td>
+    </tr>
+  `).join('');
+}
 
 $('logout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' });
@@ -2099,7 +2258,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'users'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2127,6 +2286,7 @@ function navigateView(name, refresh = true) {
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
     if (view === 'processes') procs();
+    if (view === 'users') users();
   }
 }
 
@@ -2193,6 +2353,123 @@ $('gitModal').addEventListener('click', (e) => {
   if (e.target === $('gitModal')) $('gitModal').classList.remove('open');
 });
 
+// User Management Events
+$('usersRefresh').addEventListener('click', () => users());
+$('btnOpenAddUser').addEventListener('click', () => {
+  $('addUsername').value = '';
+  $('addPassword').value = '';
+  $('addAdmin').checked = false;
+  $('addUserErr').style.display = 'none';
+  $('addUserModal').classList.add('open');
+});
+$('addUserModalClose').addEventListener('click', () => $('addUserModal').classList.remove('open'));
+$('addUserCancel').addEventListener('click', () => $('addUserModal').classList.remove('open'));
+$('addUserModal').addEventListener('click', (e) => {
+  if (e.target === $('addUserModal')) $('addUserModal').classList.remove('open');
+});
+
+$('addUserForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = $('addUsername').value.trim();
+  const password = $('addPassword').value;
+  const admin = $('addAdmin').checked;
+  const errEl = $('addUserErr');
+  const btn = $('addUserSubmit');
+  errEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Menyimpan...';
+  try {
+    await api('POST', '/api/users', { username, password, admin });
+    $('addUserModal').classList.remove('open');
+    users();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Simpan User';
+  }
+});
+
+$('editUserModalClose').addEventListener('click', () => $('editUserModal').classList.remove('open'));
+$('editUserCancel').addEventListener('click', () => $('editUserModal').classList.remove('open'));
+$('editUserModal').addEventListener('click', (e) => {
+  if (e.target === $('editUserModal')) $('editUserModal').classList.remove('open');
+});
+
+$('editUserForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = $('editUsername').value;
+  const admin = $('editAdmin').checked;
+  const disabled = $('editDisabled').checked;
+  const password = $('editPassword').value.trim();
+  const errEl = $('editUserErr');
+  const btn = $('editUserSubmit');
+  errEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Menyimpan...';
+  const payload = { username, admin, disabled };
+  if (password) payload.password = password;
+  try {
+    await api('PATCH', '/api/users', payload);
+    $('editUserModal').classList.remove('open');
+    users();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Simpan Perubahan';
+  }
+});
+
+$('usersList').addEventListener('click', async (e) => {
+  const editBtn = e.target.closest('[data-edit-user]');
+  if (editBtn) {
+    const uname = editBtn.dataset.editUser;
+    const u = rawUsers.find(x => x.username === uname);
+    if (!u) return;
+    $('editUsername').value = u.username;
+    $('editUsernameDisplay').textContent = u.username;
+    $('editPassword').value = '';
+    $('editAdmin').checked = !!u.admin;
+    $('editDisabled').checked = !!u.disabled;
+    $('editUserErr').style.display = 'none';
+    $('editUserModal').classList.add('open');
+    return;
+  }
+
+  const toggleBtn = e.target.closest('[data-reset-user]');
+  if (toggleBtn) {
+    const uname = toggleBtn.dataset.resetUser;
+    const u = rawUsers.find(x => x.username === uname);
+    if (!u) return;
+    toggleBtn.disabled = true;
+    try {
+      await api('PATCH', '/api/users', { username: uname, disabled: !u.disabled });
+      users();
+    } catch (err) {
+      alert(err.message);
+      toggleBtn.disabled = false;
+    }
+    return;
+  }
+
+  const delBtn = e.target.closest('[data-del-user]');
+  if (delBtn) {
+    const uname = delBtn.dataset.delUser;
+    if (!confirm(`Hapus user "${uname}"? Akun ini tidak akan bisa login lagi.`)) return;
+    delBtn.disabled = true;
+    try {
+      await api('DELETE', '/api/users', { username: uname });
+      users();
+    } catch (err) {
+      alert(err.message);
+      delBtn.disabled = false;
+    }
+  }
+});
+
 // Fullscreen Monitor (Overview, History, Services)
 function syncFullscreenUI() {
   const on = document.body.classList.contains('fullscreen-focus');
@@ -2248,6 +2525,7 @@ setInterval(() => {
   else if (v === 'workers') { workers(); }
   else if (v === 'storage') { storage(); }
   else if (v === 'git') { gitProjects(); }
+  else if (v === 'users') { users(); }
 }, 15000);
 </script>
 </body>

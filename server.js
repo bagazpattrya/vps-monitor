@@ -847,6 +847,11 @@ function serveFile(res, file) {
   send(res, 200, fs.readFileSync(fp), MIME[path.extname(fp)] || 'application/octet-stream');
 }
 
+function audit(user, action, target, details = '') {
+  const ts = new Date().toISOString();
+  console.log(`[AUDIT ${ts}] user=${user} action=${action} target=${target}${details ? ' ' + details : ''}`);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
@@ -902,6 +907,7 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    audit(session.user, 'worker.supervisor', body && body.name, body && body.action);
     const r = await supervisorAction(body && body.action, body && body.name);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
@@ -909,6 +915,7 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    audit(session.user, 'worker.service', body && body.unit, 'restart');
     const r = await restartServiceUnit(body && body.unit);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
@@ -916,6 +923,7 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    audit(session.user, 'worker.cron', body && body.user, `${body && body.oldSchedule} -> ${body && body.newSchedule}`);
     const r = await updateCronSchedule(body && body.user, body && body.oldSchedule, body && body.newSchedule, body && body.cmd, body && body.source);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
@@ -924,6 +932,45 @@ const server = http.createServer(async (req, res) => {
     const lines = url.searchParams.get('lines') || 100;
     const r = await tailLog(file, lines);
     return send(res, r.ok ? 200 : 404, JSON.stringify(r));
+  }
+  if (p === '/api/users' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify({ users: auth.listAppUsers() }));
+  }
+  if (p === '/api/users' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await auth.createAppUser(body && body.username, body && body.password, body && body.admin);
+    if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
+    audit(session.user, 'user.create', r.user.username, `admin=${r.user.admin}`);
+    return send(res, 200, JSON.stringify(r));
+  }
+  if (p === '/api/users' && req.method === 'PATCH') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const target = String((body && body.username) || '');
+    if (target.toLowerCase() === String(session.user).toLowerCase() && (body.disabled === true || body.admin === false)) {
+      return send(res, 400, JSON.stringify({ error: 'Cannot demote or disable yourself' }));
+    }
+    const r = await auth.updateAppUser(target, { admin: body.admin, disabled: body.disabled, password: body.password });
+    if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
+    audit(session.user, 'user.update', r.user.username);
+    return send(res, 200, JSON.stringify(r));
+  }
+  if (p === '/api/users' && req.method === 'DELETE') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const target = String((body && body.username) || '');
+    if (target.toLowerCase() === String(session.user).toLowerCase()) {
+      return send(res, 400, JSON.stringify({ error: 'Cannot delete yourself' }));
+    }
+    const r = auth.deleteAppUser(target);
+    if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
+    audit(session.user, 'user.delete', target);
+    return send(res, 200, JSON.stringify(r));
   }
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
@@ -946,6 +993,7 @@ const server = http.createServer(async (req, res) => {
     if (!full.startsWith(SCAN_ROOT + path.sep) && full !== SCAN_ROOT) {
       return send(res, 400, JSON.stringify({ error: 'Invalid project' }));
     }
+    audit(session.user, 'git.pull', rel);
     const r = await pullGitProject(full);
     if (!r.ok) return send(res, 500, JSON.stringify(r));
     return send(res, 200, JSON.stringify(r));
