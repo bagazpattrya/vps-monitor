@@ -576,24 +576,87 @@ code {
 .btn-batch:disabled { opacity: 0.5; cursor: wait; }
 
 /* Workers */
-.worker-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.btn-sm {
+.worker-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
   background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: all 0.15s ease;
+}
+.worker-card:hover {
+  border-color: var(--border-light);
+  background: #191e29;
+}
+.worker-card.is-down {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.05);
+}
+.worker-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.worker-title-box {
+  min-width: 0;
+  flex: 1;
+}
+.worker-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--tx);
+  word-break: break-word;
+  line-height: 1.35;
+}
+.worker-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--mut);
+}
+.worker-meta code {
+  font-size: 11px;
+  padding: 1px 5px;
+}
+.worker-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: auto;
+}
+.worker-actions .btn-sm {
+  flex: 1;
+  text-align: center;
+  padding: 4px 6px;
+}
+.btn-sm {
+  background: var(--bg-card);
   color: var(--tx);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 3px 9px;
+  padding: 4px 10px;
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  transition: all 0.15s ease;
 }
-.btn-sm:hover { border-color: var(--border-light); }
+.btn-sm:hover { border-color: var(--border-light); background: var(--bg-elev); }
 .btn-sm:disabled { opacity: 0.5; cursor: wait; }
 .btn-sm.danger { color: var(--bad); border-color: rgba(239, 68, 68, 0.3); }
+.btn-sm.danger:hover { background: rgba(239, 68, 68, 0.15); }
 .btn-sm.ok { color: var(--ok); border-color: rgba(16, 185, 129, 0.3); }
-.worker-sub { font-size: 12px; font-weight: 600; color: var(--mut); text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 6px; }
-.worker-cmd { font-size: 11.5px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.btn-sm.ok:hover { background: rgba(16, 185, 129, 0.15); }
+.worker-sub { font-size: 12px; font-weight: 600; color: var(--mut); text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px; }
 select.input { appearance: auto; max-width: 100%; }
 
 /* Log Modal */
@@ -795,15 +858,21 @@ select.input { appearance: auto; max-width: 100%; }
         <span class="badge" id="workerBadge">—</span>
       </h3>
       <div class="proc-controls">
+        <input type="search" id="workerSearch" class="input" placeholder="Filter worker name or PID..." style="min-width:200px" />
+        <div class="tabs" id="workerFilterTabs">
+          <button class="tab active" data-filter="all">All</button>
+          <button class="tab" data-filter="running">Running</button>
+          <button class="tab" data-filter="down">Down / Stopped</button>
+        </div>
         <button class="btn" id="workerRefresh">Refresh</button>
-        <button class="btn-sm" id="btnRestartCron" title="systemctl restart cron">↻ Restart Cron Service</button>
-        <button class="btn-sm" id="btnRestartSup" title="systemctl restart supervisor">↻ Restart Supervisor Daemon</button>
+        <button class="btn-sm" id="btnRestartCron" title="systemctl restart cron">↻ Cron</button>
+        <button class="btn-sm" id="btnRestartSup" title="systemctl restart supervisor">↻ Supervisor</button>
       </div>
     </div>
 
     <!-- Supervisor Section -->
-    <div class="worker-sub">Supervisorctl Managed Workers</div>
-    <div class="git-group-items" id="supList" style="margin-bottom:12px">
+    <div class="worker-sub">Supervisorctl Managed Workers (<span id="supCount">0</span>)</div>
+    <div class="git-group-items" id="supList" style="margin-bottom:14px">
       <span style="color:var(--mut);font-size:12px">Loading supervisor status...</span>
     </div>
 
@@ -1310,6 +1379,70 @@ async function doBatchPull() {
   gitProjects();
 }
 
+let rawSupProcs = [];
+let workerFilter = 'all';
+
+function renderSupervisorList() {
+  const q = ($('workerSearch').value || '').trim().toLowerCase();
+  const filtered = rawSupProcs.filter(p => {
+    const ok = /RUNNING/i.test(p.state);
+    if (workerFilter === 'running' && !ok) return false;
+    if (workerFilter === 'down' && ok) return false;
+    if (!q) return true;
+    return (p.name || '').toLowerCase().includes(q) || (p.detail || '').toLowerCase().includes(q);
+  });
+
+  $('supCount').textContent = `${filtered.length}/${rawSupProcs.length}`;
+  if (!filtered.length) {
+    $('supList').innerHTML = `<span style="color:var(--mut);font-size:12px">${rawSupProcs.length ? 'No workers match filter' : 'No supervisor workers found'}</span>`;
+    return;
+  }
+
+  $('supList').innerHTML = filtered.map(p => {
+    const ok = /RUNNING/i.test(p.state);
+    const esc = (p.name || '').replace(/"/g, '&quot;');
+    
+    // Clean name if formatted group:name
+    let displayName = p.name;
+    const parts = p.name.split(':');
+    if (parts.length === 2 && parts[0] === parts[1]) {
+      displayName = parts[0];
+    }
+
+    // Parse detail: pid X, uptime Y
+    let pid = null;
+    let uptime = null;
+    if (p.detail) {
+      const pm = p.detail.match(/pid\s+(\d+)/i);
+      if (pm) pid = pm[1];
+      const um = p.detail.match(/uptime\s+([^\,]+)/i);
+      if (um) uptime = um[1].trim();
+    }
+
+    return `<div class="worker-card ${!ok ? 'is-down' : ''}">
+      <div class="worker-head">
+        <div class="worker-title-box">
+          <div class="worker-title" title="${esc}">${displayName}</div>
+          <div class="worker-meta">
+            ${pid ? `<code>PID ${pid}</code>` : ''}
+            ${uptime ? `<span>up ${uptime}</span>` : ''}
+            ${!pid && !uptime && p.detail ? `<span>${p.detail.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span>` : ''}
+          </div>
+        </div>
+        <span class="pill ${ok ? 'ok' : 'down'}">${p.state || 'UNKNOWN'}</span>
+      </div>
+      <div class="worker-actions">
+        ${p.logfile ? `<button class="btn-sm" data-log="${p.logfile.replace(/"/g, '&quot;')}">Log</button>` : ''}
+        <button class="btn-sm ok" data-sup="restart" data-name="${esc}">Restart</button>
+        ${ok
+          ? `<button class="btn-sm danger" data-sup="stop" data-name="${esc}">Stop</button>`
+          : `<button class="btn-sm ok" data-sup="start" data-name="${esc}">Start</button>`
+        }
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function workers() {
   try {
     const d = await j('/api/workers');
@@ -1317,35 +1450,13 @@ async function workers() {
     const cron = d.cron || { jobs: [], schedProcs: [] };
     const logs = d.laravelLogs || [];
 
-    const running = sup.procs.filter(p => /RUNNING/i.test(p.state)).length;
+    rawSupProcs = sup.procs || [];
+    const running = rawSupProcs.filter(p => /RUNNING/i.test(p.state)).length;
     $('workerBadge').innerHTML = sup.available
-      ? `<strong>${running}/${sup.procs.length}</strong> running`
+      ? `<strong>${running}/${rawSupProcs.length}</strong> running`
       : `<strong>no supervisor</strong>`;
 
-    // Supervisor list
-    if (!sup.procs.length) {
-      $('supList').innerHTML = `<span style="color:var(--mut);font-size:12px">${sup.available ? 'No programs found' : 'supervisorctl not available on this host — queue workers checked via cron + laravel logs below'}</span>`;
-    } else {
-      $('supList').innerHTML = sup.procs.map(p => {
-        const ok = /RUNNING/i.test(p.state);
-        const esc = (p.name || '').replace(/"/g, '&quot;');
-        return `<div class="git-item">
-          <div class="git-info">
-            <div class="git-name">
-              <span>${p.name}</span>
-              <span class="pill ${ok ? 'ok' : 'down'}">${p.state || 'UNKNOWN'}</span>
-            </div>
-            <div class="worker-cmd">${(p.detail || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
-          </div>
-          <div class="worker-actions">
-            ${p.logfile ? `<button class="btn-sm" data-log="${p.logfile.replace(/"/g, '&quot;')}">Log</button>` : ''}
-            <button class="btn-sm ok" data-sup="restart" data-name="${esc}">Restart</button>
-            <button class="btn-sm" data-sup="start" data-name="${esc}">Start</button>
-            <button class="btn-sm danger" data-sup="stop" data-name="${esc}">Stop</button>
-          </div>
-        </div>`;
-      }).join('');
-    }
+    renderSupervisorList();
 
     // Cron jobs
     if (!cron.jobs.length) {
@@ -1431,6 +1542,16 @@ async function viewLog(file) {
 }
 
 $('workerRefresh').addEventListener('click', workers);
+$('workerSearch').addEventListener('input', renderSupervisorList);
+
+$('workerFilterTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('#workerFilterTabs .tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  workerFilter = btn.dataset.filter;
+  renderSupervisorList();
+});
 $('btnRestartCron').addEventListener('click', (e) => serviceRestart('cron', e.target));
 $('btnRestartSup').addEventListener('click', (e) => serviceRestart('supervisor', e.target));
 $('btnViewSelectedLog').addEventListener('click', () => viewLog($('laravelLogSelect').value));
