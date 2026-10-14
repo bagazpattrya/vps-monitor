@@ -270,7 +270,7 @@ function getCronJobs() {
         const out = execSync(`crontab -u ${u} -l 2>/dev/null`, { timeout: 3000 }).toString();
         for (const line of out.split('\n')) {
           const j = parseCronLine(line, u);
-          if (j) jobs.push(j);
+          if (j) jobs.push({ ...j, source: 'crontab:' + u });
         }
       } catch {}
     }
@@ -282,7 +282,7 @@ function getCronJobs() {
           if (!t || t.startsWith('#')) continue;
           const m = t.match(/^(@\w+|\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(\S+)\s+(.+)$/);
           if (m && !['root', 'daemon'].includes(m[2]) || (m && /artisan|backup|worker|php|python/i.test(m[3]))) {
-            jobs.push({ user: m[2], schedule: m[1], cmd: m[3] });
+            jobs.push({ user: m[2], schedule: m[1], cmd: m[3], source: 'system:/etc/crontab' });
           }
         }
       }
@@ -297,8 +297,11 @@ function getCronJobs() {
   return { jobs, schedProcs };
 }
 
-function updateCronSchedule(user, oldSchedule, newSchedule, cmd) {
+function updateCronSchedule(user, oldSchedule, newSchedule, cmd, source) {
   return new Promise((resolve) => {
+    if (source && String(source).startsWith('system:')) {
+      return resolve({ ok: false, error: 'Job ini dari ' + source + ' (system cron). Edit via SSH sebagai root, misal: sudo nano ' + source.replace('system:', '') });
+    }
     if (!user || typeof user !== 'string' || !/^[a-z_][a-z0-9_.-]{0,31}$/i.test(user)) {
       return resolve({ ok: false, error: 'Invalid user' });
     }
@@ -325,6 +328,12 @@ function updateCronSchedule(user, oldSchedule, newSchedule, cmd) {
     });
 
     if (!replaced) {
+      // Beri pesan spesifik bila job ternyata milik system file (umum: semua job yang tampil saat ini dari /etc/crontab).
+      try {
+        if (fs.existsSync('/etc/crontab') && fs.readFileSync('/etc/crontab', 'utf8').includes(cleanCmd.slice(0, 40))) {
+          return resolve({ ok: false, error: 'Job tidak ada di crontab -u ' + user + '. Kemungkinan ini system cron (/etc/crontab). Edit via SSH sebagai root.' });
+        }
+      } catch {}
       return resolve({ ok: false, error: 'Cron job command not found in crontab' });
     }
 
@@ -645,7 +654,7 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
-    const r = await updateCronSchedule(body && body.user, body && body.oldSchedule, body && body.newSchedule, body && body.cmd);
+    const r = await updateCronSchedule(body && body.user, body && body.oldSchedule, body && body.newSchedule, body && body.cmd, body && body.source);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/workers/log') {

@@ -1447,8 +1447,8 @@ function humanCron(expr) {
 
 let activeEditCron = null;
 
-function openEditCron(user, schedule, cmd) {
-  activeEditCron = { user, schedule, cmd };
+function openEditCron(user, schedule, cmd, source) {
+  activeEditCron = { user, schedule, cmd, source };
   $('cronModalTitle').textContent = `Edit Cron (${user})`;
   $('cronEditCmd').textContent = cmd;
 
@@ -1498,7 +1498,8 @@ $('cronModalSave').addEventListener('click', async () => {
         user: activeEditCron.user,
         oldSchedule: activeEditCron.schedule,
         newSchedule: newSched,
-        cmd: activeEditCron.cmd
+        cmd: activeEditCron.cmd,
+        source: activeEditCron.source
       })
     });
     const d = await res.json();
@@ -1599,13 +1600,17 @@ async function workers() {
         const escUser = (c.user || '').replace(/"/g, '&quot;');
         const escSched = (c.schedule || '').replace(/"/g, '&quot;');
         const escCmd = (c.cmd || '').replace(/"/g, '&quot;');
+        const escSrc = (c.source || '').replace(/"/g, '&quot;');
+        const isSystem = (c.source || '').startsWith('system:');
         return `<tr>
-          <td><strong>${c.user}</strong></td>
+          <td><strong>${c.user}</strong>${isSystem ? `<div style="font-size:10px;color:var(--mut)">${c.source}</div>` : ''}</td>
           <td><code>${c.schedule}</code></td>
           <td style="color:var(--ac);font-weight:500">${tr}</td>
           <td><code class="cmd-code" title="${escCmd}">${c.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></td>
           <td style="text-align:right">
-            <button class="btn-sm" data-edit-cron="1" data-user="${escUser}" data-sched="${escSched}" data-cmd="${escCmd}">✎ Edit</button>
+            ${isSystem
+              ? `<span style="font-size:11px;color:var(--mut)" title="System cron hanya bisa diedit via SSH sebagai root">🔒 system</span>`
+              : `<button class="btn-sm" data-edit-cron="1" data-user="${escUser}" data-sched="${escSched}" data-cmd="${escCmd}" data-source="${escSrc}">✎ Edit</button>`}
           </td>
         </tr>`;
       }).join('');
@@ -1704,6 +1709,10 @@ $('supList').addEventListener('click', (e) => {
   if (log) { viewLog(log.dataset.log); return; }
   const b = e.target.closest('[data-sup]');
   if (b) supAction(b.dataset.sup, b.dataset.name, b);
+});
+$('cronList').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-edit-cron]');
+  if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
 
 // Sidebar Drawer & Scrollspy
