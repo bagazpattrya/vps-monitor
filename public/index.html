@@ -1369,7 +1369,18 @@ select.input { appearance: auto; max-width: 100%; }
       <label style="font-size:12px;color:var(--mut)">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
       <label style="font-size:12px;color:var(--mut)">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
     </div>
-    <label style="font-size:12px;color:var(--mut)">.env tambahan (KEY=VALUE per baris, untuk mail/API keys)<br><textarea id="depEnvExtra" class="input" style="width:100%;min-height:56px;font-family:var(--font-mono)" placeholder="MAIL_MAILER=smtp&#10;MAIL_HOST=..."></textarea></label>
+    <label style="font-size:12px;color:var(--mut)">.env tambahan (KEY=VALUE per baris, untuk API keys dll)<br><textarea id="depEnvExtra" class="input" style="width:100%;min-height:56px;font-family:var(--font-mono)" placeholder="MIDTRANS_SERVER_KEY=..."></textarea></label>
+    <div style="font-size:13px;font-weight:600;margin:12px 0 8px">SMTP / Mail</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Mailer<br><select id="depMailMailer" class="input" style="width:100%"><option value="log">log (default dev)</option><option value="smtp">smtp</option></select></label>
+      <label style="font-size:12px;color:var(--mut)">Scheme (Laravel 11+, kosongkan bila tidak perlu)<br><input id="depMailScheme" class="input" style="width:100%" placeholder="null" /></label>
+      <label style="font-size:12px;color:var(--mut)">SMTP host<br><input id="depMailHost" class="input" style="width:100%" placeholder="127.0.0.1" /></label>
+      <label style="font-size:12px;color:var(--mut)">SMTP port<br><input id="depMailPort" class="input" style="width:100%" placeholder="2525" /></label>
+      <label style="font-size:12px;color:var(--mut)">SMTP username<br><input id="depMailUser" class="input" style="width:100%" placeholder="null" /></label>
+      <label style="font-size:12px;color:var(--mut)">SMTP password<br><span style="display:flex;gap:6px"><input id="depMailPass" type="password" class="input" style="width:100%" placeholder="null" /><button class="btn-sm" id="depMailShow" title="Lihat/sembunyikan">👁</button></span></label>
+      <label style="font-size:12px;color:var(--mut)">From address<br><input id="depMailFrom" class="input" style="width:100%" placeholder="hello@example.com" /></label>
+      <label style="font-size:12px;color:var(--mut)">From name<br><input id="depMailFromName" class="input" style="width:100%" placeholder="${APP_NAME}" /></label>
+    </div>
     <div style="display:flex;gap:16px;margin:10px 0;font-size:13px">
       <label><input type="checkbox" id="depQueue" checked /> Queue worker (supervisor)</label>
       <label><input type="checkbox" id="depSched" checked /> Scheduler (cron www-data)</label>
@@ -2699,6 +2710,10 @@ $('depShowPass').addEventListener('click', () => {
   const el = $('depDbPass');
   el.type = el.type === 'password' ? 'text' : 'password';
 });
+$('depMailShow').addEventListener('click', () => {
+  const el = $('depMailPass');
+  el.type = el.type === 'password' ? 'text' : 'password';
+});
 $('depCopyPass').addEventListener('click', async () => {
   const v = $('depDbPass').value;
   if (!v) return alert('Password masih kosong');
@@ -2806,6 +2821,12 @@ function depForm() {
     dbPass: $('depDbPass').value, sqlPath: $('depSqlPath').value.trim(),
     appName: $('depAppName').value.trim(), appKey: $('depAppKey').value.trim(),
     envExtra: $('depEnvExtra').value, useQueue: $('depQueue').checked, useScheduler: $('depSched').checked,
+    mail: {
+      mailer: $('depMailMailer').value, scheme: $('depMailScheme').value.trim(),
+      host: $('depMailHost').value.trim(), port: $('depMailPort').value.trim(),
+      username: $('depMailUser').value, password: $('depMailPass').value,
+      fromAddress: $('depMailFrom').value.trim(), fromName: $('depMailFromName').value.trim(),
+    },
   };
 }
 function depStepPill(s) {

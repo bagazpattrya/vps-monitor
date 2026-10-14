@@ -1264,6 +1264,17 @@ async function runDeployJob(job, p) {
     setEnv('DB_USERNAME', p.dbUser);
     setEnv('DB_PASSWORD', p.dbPass);
     if (p.appName) setEnv('APP_NAME', `"${p.appName.replace(/"/g, '')}"`);
+    const qv = (v) => (/[\s#]/.test(v) ? `"${v.replace(/"/g, '')}"` : v);
+    setEnv('MAIL_MAILER', p.mail.mailer);
+    if (p.mail.scheme) setEnv('MAIL_SCHEME', p.mail.scheme);
+    if (p.mail.mailer === 'smtp') {
+      if (p.mail.host) setEnv('MAIL_HOST', p.mail.host);
+      if (p.mail.port) setEnv('MAIL_PORT', p.mail.port);
+      if (p.mail.username) setEnv('MAIL_USERNAME', qv(p.mail.username));
+      if (p.mail.password) setEnv('MAIL_PASSWORD', qv(p.mail.password));
+    }
+    if (p.mail.fromAddress) setEnv('MAIL_FROM_ADDRESS', qv(p.mail.fromAddress));
+    if (p.mail.fromName) setEnv('MAIL_FROM_NAME', `"${p.mail.fromName.replace(/"/g, '')}"`);
     for (const [k, v] of Object.entries(p.envExtra || {})) setEnv(k, v);
     if (p.appKey) {
       if (!/^base64:[A-Za-z0-9+/=]+$/.test(p.appKey)) throw new Error('APP_KEY format salah (harus base64:...)');
@@ -1782,15 +1793,28 @@ const server = http.createServer(async (req, res) => {
       }
       envExtra[k] = t.slice(i + 1).trim();
     }
+    const mailIn = (body.mail && typeof body.mail === 'object') ? body.mail : {};
+    const mail = {
+      mailer: mailIn.mailer === 'smtp' ? 'smtp' : 'log',
+      scheme: String(mailIn.scheme || '').trim().slice(0, 20),
+      host: String(mailIn.host || '').trim().slice(0, 253),
+      port: String(mailIn.port || '').trim(),
+      username: String(mailIn.username || ''),
+      password: String(mailIn.password || ''),
+      fromAddress: String(mailIn.fromAddress || '').trim().slice(0, 253),
+      fromName: String(mailIn.fromName || '').trim().slice(0, 100),
+    };
+    if (mail.port && !/^\d{1,5}$/.test(mail.port)) return send(res, 400, JSON.stringify({ error: 'SMTP port harus angka' }));
+    if (mail.host && !/^[A-Za-z0-9.-]+$/.test(mail.host)) return send(res, 400, JSON.stringify({ error: 'SMTP host tidak valid' }));
     const params = {
       dir: checks[0][1].value, domain: checks[1][1].value, repo: checks[2][1].value, branch: checks[3][1].value,
       deployer: checks[4][1].value, dbName: checks[5][1].value, dbUser: checks[6][1].value, dbPass: body.dbPass,
       projectType, sqlPath, appName: String(body.appName || '').trim().slice(0, 100) || null,
       appKey: String(body.appKey || '').trim() || null,
       useQueue: body.useQueue !== false, useScheduler: body.useScheduler !== false,
-      dryRun: body.dryRun === true, envExtra,
+      dryRun: body.dryRun === true, envExtra, mail,
     };
-    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass]);
+    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password]);
     audit(session.user, 'deploy.start', params.dir, `${params.domain} dryRun=${params.dryRun}`);
     runDeployJob(job, params).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
