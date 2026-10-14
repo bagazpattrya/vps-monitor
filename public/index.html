@@ -39,15 +39,137 @@ header {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(9, 11, 14, 0.82);
-  backdrop-filter: blur(12px);
+  background: rgba(9, 11, 14, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
-  padding: 12px 24px;
+  padding: 10px 24px;
   display: flex;
-  gap: 16px;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.brand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 13.5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--tx);
+  border-radius: 8px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.brand-btn:hover {
+  background: #1c212d;
+  border-color: var(--border-light);
+}
+
+.meta-pills {
+  display: flex;
+  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  margin-left: 0;
+}
+
+.badge {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--mut);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.badge strong { color: var(--tx); font-weight: 500; }
+.badge.accent { color: var(--ac); border-color: rgba(59, 130, 246, 0.25); background: rgba(59, 130, 246, 0.08); }
+
+.user-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+.user-badge .role {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--ac);
+  letter-spacing: 0.03em;
+}
+
+.btn {
+  background: var(--bg-elev);
+  color: var(--tx);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:hover {
+  background: var(--border);
+  border-color: var(--border-light);
+}
+.btn.btn-logout {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.06);
+}
+.btn.btn-logout:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* Fullscreen NOC View (Overview, History, Services only) */
+body.fullscreen-focus #workers,
+body.fullscreen-focus #git,
+body.fullscreen-focus #processes {
+  display: none !important;
+}
+body.fullscreen-focus .container {
+  max-width: 100vw;
+  min-height: calc(100vh - 65px);
+  padding: 14px 20px 20px;
+}
+body.fullscreen-focus .chart-box {
+  min-height: 380px;
 }
 
 /* Sidebar Drawer */
@@ -116,25 +238,6 @@ header {
 .nav-link .dot { width: 7px; height: 7px; border-radius: 99px; background: currentColor; opacity: 0.5; flex-shrink: 0; }
 .nav-link.active .dot { opacity: 1; background: var(--ac); }
 .nav-foot { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--mut); }
-
-.brand-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 14.5px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  color: var(--tx);
-  border-radius: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.brand-btn:hover {
-  background: var(--border);
-  border-color: var(--border-light);
-}
 
 /* Main Grid Layout */
 .container {
@@ -722,19 +825,36 @@ select.input { appearance: auto; max-width: 100%; }
 </aside>
 
 <header>
-  <button class="brand-btn" id="vpsMonitorBtn" title="Toggle Navigation Menu">
-    <span style="font-size:12px;opacity:0.7">☰</span>
-    <span>VPS Monitor</span>
-  </button>
-  <div class="meta-pills">
-    <span class="badge" id="host"><strong>—</strong></span>
-    <span class="badge" id="os" style="display:none"></span>
-    <span class="badge" id="uptime">up —</span>
-    <span class="badge" id="time">—</span>
+  <div class="header-left">
+    <button class="brand-btn" id="vpsMonitorBtn" title="Toggle Navigation Menu">
+      <span style="font-size:12px;opacity:0.7">☰</span>
+      <span>VPS Monitor</span>
+    </button>
+    <div class="meta-pills">
+      <span class="badge" id="hostBox">
+        <span style="opacity:0.6">🖥</span>
+        <span id="host"><strong>—</strong></span>
+        <span id="os" style="opacity:0.75;font-size:11px"></span>
+      </span>
+      <span class="badge" id="uptimeBox">
+        <span style="opacity:0.6">⏱</span>
+        <span id="uptime">up —</span>
+      </span>
+      <span class="badge" id="timeBox">
+        <span id="time">—</span>
+      </span>
+    </div>
   </div>
   <div class="header-right">
-    <span class="badge" id="who"><strong>—</strong></span>
-    <button class="btn" id="logout">Logout</button>
+    <button class="btn" id="fullscreenBtn" title="Fullscreen Monitor (Overview, History & Services)">
+      <svg id="fsIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+      <span id="fsLabel">Fullscreen</span>
+    </button>
+    <div class="user-badge" id="who">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <strong>—</strong>
+    </div>
+    <button class="btn btn-logout" id="logout" title="Sign out from dashboard">Logout</button>
   </div>
 </header>
 
@@ -1053,7 +1173,7 @@ async function j(u) {
 }
 
 j('/api/me').then(m => {
-  $('who').innerHTML = `<strong>${m.user}</strong>${m.admin ? ' · admin' : ''}`;
+  $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.admin ? '<span class="role">admin</span>' : ''}`;
 }).catch(() => {});
 
 $('logout').onclick = async () => {
@@ -1066,10 +1186,12 @@ async function stats() {
     const s = await j('/api/stats');
     $('host').innerHTML = `<strong>${s.hostname}</strong>`;
     if (s.os && s.os !== s.hostname) {
-      $('os').innerHTML = `<strong>${s.os}</strong>`;
+      $('os').textContent = s.os;
       $('os').style.display = '';
+      $('hostBox').title = s.os;
     } else {
       $('os').style.display = 'none';
+      $('hostBox').title = '';
     }
 
     const up = Math.floor(s.uptime);
@@ -1799,6 +1921,38 @@ $('gitList').addEventListener('click', async (e) => {
 $('gitModalClose').addEventListener('click', () => $('gitModal').classList.remove('open'));
 $('gitModal').addEventListener('click', (e) => {
   if (e.target === $('gitModal')) $('gitModal').classList.remove('open');
+});
+
+// Fullscreen Monitor (Overview, History, Services)
+function syncFullscreenUI() {
+  const on = document.body.classList.contains('fullscreen-focus');
+  $('fsLabel').textContent = on ? 'Exit' : 'Fullscreen';
+  $('fsIcon').innerHTML = on
+    ? '<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>'
+    : '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+  try { if (typeof chart !== 'undefined' && chart) chart.resize(); } catch {}
+}
+
+$('fullscreenBtn').addEventListener('click', async () => {
+  const willBeOn = !document.body.classList.contains('fullscreen-focus');
+  // Browser fullscreen API — fallback tetap aktif walau API gagal diblokir
+  try {
+    if (willBeOn && document.documentElement.requestFullscreen) {
+      await document.documentElement.requestFullscreen();
+    } else if (!willBeOn && document.exitFullscreen && document.fullscreenElement) {
+      await document.exitFullscreen();
+    }
+  } catch {}
+  document.body.classList.toggle('fullscreen-focus', willBeOn);
+  syncFullscreenUI();
+});
+
+document.addEventListener('fullscreenchange', () => {
+  // Jika user keluar via ESC browser, sinkron ulang state tampilan
+  if (!document.fullscreenElement && document.body.classList.contains('fullscreen-focus')) {
+    document.body.classList.remove('fullscreen-focus');
+    syncFullscreenUI();
+  }
 });
 
 // Init & Intervals
