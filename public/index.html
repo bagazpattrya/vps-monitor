@@ -2775,7 +2775,7 @@ async function depShow(id) {
   depActiveId = id;
   try {
     const d = await api('GET', `/api/deploy/status?id=${encodeURIComponent(id)}`);
-    $('depJobsCount').textContent = d.steps.length;
+    $('deployJobsCount').textContent = d.steps.length;
     $('depSteps').innerHTML = d.steps.map(depStepPill).join('') || '<span style="color:var(--mut);font-size:12px">Menunggu...</span>';
     const last = [...d.steps].reverse().find(s => s.output) || d.steps[d.steps.length - 1];
     $('depOutput').textContent = `[${d.id}] status=${d.status}${d.warn ? ' WARN: ' + d.warn : ''}\n\n` + (last && last.output ? `--- ${last.name} ---\n${last.output}` : '(belum ada output)');
