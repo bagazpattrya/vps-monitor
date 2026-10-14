@@ -1205,7 +1205,8 @@ async function runDeployJob(job, p) {
 
     // 2. MySQL
     jobStep(job, 'mysql: create db+user', 'running', '');
-    let r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
+    // CREATE IF NOT EXISTS saja tidak cukup: retry dengan password baru harus update password user lama.
+    let r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
     if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
     jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
 
