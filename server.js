@@ -1237,6 +1237,10 @@ async function runDeployJob(job, p) {
       env = re.test(env) ? env.replace(re, `${k}=${v}`) : env + `\n${k}=${v}\n`;
     };
     setEnv('APP_URL', `https://${p.domain}`);
+    // Paksa mysql: banyak .env.example Laravel default DB_CONNECTION=sqlite.
+    setEnv('DB_CONNECTION', 'mysql');
+    if (!/^DB_HOST=/m.test(env)) env += '\nDB_HOST=127.0.0.1\n';
+    if (!/^DB_PORT=/m.test(env)) env += '\nDB_PORT=3306\n';
     setEnv('DB_DATABASE', p.dbName);
     setEnv('DB_USERNAME', p.dbUser);
     setEnv('DB_PASSWORD', p.dbPass);
