@@ -195,24 +195,32 @@ function scanGitDirs(baseDir, maxDepth = 6) {
   return repos;
 }
 
+function gitCmdFor(dir, args) {
+  let uid = null;
+  try { uid = fs.statSync(dir).uid; } catch {}
+  const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
+  if (uid !== null && uid !== me) return `sudo -H -u "#${uid}" git -C "${dir}" ${args}`;
+  return `git -C "${dir}" ${args}`;
+}
+
 function getGitProjects(force = false) {
   const now = Date.now();
   if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
   const dirs = scanGitDirs(SCAN_ROOT, 6);
   const projects = dirs.map((d) => {
     try {
-      const branch = execSync(`git -C "${d}" rev-parse --abbrev-ref HEAD 2>/dev/null`, { timeout: 2000 }).toString().trim() || 'unknown';
-      const log = execSync(`git -C "${d}" log -1 --format="%h|%cr|%s" 2>/dev/null`, { timeout: 2000 }).toString().trim().split('|');
-      const dirty = execSync(`git -C "${d}" status --porcelain 2>/dev/null`, { timeout: 2000 }).toString().trim().length > 0;
+      const branch = execSync(gitCmdFor(d, 'rev-parse --abbrev-ref HEAD 2>/dev/null'), { timeout: 2000 }).toString().trim() || 'unknown';
+      const log = execSync(gitCmdFor(d, 'log -1 --format="%h|%cr|%s" 2>/dev/null'), { timeout: 2000 }).toString().trim().split('|');
+      const dirty = execSync(gitCmdFor(d, 'status --porcelain 2>/dev/null'), { timeout: 2000 }).toString().trim().length > 0;
       let remote = '';
-      try { remote = execSync(`git -C "${d}" remote get-url origin 2>/dev/null`, { timeout: 1500 }).toString().trim(); } catch {}
+      try { remote = execSync(gitCmdFor(d, 'remote get-url origin 2>/dev/null'), { timeout: 1500 }).toString().trim(); } catch {}
       let lastPull = null;
       try {
         const fetchHead = path.join(d, '.git', 'FETCH_HEAD');
         if (fs.existsSync(fetchHead)) {
           lastPull = fs.statSync(fetchHead).mtimeMs;
         } else {
-          const ct = execSync(`git -C "${d}" log -1 --format="%ct" 2>/dev/null`, { timeout: 1500 }).toString().trim();
+          const ct = execSync(gitCmdFor(d, 'log -1 --format="%ct" 2>/dev/null'), { timeout: 1500 }).toString().trim();
           if (ct) lastPull = parseInt(ct, 10) * 1000;
         }
       } catch {}
@@ -247,10 +255,31 @@ function pullGitProject(targetPath) {
     const list = getGitProjects();
     const match = list.find((p) => p.path === targetPath);
     if (!match) return resolve({ ok: false, error: 'Project not in verified whitelist' });
-    exec(`git -C "${targetPath}" pull`, { timeout: 30_000 }, (err, stdout, stderr) => {
+    // Run git as dir owner so private https (credential.store) and ssh keys work.
+    // App runs as root (for unix_chkpwd) but root has no git credentials.
+    let uid = null;
+    try { uid = fs.statSync(targetPath).uid; } catch {}
+    const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
+    const gitCmd = (uid !== null && uid !== me)
+      ? `sudo -H -u "#${uid}" git -C "${targetPath}" pull`
+      : `git -C "${targetPath}" pull`;
+    exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
       gitCache.time = 0; // invalidate cache
       const out = (stdout || '') + (stderr || '');
       if (err) return resolve({ ok: false, error: err.message, output: out });
+      // Auto-fix perms agar CRUD tidak 500 setelah pull (storage/ + bootstrap/cache harus bisa ditulis www-data).
+      try {
+        const isLaravel = fs.existsSync(path.join(targetPath, 'artisan'));
+        const isWP = fs.existsSync(path.join(targetPath, 'wp-load.php'));
+        if (isLaravel || isWP) {
+          let owner = null;
+          try { owner = execSync(`id -nu ${uid} 2>/dev/null`, { timeout: 2000 }).toString().trim(); } catch {}
+          if (owner && uid !== null) {
+            const fixOut = execSync(`bash /var/www/fix-permissions.sh "${targetPath}" --user "${owner}" 2>&1`, { timeout: 30_000 }).toString();
+            return resolve({ ok: true, output: out + '\n--- fix-permissions ---\n' + fixOut });
+          }
+        }
+      } catch {}
       resolve({ ok: true, output: out });
     });
   });
