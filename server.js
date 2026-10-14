@@ -1214,6 +1214,7 @@ async function runDeployJob(job, p) {
     jobStep(job, 'git clone', 'running', '');
     r = await runCmd(`mkdir -p ${shq(dest)} && chown ${p.deployer}:www-data ${shq(dest)} && chmod 2755 ${shq(dest)}`);
     if (!r.ok) throw new Error('mkdir project gagal\n' + r.output);
+    job.createdDir = dest; // penanda untuk rollback: folder ini milik job ini (validate menjamin belum ada sebelumnya)
     r = await ago('git', ['clone', '--branch', p.branch, p.repo, dest], { timeout: 300000 });
     if (!r.ok) throw new Error('git clone gagal\n' + r.output);
     await runCmd(`chown -R ${p.deployer}:www-data ${shq(dest)}`);
@@ -1301,6 +1302,7 @@ async function runDeployJob(job, p) {
     jobStep(job, 'nginx vhost', 'running', '');
     const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}/public;\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`;
     fs.writeFileSync(`/etc/nginx/sites-available/${p.domain}`, vhost);
+    job.createdVhost = p.domain;
     await runCmd(`ln -sf /etc/nginx/sites-available/${shq(p.domain)} /etc/nginx/sites-enabled/${shq(p.domain)}`);
     r = await runCmd('nginx -t 2>&1', { timeout: 15000 });
     if (!r.ok) throw new Error('nginx -t gagal\n' + r.output);
@@ -1351,6 +1353,24 @@ async function runDeployJob(job, p) {
     job.status = 'done';
   } catch (e) {
     jobStep(job, 'ERROR', 'fail', String((e && e.message) || e).slice(0, 3000));
+    // Rollback artefak yang dibuat job ini agar retry bisa jalan bersih.
+    // - Folder project: aman dihapus (validate menjamin belum ada sebelum job).
+    // - Vhost nginx: hapus + reload bila sempat dibuat.
+    // - Database SENGAJA dibiarkan (bisa jadi sudah ada sebelumnya; CREATE IF NOT EXISTS aman retry).
+    try {
+      const notes = ['database dibiarkan (aman retry, IF NOT EXISTS)'];
+      if (job.createdVhost && /^[a-z0-9.-]+\.[a-z]{2,}$/.test(job.createdVhost)) {
+        await runCmd(`rm -f /etc/nginx/sites-enabled/${job.createdVhost} /etc/nginx/sites-available/${job.createdVhost} && nginx -t 2>&1 && systemctl reload nginx 2>&1`, { timeout: 30000 });
+        notes.push(`vhost ${job.createdVhost} dihapus`);
+      }
+      if (job.createdDir && job.createdDir === path.join('/var/www', p.dir) && fs.existsSync(job.createdDir)) {
+        await runCmd(`rm -rf ${shq(job.createdDir)}`, { timeout: 60000 });
+        notes.push(`folder ${job.createdDir} dihapus`);
+      }
+      jobStep(job, 'rollback', 'ok', notes.join('; '));
+    } catch (rbErr) {
+      jobStep(job, 'rollback', 'fail', 'rollback tidak sempurna, cek manual: ' + String((rbErr && rbErr.message) || rbErr).slice(0, 500));
+    }
     job.status = 'failed';
   }
 }
