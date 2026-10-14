@@ -828,6 +828,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/workers" class="nav-link" data-view="workers"><span class="dot"></span>Workers &amp; Cron</a>
   <a href="#/git" class="nav-link" data-view="git"><span class="dot"></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes"><span class="dot"></span>Processes</a>
+  <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <div class="nav-foot">
     Microspace VPS Monitor
@@ -1182,6 +1183,49 @@ select.input { appearance: auto; max-width: 100%; }
   </div>
   </div><!-- /view-processes -->
 
+  <!-- VIEW: FILE EXPLORER -->
+  <div class="view-pane" id="view-files">
+    <div class="card c12" id="filesCard">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>File Explorer</span>
+          <span class="badge" id="fsEntriesCount">0 items</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="fsFilterInput" class="input" placeholder="Filter files in folder..." style="min-width:180px" />
+          <button class="btn" id="fsBtnUp">⬆ Up</button>
+          <button class="btn" id="fsBtnRefresh">↻ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Path Bar & Bookmarks -->
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:6px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:6px 12px;flex:1;min-width:260px;font-family:var(--font-mono);font-size:12.5px" id="fsBreadcrumbs">
+          /
+        </div>
+        <div style="display:flex;gap:6px;align-items:center" id="fsBookmarks"></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:40px">Tipe</th>
+              <th>Nama File / Folder</th>
+              <th style="width:110px">Ukuran</th>
+              <th style="width:90px">Permission</th>
+              <th style="width:160px">Terakhir Diubah</th>
+              <th style="width:140px;text-align:right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="fsList">
+            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat direktori...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-files -->
+
   <!-- VIEW: USERS -->
   <div class="view-pane" id="view-users">
     <div class="card c12" id="usersCard">
@@ -1265,6 +1309,26 @@ select.input { appearance: auto; max-width: 100%; }
         <button class="btn" id="cronModalCancel">Batal</button>
         <button class="btn-batch" id="cronModalSave">Simpan Schedule</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Preview File Explorer -->
+<div class="modal-backdrop" id="fsPreviewModal">
+  <div class="modal" style="max-width:860px;width:calc(100% - 32px);max-height:85vh">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:8px;overflow:hidden">
+        <span id="fsPreviewTitle" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Preview File</span>
+        <span class="badge" id="fsPreviewSize">—</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn ok" id="fsPreviewDownloadBtn">⬇ Download</button>
+        <button class="btn" id="fsPreviewModalClose" style="padding:2px 8px">✕</button>
+      </div>
+    </div>
+    <div style="padding:14px;overflow:auto;display:flex;flex-direction:column;gap:8px">
+      <div id="fsPreviewNotice" style="display:none;font-size:11.5px;color:var(--warn);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.25);border-radius:6px;padding:6px 10px"></div>
+      <pre id="fsPreviewContent" style="margin:0;padding:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:12px;line-height:1.5;overflow:auto;max-height:60vh;white-space:pre-wrap;word-break:break-word;color:var(--tx)"></pre>
     </div>
   </div>
 </div>
@@ -1384,8 +1448,11 @@ let isAdmin = false;
 j('/api/me').then(m => {
   isAdmin = !!m.admin;
   $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.admin ? '<span class="role">admin</span>' : ''}`;
-  if (m.admin && $('navLinkUsers')) $('navLinkUsers').style.display = '';
-  if (!m.admin && currentView() === 'users') location.hash = '#/overview';
+  if (m.admin) {
+    if ($('navLinkUsers')) $('navLinkUsers').style.display = '';
+    if ($('navLinkFiles')) $('navLinkFiles').style.display = '';
+  }
+  if (!m.admin && (currentView() === 'users' || currentView() === 'files')) location.hash = '#/overview';
 }).catch(() => {});
 
 async function api(method, url, body) {
@@ -1398,6 +1465,123 @@ async function api(method, url, body) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'Request gagal');
   return d;
+}
+
+// ---- Mini File Explorer ----
+let fsCurrentPath = '';
+let fsParentPath = null;
+let rawFsEntries = [];
+let fsCurrentPreviewPath = '';
+
+async function loadFs(dirPath) {
+  if (!isAdmin) return;
+  try {
+    const url = dirPath ? `/api/fs/list?path=${encodeURIComponent(dirPath)}` : '/api/fs/list';
+    const d = await j(url);
+    fsCurrentPath = d.current;
+    fsParentPath = d.parent;
+    rawFsEntries = d.entries || [];
+    renderFsBreadcrumbs(d.current);
+    renderFsBookmarks(d.bookmarks || []);
+    renderFsList();
+    $('fsBtnUp').disabled = !fsParentPath;
+  } catch (err) {
+    $('fsList').innerHTML = `<tr><td colspan="6" style="color:var(--bad);text-align:center;padding:18px">${escHtml(err.message || 'Gagal membuka direktori')}</td></tr>`;
+  }
+}
+
+function renderFsBreadcrumbs(fullPath) {
+  const parts = fullPath.split('/').filter(Boolean);
+  let html = `<a href="javascript:void(0)" class="fs-crumb" data-path="/" style="color:var(--ac);text-decoration:none">/</a>`;
+  let accum = '';
+  for (let i = 0; i < parts.length; i++) {
+    accum += '/' + parts[i];
+    const isLast = i === parts.length - 1;
+    html += ` <span style="opacity:0.4">/</span> `;
+    if (isLast) {
+      html += `<strong style="color:var(--tx)">${escHtml(parts[i])}</strong>`;
+    } else {
+      html += `<a href="javascript:void(0)" class="fs-crumb" data-path="${escHtml(accum)}" style="color:var(--ac);text-decoration:none">${escHtml(parts[i])}</a>`;
+    }
+  }
+  $('fsBreadcrumbs').innerHTML = html;
+}
+
+function renderFsBookmarks(bookmarks) {
+  $('fsBookmarks').innerHTML = bookmarks.map(b => `
+    <button class="btn-sm fs-bmark" data-path="${escHtml(b.path)}" title="${escHtml(b.path)}">${escHtml(b.name)}</button>
+  `).join('');
+}
+
+function renderFsList() {
+  const q = ($('fsFilterInput').value || '').trim().toLowerCase();
+  const list = rawFsEntries.filter(e => !q || e.name.toLowerCase().includes(q));
+  $('fsEntriesCount').textContent = `${list.length} item${list.length === 1 ? '' : 's'}`;
+
+  if (!list.length) {
+    $('fsList').innerHTML = `<tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">${rawFsEntries.length ? 'Tidak ada file yang cocok dengan filter' : 'Direktori kosong'}</td></tr>`;
+    return;
+  }
+
+  $('fsList').innerHTML = list.map(item => {
+    const full = (fsCurrentPath === '/' ? '' : fsCurrentPath) + '/' + item.name;
+    const icon = item.isDir ? '📁' : (['.sh','.bash','.py','.php','.js','.ts'].includes(item.ext) ? '📜' : (['.zip','.tar','.gz','.tgz'].includes(item.ext) ? '🗜️' : '📄'));
+    const sizeStr = item.isDir ? '—' : fmtBytes(item.size);
+    const mtimeStr = item.mtime ? new Date(item.mtime).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+    const clickAttr = item.isDir ? `class="fs-open-dir" data-path="${escHtml(full)}" style="cursor:pointer;color:var(--ac);font-weight:600"` : `class="fs-preview-file" data-path="${escHtml(full)}" style="cursor:pointer;color:var(--tx)"`;
+
+    return `
+      <tr>
+        <td style="font-size:15px;text-align:center">${icon}</td>
+        <td>
+          <span ${clickAttr}>${escHtml(item.name)}</span>
+        </td>
+        <td style="color:var(--mut);font-family:var(--font-mono)">${sizeStr}</td>
+        <td><code>${escHtml(item.mode)}</code></td>
+        <td style="color:var(--mut)">${mtimeStr}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${item.isDir
+            ? `<button class="btn-sm fs-open-dir" data-path="${escHtml(full)}">Buka</button>`
+            : `<button class="btn-sm fs-preview-file" data-path="${escHtml(full)}">Lihat</button>
+               <a href="/api/fs/download?path=${encodeURIComponent(full)}" class="btn-sm ok" style="text-decoration:none;display:inline-block;margin-left:4px" download>⬇</a>`
+          }
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function previewFsFile(filePath) {
+  fsCurrentPreviewPath = filePath;
+  $('fsPreviewTitle').textContent = filePath.split('/').pop() || 'Preview';
+  $('fsPreviewSize').textContent = 'Loading...';
+  $('fsPreviewContent').textContent = 'Memuat isi file...';
+  $('fsPreviewNotice').style.display = 'none';
+  $('fsPreviewDownloadBtn').onclick = () => {
+    location.href = `/api/fs/download?path=${encodeURIComponent(filePath)}`;
+  };
+  $('fsPreviewModal').classList.add('open');
+
+  try {
+    const d = await j(`/api/fs/read?path=${encodeURIComponent(filePath)}`);
+    $('fsPreviewTitle').textContent = d.name;
+    $('fsPreviewSize').textContent = fmtBytes(d.size);
+
+    if (d.truncated) {
+      $('fsPreviewNotice').textContent = `File berukuran besar (${fmtBytes(d.size)}). Hanya menampilkan 512 KB pertama. Gunakan tombol Download untuk mengunduh seluruh file.`;
+      $('fsPreviewNotice').style.display = 'block';
+    }
+
+    if (!d.isText) {
+      $('fsPreviewNotice').textContent = 'File binary tidak dapat ditampilkan sebagai teks. Klik tombol Download di atas.';
+      $('fsPreviewNotice').style.display = 'block';
+      $('fsPreviewContent').textContent = '[Binary File]';
+    } else {
+      $('fsPreviewContent').textContent = d.content || '(File kosong)';
+    }
+  } catch (err) {
+    $('fsPreviewContent').textContent = 'Gagal membaca file: ' + err.message;
+  }
 }
 
 // ---- User Management ----
@@ -2258,7 +2442,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'users'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'files', 'users'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2286,6 +2470,7 @@ function navigateView(name, refresh = true) {
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
     if (view === 'processes') procs();
+    if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
   }
 }
@@ -2351,6 +2536,40 @@ $('gitList').addEventListener('click', async (e) => {
 $('gitModalClose').addEventListener('click', () => $('gitModal').classList.remove('open'));
 $('gitModal').addEventListener('click', (e) => {
   if (e.target === $('gitModal')) $('gitModal').classList.remove('open');
+});
+
+// File Explorer Events
+$('fsBtnRefresh').addEventListener('click', () => loadFs(fsCurrentPath));
+$('fsBtnUp').addEventListener('click', () => {
+  if (fsParentPath) loadFs(fsParentPath);
+});
+$('fsFilterInput').addEventListener('input', renderFsList);
+
+$('fsBreadcrumbs').addEventListener('click', (e) => {
+  const link = e.target.closest('.fs-crumb');
+  if (link && link.dataset.path) loadFs(link.dataset.path);
+});
+
+$('fsBookmarks').addEventListener('click', (e) => {
+  const btn = e.target.closest('.fs-bmark');
+  if (btn && btn.dataset.path) loadFs(btn.dataset.path);
+});
+
+$('fsList').addEventListener('click', (e) => {
+  const dirEl = e.target.closest('.fs-open-dir');
+  if (dirEl && dirEl.dataset.path) {
+    loadFs(dirEl.dataset.path);
+    return;
+  }
+  const fileEl = e.target.closest('.fs-preview-file');
+  if (fileEl && fileEl.dataset.path) {
+    previewFsFile(fileEl.dataset.path);
+  }
+});
+
+$('fsPreviewModalClose').addEventListener('click', () => $('fsPreviewModal').classList.remove('open'));
+$('fsPreviewModal').addEventListener('click', (e) => {
+  if (e.target === $('fsPreviewModal')) $('fsPreviewModal').classList.remove('open');
 });
 
 // User Management Events

@@ -852,6 +852,110 @@ function audit(user, action, target, details = '') {
   console.log(`[AUDIT ${ts}] user=${user} action=${action} target=${target}${details ? ' ' + details : ''}`);
 }
 
+// ---- Mini File Explorer helpers ----
+const FS_TEXT_EXTS = new Set([
+  '.txt', '.md', '.json', '.js', '.mjs', '.cjs', '.ts', '.html', '.htm', '.css',
+  '.scss', '.sass', '.less', '.xml', '.yaml', '.yml', '.conf', '.config', '.ini',
+  '.sh', '.bash', '.php', '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp',
+  '.h', '.hpp', '.sql', '.env', '.log', '.htaccess', '.service', '.lock', '.svg'
+]);
+
+function safeFsPath(p) {
+  if (!p || typeof p !== 'string') return SCAN_ROOT;
+  if (p.includes('\0')) return null;
+  return path.resolve(p);
+}
+
+function getFsBookmarks() {
+  const b = [
+    { name: 'Projects', path: SCAN_ROOT },
+    { name: 'Web (/var/www)', path: '/var/www' },
+    { name: 'Logs (/var/log)', path: '/var/log' },
+    { name: 'Nginx (/etc/nginx)', path: '/etc/nginx' },
+    { name: 'Backups (/var/backups)', path: '/var/backups' },
+    { name: 'Home (/home)', path: '/home' },
+    { name: 'Root (/)', path: '/' },
+  ];
+  return b.filter((x) => fs.existsSync(x.path));
+}
+
+function listFsDirectory(dirPath) {
+  const real = safeFsPath(dirPath);
+  if (!real || !fs.existsSync(real)) throw new Error('Directory not found');
+  const stat = fs.statSync(real);
+  if (!stat.isDirectory()) throw new Error('Path is not a directory');
+
+  let raw;
+  try {
+    raw = fs.readdirSync(real, { withFileTypes: true });
+  } catch (err) {
+    throw new Error('Permission denied or unreadable directory');
+  }
+
+  const entries = [];
+  for (const item of raw) {
+    const full = path.join(real, item.name);
+    let s = null;
+    try { s = fs.statSync(full); } catch {}
+    const isDir = item.isDirectory();
+    entries.push({
+      name: item.name,
+      isDir,
+      isSymlink: item.isSymbolicLink(),
+      size: s ? s.size : 0,
+      mtime: s ? s.mtimeMs : 0,
+      mode: s ? (s.mode & 0o777).toString(8) : '---',
+      ext: isDir ? '' : path.extname(item.name).toLowerCase(),
+    });
+  }
+
+  entries.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+
+  const parent = real === path.dirname(real) ? null : path.dirname(real);
+  return {
+    current: real,
+    parent,
+    entries,
+    bookmarks: getFsBookmarks(),
+  };
+}
+
+function readFsFile(filePath, maxBytes = 524_288) {
+  const real = safeFsPath(filePath);
+  if (!real || !fs.existsSync(real)) throw new Error('File not found');
+  const stat = fs.statSync(real);
+  if (stat.isDirectory()) throw new Error('Path is a directory, not a file');
+
+  const ext = path.extname(real).toLowerCase();
+  const fd = fs.openSync(real, 'r');
+  const buf = Buffer.alloc(Math.min(stat.size, maxBytes));
+  const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+  fs.closeSync(fd);
+
+  let isText = FS_TEXT_EXTS.has(ext) || path.basename(real).startsWith('.');
+  if (!isText) {
+    // Check first 512 bytes for null byte
+    let nullFound = false;
+    for (let i = 0; i < Math.min(bytesRead, 512); i++) {
+      if (buf[i] === 0) { nullFound = true; break; }
+    }
+    isText = !nullFound;
+  }
+
+  return {
+    path: real,
+    name: path.basename(real),
+    size: stat.size,
+    mtime: stat.mtimeMs,
+    isText,
+    truncated: stat.size > maxBytes,
+    content: isText ? buf.slice(0, bytesRead).toString('utf8') : null,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
@@ -975,6 +1079,44 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
     return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
+  }
+  if (p === '/api/fs/list') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const targetDir = url.searchParams.get('path') || SCAN_ROOT;
+    try {
+      const data = listFsDirectory(targetDir);
+      return send(res, 200, JSON.stringify(data));
+    } catch (err) {
+      return send(res, 400, JSON.stringify({ error: err.message }));
+    }
+  }
+  if (p === '/api/fs/read') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const targetFile = url.searchParams.get('path');
+    if (!targetFile) return send(res, 400, JSON.stringify({ error: 'Path required' }));
+    try {
+      const data = readFsFile(targetFile);
+      return send(res, 200, JSON.stringify(data));
+    } catch (err) {
+      return send(res, 400, JSON.stringify({ error: err.message }));
+    }
+  }
+  if (p === '/api/fs/download') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const target = safeFsPath(url.searchParams.get('path'));
+    if (!target || !fs.existsSync(target) || fs.statSync(target).isDirectory()) {
+      return send(res, 404, 'File not found', 'text/plain');
+    }
+    const filename = path.basename(target);
+    const stat = fs.statSync(target);
+    audit(session.user, 'fs.download', target, `size=${stat.size}`);
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
+      'Content-Length': stat.size,
+    });
+    fs.createReadStream(target).pipe(res);
+    return;
   }
   if (p === '/api/git/projects') {
     const projects = getGitProjects();
