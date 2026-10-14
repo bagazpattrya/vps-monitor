@@ -160,7 +160,10 @@ const SERVICES = ['nginx', 'mysql', 'php8.4-fpm', 'mosquitto', 'redis-server', '
 function getServices() {
   const out = SERVICES.map((s) => {
     try {
-      const st = execSync(`systemctl is-active ${s} 2>/dev/null`, { timeout: 2000 }).toString().trim();
+      // Jangan pakai 2>/dev/null saja: systemctl exit !=0 saat inactive sehingga execSync throw
+      // dan status jadi 'unknown'. Pakai || true agar output 'inactive' tetap terbaca.
+      const st = execSync(`systemctl is-active ${s} 2>&1 || true`, { timeout: 2000 }).toString().trim().split('\n')[0].trim();
+      if (!st) return { name: s, active: false, status: 'unknown' };
       return { name: s, active: st === 'active', status: st };
     } catch {
       return { name: s, active: false, status: 'unknown' };
@@ -222,10 +225,11 @@ function getSupervisorStatus() {
         }
       }
       const confs = getSupervisorProgs();
-      // merge: supervisorctl output wins; add conf entries missing from output
+      // merge: supervisorctl output wins; conf yang tidak ada di output berarti belum di-load supervisor
+      // (misal project Laravel tanpa conf) → tandai 'NO CONF' bukan 'UNKNOWN' agar jelas.
       for (const c of confs) {
         if (!procs.some((p) => p.name === c.name || p.name.startsWith(c.name + ':'))) {
-          procs.push({ name: c.name, state: 'UNKNOWN', detail: c.command.slice(0, 120), logfile: c.logfile });
+          procs.push({ name: c.name, state: 'NO CONF', detail: (c.command || '').slice(0, 120) + ' — belum ada conf supervisor, restart via service tidak berlaku', logfile: c.logfile });
         }
       }
       // attach logfile + running pid from conf
