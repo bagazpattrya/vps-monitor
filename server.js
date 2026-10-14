@@ -1322,11 +1322,20 @@ async function runDeployJob(job, p) {
       jobStep(job, 'supervisor worker', 'running', '');
       const conf = `[program:${p.domain}-worker]\nprocess_name=%(program_name)s_%(process_num)02d\ncommand=php ${dest}/artisan queue:work --sleep=3 --tries=3\nautostart=true\nautorestart=true\nuser=www-data\nnumprocs=1\nredirect_stderr=true\nstdout_logfile=${dest}/storage/logs/worker.log\n`;
       fs.writeFileSync(`/etc/supervisor/conf.d/${p.domain}-worker.conf`, conf);
+      job.createdSupervisor = `${p.domain}-worker`;
       r = await runCmd('supervisorctl reread 2>&1 && supervisorctl update 2>&1', { timeout: 60000 });
       r = await runCmd(`supervisorctl start ${shq(p.domain + '-worker:*')} 2>&1`, { timeout: 60000 });
-      r = await runCmd(`supervisorctl status ${shq(p.domain + '-worker:*')} 2>&1`, { timeout: 15000 });
-      if (!/RUNNING/.test(r.output)) throw new Error('worker tidak RUNNING\n' + r.output);
-      jobStep(job, 'supervisor worker', 'ok', r.output.trim());
+      // Worker PHP butuh waktu boot — poll sampai RUNNING (maks ~30 dtk), jangan cek sekali langsung.
+      let stOut = '';
+      for (let i = 0; i < 10; i++) {
+        await new Promise((s) => setTimeout(s, 3000));
+        r = await runCmd(`supervisorctl status ${shq(p.domain + '-worker:*')} 2>&1`, { timeout: 15000 });
+        stOut = r.output;
+        if (/RUNNING/.test(stOut)) break;
+        if (/FATAL|BACKOFF|STOPPED|ERROR/.test(stOut)) break;
+      }
+      if (!/RUNNING/.test(stOut)) throw new Error('worker tidak RUNNING\n' + stOut);
+      jobStep(job, 'supervisor worker', 'ok', stOut.trim());
     } else jobStep(job, 'supervisor worker', 'skip', 'nonaktif (opsi)');
 
     // 14. cron scheduler (opsional, idempoten)
@@ -1363,9 +1372,14 @@ async function runDeployJob(job, p) {
         await runCmd(`rm -f /etc/nginx/sites-enabled/${job.createdVhost} /etc/nginx/sites-available/${job.createdVhost} && nginx -t 2>&1 && systemctl reload nginx 2>&1`, { timeout: 30000 });
         notes.push(`vhost ${job.createdVhost} dihapus`);
       }
+      if (job.createdSupervisor && /^[a-zA-Z0-9.-]+-worker$/.test(job.createdSupervisor)) {
+        await runCmd(`supervisorctl stop ${shq(job.createdSupervisor + ':*')} 2>&1; rm -f /etc/supervisor/conf.d/${job.createdSupervisor}.conf; supervisorctl reread 2>&1; supervisorctl update 2>&1`, { timeout: 60000 });
+        notes.push(`supervisor ${job.createdSupervisor} dihentikan+dihapus`);
+      }
       if (job.createdDir && job.createdDir === path.join('/var/www', p.dir) && fs.existsSync(job.createdDir)) {
+        await runCmd(`(crontab -u www-data -l 2>/dev/null | grep -v -F ${shq(job.createdDir)} || true) | crontab -u www-data - 2>&1`, { timeout: 15000 });
         await runCmd(`rm -rf ${shq(job.createdDir)}`, { timeout: 60000 });
-        notes.push(`folder ${job.createdDir} dihapus`);
+        notes.push(`folder ${job.createdDir} dihapus (+cron line bila ada)`);
       }
       jobStep(job, 'rollback', 'ok', notes.join('; '));
     } catch (rbErr) {
