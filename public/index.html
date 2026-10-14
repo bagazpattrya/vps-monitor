@@ -34,6 +34,7 @@ body {
 }
 
 /* Header & Navbar */
+html { scroll-behavior: smooth; }
 header {
   position: sticky;
   top: 0;
@@ -46,56 +47,91 @@ header {
   gap: 16px;
   align-items: center;
   flex-wrap: wrap;
+  margin-left: 0;
 }
 
-.brand {
+/* Sidebar Drawer */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 35;
+  display: none;
+}
+.sidebar-overlay.open { display: block; }
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 240px;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  padding: 18px 14px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transform: translateX(-100%);
+  transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+  box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+}
+.sidebar.open { transform: translateX(0); }
+.sidebar .sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.sidebar .brand {
+  font-weight: 700;
+  font-size: 15px;
+}
+.sidebar-close {
+  background: transparent;
+  border: 0;
+  color: var(--mut);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.sidebar-close:hover { color: var(--tx); background: var(--bg-elev); }
+.nav-link {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-weight: 700;
-  font-size: 16px;
-  letter-spacing: -0.01em;
-}
-
-.meta-pills {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.badge {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  padding: 9px 12px;
+  border-radius: 8px;
   color: var(--mut);
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 99px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
 }
-.badge strong { color: var(--tx); font-weight: 500; }
+.nav-link:hover { background: var(--bg-elev); color: var(--tx); }
+.nav-link.active { background: rgba(59, 130, 246, 0.12); color: var(--tx); }
+.nav-link .dot { width: 7px; height: 7px; border-radius: 99px; background: currentColor; opacity: 0.5; flex-shrink: 0; }
+.nav-link.active .dot { opacity: 1; background: var(--ac); }
+.nav-foot { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--mut); }
 
-.header-right {
-  margin-left: auto;
+.brand-btn {
   display: flex;
-  gap: 12px;
   align-items: center;
-}
-
-.btn {
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14.5px;
   background: var(--bg-elev);
-  color: var(--tx);
   border: 1px solid var(--border);
+  color: var(--tx);
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.btn:hover {
+.brand-btn:hover {
   background: var(--border);
   border-color: var(--border-light);
 }
@@ -119,6 +155,7 @@ header {
   flex-direction: column;
   justify-content: space-between;
   transition: border-color 0.2s ease;
+  scroll-margin-top: 76px;
 }
 .card:hover { border-color: var(--border-light); }
 
@@ -538,6 +575,27 @@ code {
 }
 .btn-batch:disabled { opacity: 0.5; cursor: wait; }
 
+/* Workers */
+.worker-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-sm {
+  background: var(--bg-elev);
+  color: var(--tx);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-sm:hover { border-color: var(--border-light); }
+.btn-sm:disabled { opacity: 0.5; cursor: wait; }
+.btn-sm.danger { color: var(--bad); border-color: rgba(239, 68, 68, 0.3); }
+.btn-sm.ok { color: var(--ok); border-color: rgba(16, 185, 129, 0.3); }
+.worker-sub { font-size: 12px; font-weight: 600; color: var(--mut); text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 6px; }
+.worker-cmd { font-size: 11.5px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+select.input { appearance: auto; max-width: 100%; }
+
 /* Log Modal */
 .modal-backdrop {
   position: fixed;
@@ -582,10 +640,29 @@ code {
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <span>VPS Monitor</span>
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <div class="brand">VPS Monitor</div>
+    <button class="sidebar-close" id="sidebarClose" title="Close menu">✕</button>
   </div>
+  <a href="#overview" class="nav-link active"><span class="dot"></span>Overview</a>
+  <a href="#history" class="nav-link"><span class="dot"></span>History</a>
+  <a href="#services" class="nav-link"><span class="dot"></span>Services</a>
+  <a href="#workers" class="nav-link"><span class="dot"></span>Workers &amp; Cron</a>
+  <a href="#git" class="nav-link"><span class="dot"></span>Git Deployments</a>
+  <a href="#processes" class="nav-link"><span class="dot"></span>Processes</a>
+  <div class="nav-foot">
+    Microspace VPS Monitor
+  </div>
+</aside>
+
+<header>
+  <button class="brand-btn" id="vpsMonitorBtn" title="Toggle Navigation Menu">
+    <span style="font-size:12px;opacity:0.7">☰</span>
+    <span>VPS Monitor</span>
+  </button>
   <div class="meta-pills">
     <span class="badge" id="host"><strong>—</strong></span>
     <span class="badge" id="os" style="display:none"></span>
@@ -600,7 +677,7 @@ code {
 
 <main class="container">
   <!-- CPU -->
-  <div class="card c3">
+  <div class="card c3" id="overview">
     <div>
       <div class="card-head">
         <span>CPU Usage</span>
@@ -681,7 +758,7 @@ code {
   </div>
 
   <!-- History Chart -->
-  <div class="card c8">
+  <div class="card c8" id="history">
     <div class="sec-head">
       <h3 class="sec-title">System Metrics History</h3>
       <div class="tabs" id="histTabs">
@@ -698,7 +775,7 @@ code {
   </div>
 
   <!-- Systemd Services -->
-  <div class="card c4">
+  <div class="card c4" id="services">
     <div class="sec-head">
       <h3 class="sec-title">System Services</h3>
       <span class="badge" id="svcSummary">—</span>
@@ -710,8 +787,53 @@ code {
     </div>
   </div>
 
+  <!-- Workers (Supervisor & Cron) -->
+  <div class="card c12" id="workers">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>Workers &amp; Cron</span>
+        <span class="badge" id="workerBadge">—</span>
+      </h3>
+      <div class="proc-controls">
+        <button class="btn" id="workerRefresh">Refresh</button>
+        <button class="btn-sm" id="btnRestartCron" title="systemctl restart cron">↻ Restart Cron Service</button>
+        <button class="btn-sm" id="btnRestartSup" title="systemctl restart supervisor">↻ Restart Supervisor Daemon</button>
+      </div>
+    </div>
+
+    <!-- Supervisor Section -->
+    <div class="worker-sub">Supervisorctl Managed Workers</div>
+    <div class="git-group-items" id="supList" style="margin-bottom:12px">
+      <span style="color:var(--mut);font-size:12px">Loading supervisor status...</span>
+    </div>
+
+    <!-- Cron Jobs Section -->
+    <div class="worker-sub">Active Cron Jobs</div>
+    <div class="table-wrap" style="margin:0 0 12px">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:110px">User</th>
+            <th style="width:130px">Schedule</th>
+            <th>Command</th>
+          </tr>
+        </thead>
+        <tbody id="cronList"></tbody>
+      </table>
+    </div>
+
+    <!-- Laravel Logs Viewer shortcut -->
+    <div class="worker-sub">Laravel &amp; Worker Logs</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <select id="laravelLogSelect" class="input" style="flex:1;min-width:260px">
+        <option value="">Pilih file log...</option>
+      </select>
+      <button class="btn-sm ok" id="btnViewSelectedLog">View Tail (100)</button>
+    </div>
+  </div>
+
   <!-- Git Projects (DevOps) -->
-  <div class="card c12">
+  <div class="card c12" id="git">
     <div class="sec-head">
       <h3 class="sec-title">
         <span>Git Deployments</span>
@@ -729,7 +851,7 @@ code {
   </div>
 
   <!-- Top Processes -->
-  <div class="card c12">
+  <div class="card c12" id="processes">
     <div class="sec-head">
       <h3 class="sec-title">
         <span>Top Processes</span>
@@ -1188,6 +1310,172 @@ async function doBatchPull() {
   gitProjects();
 }
 
+async function workers() {
+  try {
+    const d = await j('/api/workers');
+    const sup = d.supervisor || { available: false, procs: [] };
+    const cron = d.cron || { jobs: [], schedProcs: [] };
+    const logs = d.laravelLogs || [];
+
+    const running = sup.procs.filter(p => /RUNNING/i.test(p.state)).length;
+    $('workerBadge').innerHTML = sup.available
+      ? `<strong>${running}/${sup.procs.length}</strong> running`
+      : `<strong>no supervisor</strong>`;
+
+    // Supervisor list
+    if (!sup.procs.length) {
+      $('supList').innerHTML = `<span style="color:var(--mut);font-size:12px">${sup.available ? 'No programs found' : 'supervisorctl not available on this host — queue workers checked via cron + laravel logs below'}</span>`;
+    } else {
+      $('supList').innerHTML = sup.procs.map(p => {
+        const ok = /RUNNING/i.test(p.state);
+        const esc = (p.name || '').replace(/"/g, '&quot;');
+        return `<div class="git-item">
+          <div class="git-info">
+            <div class="git-name">
+              <span>${p.name}</span>
+              <span class="pill ${ok ? 'ok' : 'down'}">${p.state || 'UNKNOWN'}</span>
+            </div>
+            <div class="worker-cmd">${(p.detail || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
+          </div>
+          <div class="worker-actions">
+            ${p.logfile ? `<button class="btn-sm" data-log="${p.logfile.replace(/"/g, '&quot;')}">Log</button>` : ''}
+            <button class="btn-sm ok" data-sup="restart" data-name="${esc}">Restart</button>
+            <button class="btn-sm" data-sup="start" data-name="${esc}">Start</button>
+            <button class="btn-sm danger" data-sup="stop" data-name="${esc}">Stop</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // Cron jobs
+    if (!cron.jobs.length) {
+      $('cronList').innerHTML = '<tr><td colspan="3" style="color:var(--mut)">No cron jobs found</td></tr>';
+    } else {
+      $('cronList').innerHTML = cron.jobs.map(c =>
+        `<tr><td><strong>${c.user}</strong></td><td><code>${c.schedule}</code></td><td><code class="cmd-code" title="${c.cmd.replace(/"/g, '&quot;')}">${c.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></td></tr>`
+      ).join('');
+    }
+
+    // Laravel logs select
+    const sel = $('laravelLogSelect');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Pilih file log...</option>' + logs.map(f => `<option value="${f}">${f}</option>`).join('');
+    if (cur && logs.includes(cur)) sel.value = cur;
+  } catch (e) {
+    $('supList').innerHTML = '<span style="color:var(--bad);font-size:12px">Failed loading workers</span>';
+  }
+}
+
+async function supAction(action, name, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const res = await fetch('/api/workers/supervisor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, name })
+    });
+    const d = await res.json();
+    $('gitModalTitle').textContent = `supervisorctl ${action} ${name}`;
+    $('gitModalBody').textContent = d.output || d.error || 'Done';
+    $('gitModalBody').className = 'modal-body ' + (d.ok ? 'ok' : 'err');
+    $('gitModal').classList.add('open');
+    workers();
+  } catch (err) {
+    $('gitModalTitle').textContent = `supervisorctl ${action} ${name}`;
+    $('gitModalBody').textContent = err.message;
+    $('gitModalBody').className = 'modal-body err';
+    $('gitModal').classList.add('open');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = action[0].toUpperCase() + action.slice(1); }
+}
+
+async function serviceRestart(unit, btn) {
+  if (!confirm(`Restart ${unit} service?`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Restarting...'; }
+  try {
+    const res = await fetch('/api/workers/service', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unit })
+    });
+    const d = await res.json();
+    $('gitModalTitle').textContent = `systemctl restart ${unit}`;
+    $('gitModalBody').textContent = d.output || d.error || 'Done';
+    $('gitModalBody').className = 'modal-body ' + (d.ok ? 'ok' : 'err');
+    $('gitModal').classList.add('open');
+    workers(); svc();
+  } catch (err) {
+    $('gitModalTitle').textContent = `systemctl restart ${unit}`;
+    $('gitModalBody').textContent = err.message;
+    $('gitModalBody').className = 'modal-body err';
+    $('gitModal').classList.add('open');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = unit === 'cron' ? '↻ Restart Cron Service' : '↻ Restart Supervisor Daemon'; }
+}
+
+async function viewLog(file) {
+  if (!file) return;
+  $('gitModalTitle').textContent = `tail: ${file}`;
+  $('gitModalBody').textContent = 'Loading...';
+  $('gitModalBody').className = 'modal-body';
+  $('gitModal').classList.add('open');
+  try {
+    const d = await j(`/api/workers/log?file=${encodeURIComponent(file)}&lines=100`);
+    $('gitModalBody').textContent = d.output || '(empty)';
+  } catch (e) {
+    const r = await fetch(`/api/workers/log?file=${encodeURIComponent(file)}&lines=100`);
+    const d = await r.json().catch(() => ({}));
+    $('gitModalBody').textContent = d.error || 'Failed loading log';
+    $('gitModalBody').className = 'modal-body err';
+  }
+}
+
+$('workerRefresh').addEventListener('click', workers);
+$('btnRestartCron').addEventListener('click', (e) => serviceRestart('cron', e.target));
+$('btnRestartSup').addEventListener('click', (e) => serviceRestart('supervisor', e.target));
+$('btnViewSelectedLog').addEventListener('click', () => viewLog($('laravelLogSelect').value));
+$('supList').addEventListener('click', (e) => {
+  const log = e.target.closest('[data-log]');
+  if (log) { viewLog(log.dataset.log); return; }
+  const b = e.target.closest('[data-sup]');
+  if (b) supAction(b.dataset.sup, b.dataset.name, b);
+});
+
+// Sidebar Drawer & Scrollspy
+const toggleSidebar = (open) => {
+  const sb = $('sidebar');
+  const ov = $('sidebarOverlay');
+  const show = typeof open === 'boolean' ? open : !sb.classList.contains('open');
+  sb.classList.toggle('open', show);
+  ov.classList.toggle('open', show);
+};
+
+$('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
+$('sidebarClose').addEventListener('click', () => toggleSidebar(false));
+$('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
+
+document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+  link.addEventListener('click', () => {
+    toggleSidebar(false);
+    document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+  });
+});
+
+const spySections = ['overview', 'history', 'services', 'workers', 'git', 'processes'];
+window.addEventListener('scroll', () => {
+  const scrollPos = window.scrollY + 100;
+  for (let i = spySections.length - 1; i >= 0; i--) {
+    const el = $(spySections[i]);
+    if (el && el.offsetTop <= scrollPos) {
+      document.querySelectorAll('.sidebar .nav-link').forEach(l => {
+        l.classList.toggle('active', l.getAttribute('href') === '#' + spySections[i]);
+      });
+      break;
+    }
+  }
+}, { passive: true });
+
 // UI Events
 $('gitSearch').addEventListener('input', renderGitProjects);
 
@@ -1240,10 +1528,11 @@ $('gitModal').addEventListener('click', (e) => {
 });
 
 // Init & Intervals
-stats(); procs(); svc(); hist(); gitProjects();
+stats(); procs(); svc(); hist(); gitProjects(); workers();
 setInterval(stats, 3000);
 setInterval(procs, 5000);
 setInterval(svc, 15000);
+setInterval(workers, 15000);
 setInterval(hist, 30000);
 setInterval(gitProjects, 30000);
 </script>

@@ -156,7 +156,7 @@ function getProcesses(onlyUser = null) {
   });
 }
 
-const SERVICES = ['nginx', 'mysql', 'php8.4-fpm', 'mosquitto', 'redis-server', 'ssh'];
+const SERVICES = ['nginx', 'mysql', 'php8.4-fpm', 'mosquitto', 'redis-server', 'ssh', 'cron', 'supervisor'];
 function getServices() {
   const out = SERVICES.map((s) => {
     try {
@@ -167,6 +167,177 @@ function getServices() {
     }
   });
   return out;
+}
+
+// ---- workers (supervisor + cron + laravel logs) ----
+const SUPERVISOR_CONF_DIRS = ['/etc/supervisor/conf.d', '/etc/supervisor.d', '/etc/supervisord.d', '/etc/supervisor'];
+const LARAVEL_LOG_CANDIDATES = (process.env.LARAVEL_LOGS || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+function parseSupervisorConf(file) {
+  let progs = [];
+  try {
+    const txt = fs.readFileSync(file, 'utf8');
+    let cur = null;
+    for (const line of txt.split('\n')) {
+      const m = line.match(/^\s*\[program:(.+?)\]/);
+      if (m) { cur = { name: m[1].trim(), file, command: '', logfile: '' }; progs.push(cur); continue; }
+      if (!cur) continue;
+      const cm = line.match(/^\s*command\s*=\s*(.+)/);
+      if (cm) cur.command = cm[1].trim();
+      const lm = line.match(/^\s*stdout_logfile\s*=\s*(.+)/);
+      if (lm) cur.logfile = lm[1].trim();
+    }
+  } catch {}
+  return progs;
+}
+
+function getSupervisorProgs() {
+  let progs = [];
+  for (const d of SUPERVISOR_CONF_DIRS) {
+    try {
+      for (const f of fs.readdirSync(d)) {
+        if (!f.endsWith('.conf') && !f.endsWith('.ini')) continue;
+        progs = progs.concat(parseSupervisorConf(path.join(d, f)));
+      }
+    } catch {}
+  }
+  // also pick up laravel projects with workers even without supervisor conf
+  for (const p of getGitProjects()) {
+    if (fs.existsSync(path.join(p.path, 'artisan')) && !progs.some((x) => x.name === p.name)) {
+      progs.push({ name: p.name + ' (queue)', file: p.path, command: 'php artisan queue:work', logfile: path.join(p.path, 'storage', 'logs', 'laravel.log') });
+    }
+  }
+  return progs;
+}
+
+function getSupervisorStatus() {
+  return new Promise((resolve) => {
+    exec('supervisorctl status 2>&1', { timeout: 5000 }, (err, stdout) => {
+      const procs = [];
+      if (stdout) {
+        for (const line of stdout.trim().split('\n')) {
+          const m = line.match(/^(\S+)\s+(\S+)(.*)$/);
+          if (!m) continue;
+          procs.push({ name: m[1], state: m[2], detail: m[3].trim().slice(0, 120) });
+        }
+      }
+      const confs = getSupervisorProgs();
+      // merge: supervisorctl output wins; add conf entries missing from output
+      for (const c of confs) {
+        if (!procs.some((p) => p.name === c.name || p.name.startsWith(c.name + ':'))) {
+          procs.push({ name: c.name, state: 'UNKNOWN', detail: c.command.slice(0, 120), logfile: c.logfile });
+        }
+      }
+      // attach logfile + running pid from conf
+      for (const p of procs) {
+        const c = confs.find((x) => x.name === p.name || p.name.startsWith(x.name + ':'));
+        if (c && c.logfile) p.logfile = c.logfile;
+        if (!p.logfile && p.detail && /logfile=(\S+)/.test(p.detail)) p.logfile = p.detail.match(/logfile=(\S+)/)[1];
+      }
+      resolve({ available: !err || (stdout && stdout.trim().length > 0), procs });
+    });
+  });
+}
+
+function parseCronLine(line, user) {
+  const t = line.trim();
+  if (!t || t.startsWith('#')) return null;
+  const m = t.match(/^(@\w+|\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(.+)$/);
+  if (!m) return null;
+  return { user, schedule: m[1], cmd: m[2] };
+}
+
+function getCronJobs() {
+  const jobs = [];
+  try {
+    const users = new Set(['root', 'www-data']);
+    try { users.add(os.userInfo().username); } catch {}
+    try {
+      for (const row of fs.readFileSync('/etc/passwd', 'utf8').split('\n')) {
+        const f = row.split(':');
+        if (f.length >= 3) {
+          const uid = parseInt(f[2], 10);
+          if ((uid >= 1000 || uid === 0 || f[0] === 'www-data') && f[0]) users.add(f[0]);
+        }
+      }
+    } catch {}
+    for (const u of users) {
+      try {
+        const out = execSync(`crontab -u ${u} -l 2>/dev/null`, { timeout: 3000 }).toString();
+        for (const line of out.split('\n')) {
+          const j = parseCronLine(line, u);
+          if (j) jobs.push(j);
+        }
+      } catch {}
+    }
+    // Also parse /etc/crontab (format: min hour dom mon dow user cmd)
+    try {
+      if (fs.existsSync('/etc/crontab')) {
+        for (const line of fs.readFileSync('/etc/crontab', 'utf8').split('\n')) {
+          const t = line.trim();
+          if (!t || t.startsWith('#')) continue;
+          const m = t.match(/^(@\w+|\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(\S+)\s+(.+)$/);
+          if (m && !['root', 'daemon'].includes(m[2]) || (m && /artisan|backup|worker|php|python/i.test(m[3]))) {
+            jobs.push({ user: m[2], schedule: m[1], cmd: m[3] });
+          }
+        }
+      }
+    } catch {}
+  } catch {}
+  // detect artisan schedule:run workers liveness via ps
+  let schedProcs = [];
+  try {
+    const ps = execSync('ps aux 2>/dev/null | grep -E "artisan (schedule:run|queue:work|horizon)" | grep -v grep', { timeout: 3000 }).toString().trim();
+    if (ps) schedProcs = ps.split('\n').slice(0, 10);
+  } catch {}
+  return { jobs, schedProcs };
+}
+
+function tailLog(file, lines = 100) {
+  return new Promise((resolve) => {
+    if (!file || typeof file !== 'string' || file.includes('\0')) return resolve({ ok: false, error: 'Invalid log path' });
+    const norm = path.normalize(file);
+    if (!path.isAbsolute(norm)) return resolve({ ok: false, error: 'Log path must be absolute' });
+    const allow = /^(\/var\/log\/|\/home\/[^/]+\/|\/var\/www\/|\/tmp\/)/.test(norm);
+    if (!allow) return resolve({ ok: false, error: 'Log path not allowed' });
+    exec(`tail -n ${Math.min(500, Math.max(10, parseInt(lines, 10) || 100))} "${norm.replace(/"/g, '')}" 2>&1`, { timeout: 5000, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+      if (!fs.existsSync(norm)) return resolve({ ok: false, error: 'Log file not found: ' + norm });
+      resolve({ ok: true, path: norm, output: (stdout || '').slice(-20000) });
+    });
+  });
+}
+
+function laravelLogPaths() {
+  const paths = [...LARAVEL_LOG_CANDIDATES];
+  for (const p of getGitProjects()) {
+    const f = path.join(p.path, 'storage', 'logs', 'laravel.log');
+    if (fs.existsSync(f) && !paths.includes(f)) paths.push(f);
+  }
+  return paths.slice(0, 20);
+}
+
+function restartServiceUnit(unit) {
+  return new Promise((resolve) => {
+    const allow = ['cron', 'supervisor', 'supervisord'];
+    if (!allow.includes(unit)) return resolve({ ok: false, error: 'Unit not allowed' });
+    exec(`systemctl restart ${unit} 2>&1`, { timeout: 15000 }, (err, stdout, stderr) => {
+      const out = (stdout || '') + (stderr || '');
+      if (err) return resolve({ ok: false, error: err.message, output: out });
+      resolve({ ok: true, output: out || `systemctl restart ${unit} ok` });
+    });
+  });
+}
+
+function supervisorAction(action, name) {
+  return new Promise((resolve) => {
+    if (!['restart', 'start', 'stop'].includes(action)) return resolve({ ok: false, error: 'Invalid action' });
+    if (typeof name !== 'string' || !name || /[;&|$()`\\]/.test(name) || name.length > 128) return resolve({ ok: false, error: 'Invalid program name' });
+    exec(`supervisorctl ${action} "${name}" 2>&1`, { timeout: 15000 }, (err, stdout, stderr) => {
+      const out = (stdout || '') + (stderr || '');
+      if (err && /ERROR|FATAL|no such/i.test(out)) return resolve({ ok: false, error: err.message, output: out });
+      resolve({ ok: !err, output: out });
+    });
+  });
 }
 
 // ---- git projects scanner ----
@@ -404,6 +575,30 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ time: Date.now(), rows }));
   }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
+  if (p === '/api/workers') {
+    const [sup, crn] = await Promise.all([getSupervisorStatus(), Promise.resolve(getCronJobs())]);
+    return send(res, 200, JSON.stringify({ time: Date.now(), supervisor: sup, cron: crn, laravelLogs: laravelLogPaths() }));
+  }
+  if (p === '/api/workers/supervisor' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await supervisorAction(body && body.action, body && body.name);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/workers/service' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await restartServiceUnit(body && body.unit);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/workers/log') {
+    const file = url.searchParams.get('file');
+    const lines = url.searchParams.get('lines') || 100;
+    const r = await tailLog(file, lines);
+    return send(res, r.ok ? 200 : 404, JSON.stringify(r));
+  }
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
     return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
