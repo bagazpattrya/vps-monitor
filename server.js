@@ -14,6 +14,7 @@ const DATA_DIR = path.join(ROOT, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SAMPLE_INTERVAL_MS = 10_000;
 const MAX_POINTS = 8640; // 24h @ 10s
+const SCAN_ROOT = process.env.SCAN_DIR || (fs.existsSync('/home/zae/Codingan') ? '/home/zae/Codingan' : '/var/www');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -87,6 +88,214 @@ function diskInfo() {
   }
 }
 
+// ---- disk I/O stats collector (/proc/diskstats) ----
+let prevDiskStats = null;
+function getDiskIO() {
+  try {
+    const txt = fs.readFileSync('/proc/diskstats', 'utf8');
+    let readBytes = 0, writeBytes = 0, readOps = 0, writeOps = 0;
+    for (const line of txt.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 14) continue;
+      const dev = parts[2];
+      if (!/^(sd[a-z]+|vd[a-z]+|nvme\d+n\d+|xvd[a-z]+|hd[a-z]+)$/.test(dev)) continue;
+      readOps += parseInt(parts[3], 10) || 0;
+      readBytes += (parseInt(parts[5], 10) || 0) * 512;
+      writeOps += parseInt(parts[7], 10) || 0;
+      writeBytes += (parseInt(parts[9], 10) || 0) * 512;
+    }
+    const now = Date.now();
+    let readRate = 0, writeRate = 0, rIops = 0, wIops = 0;
+    if (prevDiskStats && now > prevDiskStats.time) {
+      const dt = (now - prevDiskStats.time) / 1000;
+      if (dt > 0) {
+        readRate = Math.max(0, (readBytes - prevDiskStats.readBytes) / dt);
+        writeRate = Math.max(0, (writeBytes - prevDiskStats.writeBytes) / dt);
+        rIops = Math.max(0, (readOps - prevDiskStats.readOps) / dt);
+        wIops = Math.max(0, (writeOps - prevDiskStats.writeOps) / dt);
+      }
+    }
+    prevDiskStats = { time: now, readBytes, writeBytes, readOps, writeOps };
+    return {
+      readBytes,
+      writeBytes,
+      readRate: Math.round(readRate),
+      writeRate: Math.round(writeRate),
+      readIops: Math.round(rIops),
+      writeIops: Math.round(wIops),
+      totalIops: Math.round(rIops + wIops)
+    };
+  } catch {
+    return { readBytes: 0, writeBytes: 0, readRate: 0, writeRate: 0, readIops: 0, writeIops: 0, totalIops: 0 };
+  }
+}
+getDiskIO(); // prime first reading
+
+// ---- storage breakdown collector ----
+let storageCache = { time: 0, data: null };
+
+function getStorageBreakdown(force = false) {
+  const now = Date.now();
+  if (!force && storageCache.data && (now - storageCache.time < 60_000)) {
+    return storageCache.data;
+  }
+
+  // 1. Partitions & Mounts
+  const mounts = [];
+  try {
+    const lines = execSync('df -k -P 2>/dev/null', { timeout: 4000 }).toString().trim().split('\n').slice(1);
+    const inodesMap = {};
+    try {
+      const iLines = execSync('df -i -P 2>/dev/null', { timeout: 4000 }).toString().trim().split('\n').slice(1);
+      for (const il of iLines) {
+        const parts = il.trim().split(/\s+/);
+        if (parts.length >= 6) {
+          inodesMap[parts[5]] = {
+            total: parseInt(parts[1], 10) || 0,
+            used: parseInt(parts[2], 10) || 0,
+            avail: parseInt(parts[3], 10) || 0,
+            pct: parseFloat((parts[4] || '').replace('%', '')) || 0,
+          };
+        }
+      }
+    } catch {}
+
+    for (const line of lines) {
+      const p = line.trim().split(/\s+/);
+      if (p.length < 6) continue;
+      const fsName = p[0];
+      const target = p[5];
+      // Filter pseudo/virtual filesystems, include real disks, mnt, /
+      if (fsName.startsWith('/dev/') || target === '/' || target.startsWith('/mnt') || target.startsWith('/home')) {
+        const total = (parseInt(p[1], 10) || 0) * 1024;
+        const used = (parseInt(p[2], 10) || 0) * 1024;
+        const avail = (parseInt(p[3], 10) || 0) * 1024;
+        const pct = parseFloat((p[4] || '').replace('%', '')) || 0;
+        const inode = inodesMap[target] || null;
+        mounts.push({
+          fs: fsName,
+          mount: target,
+          total,
+          used,
+          avail,
+          pct,
+          inodesPct: inode ? inode.pct : null,
+          inodesUsed: inode ? inode.used : null,
+          inodesTotal: inode ? inode.total : null,
+        });
+      }
+    }
+  } catch {}
+
+  // 2. Key Directories breakdown
+  const candidateDirs = ['/var/www', '/var/log', '/var/lib/mysql', '/home', '/tmp', '/var/cache', '/var/lib/docker'];
+  if (SCAN_ROOT && !candidateDirs.includes(SCAN_ROOT)) candidateDirs.unshift(SCAN_ROOT);
+  const dirs = [];
+  for (const d of candidateDirs) {
+    if (!fs.existsSync(d)) continue;
+    try {
+      const duOut = execSync(`du -sk "${d}" 2>/dev/null`, { timeout: 4000 }).toString().trim().split(/\s+/);
+      const bytes = (parseInt(duOut[0], 10) || 0) * 1024;
+      dirs.push({ path: d, bytes });
+    } catch {}
+  }
+  dirs.sort((a, b) => b.bytes - a.bytes);
+
+  // 3. Project breakdown under SCAN_ROOT
+  const projects = [];
+  try {
+    const list = getGitProjects();
+    for (const p of list.slice(0, 15)) {
+      try {
+        const duOut = execSync(`du -sk "${p.path}" 2>/dev/null`, { timeout: 3000 }).toString().trim().split(/\s+/);
+        const totalBytes = (parseInt(duOut[0], 10) || 0) * 1024;
+        let storageLogsBytes = 0;
+        const logDir = path.join(p.path, 'storage', 'logs');
+        if (fs.existsSync(logDir)) {
+          try {
+            const lOut = execSync(`du -sk "${logDir}" 2>/dev/null`, { timeout: 2000 }).toString().trim().split(/\s+/);
+            storageLogsBytes = (parseInt(lOut[0], 10) || 0) * 1024;
+          } catch {}
+        }
+        projects.push({
+          name: p.name,
+          relPath: p.relPath,
+          bytes: totalBytes,
+          logsBytes: storageLogsBytes,
+        });
+      } catch {}
+    }
+    projects.sort((a, b) => b.bytes - a.bytes);
+  } catch {}
+
+  // 4. System Caches (journald, apt archives, docker)
+  let journaldBytes = null;
+  try {
+    const jOut = execSync('journalctl --disk-usage 2>/dev/null', { timeout: 2000 }).toString();
+    const m = jOut.match(/take up\s+([0-9.]+)([KMGT]?)/i);
+    if (m) {
+      const val = parseFloat(m[1]);
+      const unit = (m[2] || 'M').toUpperCase();
+      const mult = unit === 'G' ? 1024 ** 3 : (unit === 'M' ? 1024 ** 2 : (unit === 'K' ? 1024 : 1));
+      journaldBytes = Math.round(val * mult);
+    }
+  } catch {}
+
+  let aptCacheBytes = null;
+  if (fs.existsSync('/var/cache/apt/archives')) {
+    try {
+      const du = execSync('du -sk /var/cache/apt/archives 2>/dev/null', { timeout: 2000 }).toString().trim().split(/\s+/);
+      aptCacheBytes = (parseInt(du[0], 10) || 0) * 1024;
+    } catch {}
+  }
+
+  let dockerBytes = null;
+  if (fs.existsSync('/var/lib/docker')) {
+    try {
+      const du = execSync('du -sk /var/lib/docker 2>/dev/null', { timeout: 2000 }).toString().trim().split(/\s+/);
+      dockerBytes = (parseInt(du[0], 10) || 0) * 1024;
+    } catch {}
+  }
+
+  // 5. Large Logs Hotspots (> 2MB)
+  const largeLogs = [];
+  try {
+    const scanPaths = ['/var/log'];
+    if (SCAN_ROOT && fs.existsSync(SCAN_ROOT)) scanPaths.push(SCAN_ROOT);
+    const cmd = `find ${scanPaths.map(x => `"${x}"`).join(' ')} -maxdepth 5 -type f -name '*.log*' -size +2M -printf '%s %p\\n' 2>/dev/null | sort -nr | head -n 12`;
+    const out = execSync(cmd, { timeout: 3000 }).toString().trim();
+    if (out) {
+      for (const l of out.split('\n')) {
+        const parts = l.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          const b = parseInt(parts[0], 10) || 0;
+          const full = parts.slice(1).join(' ');
+          const isProj = Boolean(SCAN_ROOT && full.startsWith(SCAN_ROOT));
+          const rel = isProj ? path.relative(SCAN_ROOT, full) : full;
+          largeLogs.push({ bytes: b, path: rel, isProject: isProj });
+        }
+      }
+    }
+  } catch {}
+
+  const result = {
+    time: now,
+    mounts,
+    dirs,
+    projects,
+    scanRoot: SCAN_ROOT,
+    caches: {
+      journald: journaldBytes,
+      apt: aptCacheBytes,
+      docker: dockerBytes,
+    },
+    largeLogs,
+    io: getDiskIO(),
+  };
+  storageCache = { time: now, data: result };
+  return result;
+}
+
 function netInfo() {
   try {
     const txt = fs.readFileSync('/proc/net/dev', 'utf8');
@@ -133,6 +342,7 @@ function getStats() {
     mem: { ...mem, pct: Number(mem.pct.toFixed(1)) },
     disk: { ...disk, pct: Number(disk.pct.toFixed(1)) },
     net: netInfo(),
+    io: getDiskIO(),
   };
 }
 
@@ -398,7 +608,6 @@ function supervisorAction(action, name) {
 }
 
 // ---- git projects scanner ----
-const SCAN_ROOT = process.env.SCAN_DIR || (fs.existsSync('/home/zae/Codingan') ? '/home/zae/Codingan' : '/var/www');
 let gitCache = { time: 0, projects: [] };
 
 function scanGitDirs(baseDir, maxDepth = 6) {
@@ -683,6 +892,11 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ time: Date.now(), rows }));
   }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
+  if (p === '/api/storage') {
+    const force = url.searchParams.get('force') === '1';
+    const s = getStorageBreakdown(force);
+    return send(res, 200, JSON.stringify(s));
+  }
   if (p === '/api/workers') {
     const [sup, crn] = await Promise.all([getSupervisorStatus(), Promise.resolve(getCronJobs())]);
     return send(res, 200, JSON.stringify({ time: Date.now(), supervisor: sup, cron: crn, laravelLogs: laravelLogPaths() }));

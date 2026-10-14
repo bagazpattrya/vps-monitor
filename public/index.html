@@ -157,11 +157,12 @@ header {
   border-color: rgba(239, 68, 68, 0.4);
 }
 
-/* Fullscreen NOC View (Overview, History, Services only) */
-body.fullscreen-focus #workers,
-body.fullscreen-focus #git,
-body.fullscreen-focus #processes {
+/* Fullscreen NOC View (Overview dashboard only) */
+body.fullscreen-focus .view-pane:not(#view-overview) {
   display: none !important;
+}
+body.fullscreen-focus #view-overview {
+  display: contents !important;
 }
 body.fullscreen-focus .container {
   max-width: 100vw;
@@ -170,6 +171,14 @@ body.fullscreen-focus .container {
 }
 body.fullscreen-focus .chart-box {
   min-height: 380px;
+}
+
+/* View Panes (Multi-page SPA system) */
+.view-pane {
+  display: none;
+}
+.view-pane.active {
+  display: contents;
 }
 
 /* Sidebar Drawer */
@@ -437,6 +446,7 @@ body.fullscreen-focus .chart-box {
   flex-shrink: 0;
 }
 .pill.ok { background: rgba(16, 185, 129, 0.15); color: var(--ok); }
+.pill.warn { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
 .pill.down { background: rgba(239, 68, 68, 0.15); color: var(--bad); }
 
 /* Table & Process Controls */
@@ -813,12 +823,11 @@ select.input { appearance: auto; max-width: 100%; }
     <div class="brand">VPS Monitor</div>
     <button class="sidebar-close" id="sidebarClose" title="Close menu">✕</button>
   </div>
-  <a href="#overview" class="nav-link active"><span class="dot"></span>Overview</a>
-  <a href="#history" class="nav-link"><span class="dot"></span>History</a>
-  <a href="#services" class="nav-link"><span class="dot"></span>Services</a>
-  <a href="#workers" class="nav-link"><span class="dot"></span>Workers &amp; Cron</a>
-  <a href="#git" class="nav-link"><span class="dot"></span>Git Deployments</a>
-  <a href="#processes" class="nav-link"><span class="dot"></span>Processes</a>
+  <a href="#/overview" class="nav-link active" data-view="overview"><span class="dot"></span>Overview</a>
+  <a href="#/storage" class="nav-link" data-view="storage"><span class="dot"></span>Storage</a>
+  <a href="#/workers" class="nav-link" data-view="workers"><span class="dot"></span>Workers &amp; Cron</a>
+  <a href="#/git" class="nav-link" data-view="git"><span class="dot"></span>Git Deployments</a>
+  <a href="#/processes" class="nav-link" data-view="processes"><span class="dot"></span>Processes</a>
   <div class="nav-foot">
     Microspace VPS Monitor
   </div>
@@ -859,24 +868,26 @@ select.input { appearance: auto; max-width: 100%; }
 </header>
 
 <main class="container">
-  <!-- CPU -->
-  <div class="card c3" id="overview">
-    <div>
-      <div class="card-head">
-        <span>CPU Usage</span>
-        <span id="cores">—</span>
+  <!-- VIEW: OVERVIEW -->
+  <div class="view-pane active" id="view-overview">
+    <!-- CPU -->
+    <div class="card c3">
+      <div>
+        <div class="card-head">
+          <span>CPU Usage</span>
+          <span id="cores">—</span>
+        </div>
+        <div class="metric-row">
+          <div class="big" id="cpu">—</div>
+          <div class="sub-val" id="cpuModel">—</div>
+        </div>
+        <div class="bar"><i id="cpuBar"></i></div>
       </div>
-      <div class="metric-row">
-        <div class="big" id="cpu">—</div>
-        <div class="sub-val" id="cpuModel">—</div>
+      <div class="card-foot">
+        <span>Load Avg</span>
+        <strong id="load" style="color:var(--tx)">—</strong>
       </div>
-      <div class="bar"><i id="cpuBar"></i></div>
     </div>
-    <div class="card-foot">
-      <span>Load Avg</span>
-      <strong id="load" style="color:var(--tx)">—</strong>
-    </div>
-  </div>
 
   <!-- Memory -->
   <div class="card c3">
@@ -969,7 +980,95 @@ select.input { appearance: auto; max-width: 100%; }
       <span>15s interval</span>
     </div>
   </div>
+  </div><!-- /view-overview -->
 
+  <!-- VIEW: STORAGE -->
+  <div class="view-pane" id="view-storage">
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Primary Storage</span><span class="pill ok" id="storageRootPill">OK</span></div>
+      <div class="metric-row"><div class="big" id="storageRootPct">—</div><div class="sub-val" id="storageRootFree">— free</div></div>
+      <div class="bar"><i id="storageRootBar"></i></div>
+    </div>
+    <div class="card-foot"><span>Used <strong id="storageRootUsed" style="color:var(--tx)">—</strong></span><span>Inodes <strong id="storageRootInodes" style="color:var(--tx)">—</strong></span></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Disk I/O</span><span class="pill ok" id="storageIoPill">LIVE</span></div>
+      <div class="metric-row"><div class="big" id="storageIoRate" style="font-size:24px;margin-top:2px">—</div><div class="sub-val" id="storageIoIops">— IOPS</div></div>
+      <div class="net-grid" style="margin:8px 0 6px">
+        <div class="net-box"><div class="net-label">Read</div><div class="net-speed" id="storageIoRead" style="font-size:13px;color:var(--ok)">—</div></div>
+        <div class="net-box"><div class="net-label">Write</div><div class="net-speed" id="storageIoWrite" style="font-size:13px;color:var(--warn)">—</div></div>
+      </div>
+    </div>
+    <div class="card-foot"><span>Activity</span><strong id="storageIoTtl" style="color:var(--tx)">/proc/diskstats</strong></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Cleanable Caches</span><span class="badge" id="storageCacheBadge">Cache</span></div>
+      <div class="metric-row"><div class="big" id="storageReclaimable">—</div><div class="sub-val" id="storageReclaimDesc">apt + journal</div></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin:12px 0 10px;font-size:12px">
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--mut)">APT Archives</span><strong id="storageAptCache" style="color:var(--tx)">—</strong></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--mut)">Systemd Journal</span><strong id="storageJournald" style="color:var(--tx)">—</strong></div>
+      </div>
+    </div>
+    <div class="card-foot"><span style="font-size:11px;color:var(--mut)">Safe: apt clean / vacuum</span></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Log Hotspots</span><span class="badge accent" id="storageHotspotCount">0 files</span></div>
+      <div class="metric-row"><div class="big" id="storageHotspotTotal">—</div><div class="sub-val">Files &gt; 2MB</div></div>
+      <div class="bar"><i id="storageHotspotBar" style="background:var(--warn)"></i></div>
+    </div>
+    <div class="card-foot"><span>Oversized logs</span><strong id="storageHotspotStatus" style="color:var(--tx)">Tracked</strong></div>
+  </div>
+  <!-- Storage Monitoring -->
+  <div class="card c12" id="storage">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>Storage &amp; Partitions</span>
+        <span class="badge" id="storageSummary">—</span>
+      </h3>
+      <div class="proc-controls">
+        <button class="btn" id="storageRefresh">↻ Analyze Storage</button>
+      </div>
+    </div>
+
+    <!-- Mounts & Physical Partitions -->
+    <div class="worker-sub" style="margin-top:0">Mounts &amp; Inodes Health</div>
+    <div class="git-group-items" id="mountsList" style="margin-bottom:16px">
+      <span style="color:var(--mut);font-size:12px">Loading partitions...</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:6px">
+      <!-- Key System Directories -->
+      <div style="background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+        <div class="worker-sub" style="margin:0 0 10px">Critical Server Directories</div>
+        <div id="storageDirsList" style="display:flex;flex-direction:column;gap:8px">
+          <span style="color:var(--mut);font-size:12px">Scanning directories...</span>
+        </div>
+      </div>
+
+      <!-- Projects Storage Breakdown -->
+      <div style="background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+        <div class="worker-sub" style="margin:0 0 10px">Top Projects Storage (<span id="storageScanRoot">—</span>)</div>
+        <div id="storageProjectsList" style="display:flex;flex-direction:column;gap:8px">
+          <span style="color:var(--mut);font-size:12px">Scanning projects...</span>
+        </div>
+      </div>
+
+      <div style="background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+        <div class="worker-sub" style="margin:0 0 10px">Large Log Files (&gt; 2MB)</div>
+        <div id="storageLogsList" style="display:flex;flex-direction:column;gap:8px">
+          <span style="color:var(--mut);font-size:12px">Scanning oversized logs...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div><!-- /view-storage -->
+
+  <!-- VIEW: WORKERS -->
+  <div class="view-pane" id="view-workers">
   <!-- Workers (Supervisor & Cron) -->
   <div class="card c12" id="workers">
     <div class="sec-head">
@@ -1022,7 +1121,10 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn-sm ok" id="btnViewSelectedLog">View Tail (100)</button>
     </div>
   </div>
+  </div><!-- /view-workers -->
 
+  <!-- VIEW: GIT DEPLOYMENTS -->
+  <div class="view-pane" id="view-git">
   <!-- Git Projects (DevOps) -->
   <div class="card c12" id="git">
     <div class="sec-head">
@@ -1040,7 +1142,10 @@ select.input { appearance: auto; max-width: 100%; }
       <span style="color:var(--mut);font-size:12px">Scanning for git repositories...</span>
     </div>
   </div>
+  </div><!-- /view-git -->
 
+  <!-- VIEW: PROCESSES -->
+  <div class="view-pane" id="view-processes">
   <!-- Top Processes -->
   <div class="card c12" id="processes">
     <div class="sec-head">
@@ -1074,6 +1179,7 @@ select.input { appearance: auto; max-width: 100%; }
       </table>
     </div>
   </div>
+  </div><!-- /view-processes -->
 </main>
 
 <div class="modal-backdrop" id="gitModal">
@@ -1228,7 +1334,20 @@ async function stats() {
     }
     prevNet = { rx: s.net.rx, tx: s.net.tx, time: s.time };
     $('netTotal').textContent = `↓ ${fmtBytes(s.net.rx)} · ↑ ${fmtBytes(s.net.tx)}`;
+
+    // Live Disk I/O sync
+    if (s.io) updateStorageIO(s.io);
   } catch (e) {}
+}
+
+function updateStorageIO(io) {
+  if (!io) return;
+  const rEl = $('storageIoRead'), wEl = $('storageIoWrite'), tEl = $('storageIoRate'), iEl = $('storageIoIops');
+  if (rEl) rEl.textContent = `↓ ${fmtBytes(io.readRate || 0)}/s`;
+  if (wEl) wEl.textContent = `↑ ${fmtBytes(io.writeRate || 0)}/s`;
+  const totRate = (io.readRate || 0) + (io.writeRate || 0);
+  if (tEl) tEl.textContent = `${fmtBytes(totRate)}/s`;
+  if (iEl) iEl.textContent = `${io.totalIops || 0} IOPS`;
 }
 
 function renderProcs() {
@@ -1270,6 +1389,139 @@ async function procs() {
     rawProcs = d.rows || [];
     renderProcs();
   } catch (e) {}
+}
+
+async function storage(force = false) {
+  try {
+    const btn = $('storageRefresh');
+    if (force && btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+    const d = await j(`/api/storage${force ? '?force=1' : ''}`);
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Analyze Storage'; }
+
+    // Mounts
+    const mounts = d.mounts || [];
+    $('storageSummary').textContent = `${mounts.length} partition${mounts.length > 1 ? 's' : ''}`;
+
+    // 1. Primary Mount KPI Card
+    const rootMount = mounts.find(m => m.mount === '/') || mounts[0];
+    if (rootMount) {
+      const rPct = rootMount.pct || 0;
+      $('storageRootPct').textContent = rPct.toFixed(1) + '%';
+      $('storageRootFree').textContent = `${fmtBytes(rootMount.avail)} free`;
+      $('storageRootUsed').textContent = `${fmtBytes(rootMount.used)} / ${fmtBytes(rootMount.total)}`;
+      $('storageRootInodes').textContent = rootMount.inodesPct != null ? `${rootMount.inodesPct}%` : 'N/A';
+      setBar($('storageRootBar'), rPct);
+      const pill = $('storageRootPill');
+      if (pill) {
+        pill.className = `pill ${rPct >= 90 ? 'down' : (rPct >= 75 ? 'warn' : 'ok')}`;
+        pill.textContent = rPct >= 90 ? 'Critical' : (rPct >= 75 ? 'Warning' : 'Healthy');
+      }
+    }
+
+    // 2. Disk I/O card
+    if (d.io) updateStorageIO(d.io);
+
+    // 3. Caches Card
+    const caches = d.caches || {};
+    const aptBytes = caches.apt || 0;
+    const jBytes = caches.journald || 0;
+    const totalReclaimable = aptBytes + jBytes;
+    $('storageReclaimable').textContent = fmtBytes(totalReclaimable);
+    $('storageAptCache').textContent = aptBytes ? fmtBytes(aptBytes) : 'Clean';
+    $('storageJournald').textContent = jBytes ? fmtBytes(jBytes) : '—';
+
+    // 4. Large Logs Hotspots Card
+    const logs = d.largeLogs || [];
+    const totalLogBytes = logs.reduce((acc, l) => acc + (l.bytes || 0), 0);
+    $('storageHotspotCount').textContent = `${logs.length} file${logs.length === 1 ? '' : 's'}`;
+    $('storageHotspotTotal').textContent = fmtBytes(totalLogBytes);
+    $('storageHotspotBar').style.width = Math.min(100, Math.max(10, (totalLogBytes / (100 * 1024 * 1024)) * 100)) + '%';
+
+    // Mounts List
+    if (!mounts.length) {
+      $('mountsList').innerHTML = '<span style="color:var(--mut);font-size:12px">No partitions detected</span>';
+    } else {
+      $('mountsList').innerHTML = mounts.map(m => {
+        const pct = m.pct || 0;
+        const color = barColor(pct);
+        const inodeAlert = m.inodesPct != null && m.inodesPct >= 80;
+        return `<div class="worker-card" style="padding:10px 12px">
+          <div class="worker-head">
+            <div class="worker-title-box">
+              <div class="worker-title" style="display:flex;align-items:center;gap:6px">
+                <span>${m.mount}</span>
+                <span style="font-size:11px;color:var(--mut);font-weight:400">(${m.fs})</span>
+              </div>
+              <div class="worker-meta" style="margin-top:3px">
+                <strong>${fmtBytes(m.used)}</strong> / ${fmtBytes(m.total)} (${fmtBytes(m.avail)} free)
+                ${m.inodesPct != null ? `<span style="margin-left:6px;opacity:0.8">· Inodes ${m.inodesPct}% ${inodeAlert ? '<span style="color:var(--bad);font-weight:600">⚠ High</span>' : ''}</span>` : ''}
+              </div>
+            </div>
+            <span class="pill ${pct >= 90 ? 'down' : (pct >= 75 ? 'warn' : 'ok')}">${pct.toFixed(0)}%</span>
+          </div>
+          <div class="bar" style="margin:8px 0 2px"><i style="width:${Math.min(100, pct)}%;background-color:${color}"></i></div>
+        </div>`;
+      }).join('');
+    }
+
+    // Critical directories
+    const dirs = d.dirs || [];
+    const maxDirBytes = Math.max(...dirs.map(x => x.bytes), 1);
+    if (!dirs.length) {
+      $('storageDirsList').innerHTML = '<span style="color:var(--mut);font-size:12px">No directory data</span>';
+    } else {
+      $('storageDirsList').innerHTML = dirs.map(dir => {
+        const ratio = (dir.bytes / maxDirBytes) * 100;
+        return `<div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:3px">
+            <code style="background:transparent;padding:0;color:var(--tx)">${dir.path}</code>
+            <strong style="color:var(--tx)">${fmtBytes(dir.bytes)}</strong>
+          </div>
+          <div class="mini-bar" style="width:100%;height:4px"><i style="width:${Math.min(100, ratio)}%;background:var(--ac)"></i></div>
+        </div>`;
+      }).join('');
+    }
+
+    // Top projects
+    $('storageScanRoot').textContent = d.scanRoot || 'Projects';
+    const projs = d.projects || [];
+    const maxProjBytes = Math.max(...projs.map(x => x.bytes), 1);
+    if (!projs.length) {
+      $('storageProjectsList').innerHTML = '<span style="color:var(--mut);font-size:12px">No projects scanned</span>';
+    } else {
+      $('storageProjectsList').innerHTML = projs.slice(0, 8).map(pr => {
+        const ratio = (pr.bytes / maxProjBytes) * 100;
+        return `<div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:3px">
+            <span style="font-weight:500;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pr.relPath}">${pr.name}</span>
+            <span style="color:var(--mut);font-size:11px">
+              ${pr.logsBytes > 2 * 1024 * 1024 ? `<span style="color:var(--warn);font-weight:500">logs ${fmtBytes(pr.logsBytes)}</span> · ` : ''}
+              <strong style="color:var(--tx)">${fmtBytes(pr.bytes)}</strong>
+            </span>
+          </div>
+          <div class="mini-bar" style="width:100%;height:4px"><i style="width:${Math.min(100, ratio)}%;background:var(--ok)"></i></div>
+        </div>`;
+      }).join('');
+    }
+
+    // Large Log Hotspots
+    if (!logs.length) {
+      $('storageLogsList').innerHTML = '<span style="color:var(--mut);font-size:12px">No oversized logs detected (&gt; 2MB)</span>';
+    } else {
+      $('storageLogsList').innerHTML = logs.map(l => {
+        const isBig = l.bytes > 10 * 1024 * 1024;
+        return `<div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px;margin-bottom:3px">
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${l.path}">${l.path}</span>
+            <span style="color:${isBig ? 'var(--bad)' : 'var(--warn)'};font-weight:600;font-size:11px;margin-left:8px;flex-shrink:0">${fmtBytes(l.bytes)}</span>
+          </div>
+          <div class="mini-bar" style="width:100%;height:3px"><i style="width:${Math.min(100, (l.bytes / (20 * 1024 * 1024)) * 100)}%;background:${isBig ? 'var(--bad)' : 'var(--warn)'}"></i></div>
+        </div>`;
+      }).join('');
+    }
+  } catch (e) {
+    $('mountsList').innerHTML = '<span style="color:var(--bad);font-size:12px">Failed loading storage breakdown</span>';
+  }
 }
 
 async function svc() {
@@ -1836,8 +2088,9 @@ $('cronList').addEventListener('click', (e) => {
   const b = e.target.closest('[data-edit-cron]');
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
+$('storageRefresh').addEventListener('click', () => storage(true));
 
-// Sidebar Drawer & Scrollspy
+// Sidebar Drawer & View Router (#/overview, #/storage, #/workers, #/git, #/processes)
 const toggleSidebar = (open) => {
   const sb = $('sidebar');
   const ov = $('sidebarOverlay');
@@ -1846,6 +2099,39 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes'];
+
+function currentView() {
+  const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
+  return VALID_VIEWS.includes(h) ? h : 'overview';
+}
+
+function navigateView(name, refresh = true) {
+  const view = VALID_VIEWS.includes(name) ? name : 'overview';
+  document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+  const pane = $('view-' + view);
+  if (pane) pane.classList.add('active');
+
+  document.querySelectorAll('.sidebar .nav-link').forEach(l => {
+    l.classList.toggle('active', l.dataset.view === view);
+  });
+
+  window.scrollTo({ top: 0, behavior: 'instant' });
+
+  if (refresh) {
+    if (view === 'overview') {
+      stats(); svc(); hist();
+      setTimeout(() => { try { if (typeof chart !== 'undefined' && chart) chart.resize(); } catch {} }, 80);
+    }
+    if (view === 'storage') storage();
+    if (view === 'workers') workers();
+    if (view === 'git') gitProjects();
+    if (view === 'processes') procs();
+  }
+}
+
+window.addEventListener('hashchange', () => navigateView(currentView()));
+
 $('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
 $('sidebarClose').addEventListener('click', () => toggleSidebar(false));
 $('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
@@ -1853,24 +2139,8 @@ $('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
 document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   link.addEventListener('click', () => {
     toggleSidebar(false);
-    document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.remove('active'));
-    link.classList.add('active');
   });
 });
-
-const spySections = ['overview', 'history', 'services', 'workers', 'git', 'processes'];
-window.addEventListener('scroll', () => {
-  const scrollPos = window.scrollY + 100;
-  for (let i = spySections.length - 1; i >= 0; i--) {
-    const el = $(spySections[i]);
-    if (el && el.offsetTop <= scrollPos) {
-      document.querySelectorAll('.sidebar .nav-link').forEach(l => {
-        l.classList.toggle('active', l.getAttribute('href') === '#' + spySections[i]);
-      });
-      break;
-    }
-  }
-}, { passive: true });
 
 // UI Events
 $('gitSearch').addEventListener('input', renderGitProjects);
@@ -1935,6 +2205,14 @@ function syncFullscreenUI() {
 
 $('fullscreenBtn').addEventListener('click', async () => {
   const willBeOn = !document.body.classList.contains('fullscreen-focus');
+  if (willBeOn) {
+    // Selalu masuk overview saat fullscreen NOC monitor diaktifkan
+    if (location.hash !== '#/overview') {
+      location.hash = '#/overview';
+    } else {
+      navigateView('overview');
+    }
+  }
   // Browser fullscreen API — fallback tetap aktif walau API gagal diblokir
   try {
     if (willBeOn && document.documentElement.requestFullscreen) {
@@ -1955,14 +2233,22 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
-// Init & Intervals
-stats(); procs(); svc(); hist(); gitProjects(); workers();
+// Init & Smart View-Based Intervals
+const initV = currentView();
+navigateView(initV);
+
+// Stats selalu update tiap 3 detik untuk status bar atas & overview
 setInterval(stats, 3000);
-setInterval(procs, 5000);
-setInterval(svc, 15000);
-setInterval(workers, 15000);
-setInterval(hist, 30000);
-setInterval(gitProjects, 30000);
+
+// Polling spesifik hanya jika view terkait sedang aktif (hemat CPU VPS)
+setInterval(() => {
+  const v = currentView();
+  if (v === 'overview') { svc(); hist(); }
+  else if (v === 'processes') { procs(); }
+  else if (v === 'workers') { workers(); }
+  else if (v === 'storage') { storage(); }
+  else if (v === 'git') { gitProjects(); }
+}, 15000);
 </script>
 </body>
 </html>

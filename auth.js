@@ -53,7 +53,7 @@ function lookupUser(name) {
   return { name, admin };
 }
 
-function checkPassword(name, password) {
+function checkPasswordChkpwd(name, password) {
   return new Promise((resolve) => {
     const bin = CHKPWD_CANDIDATES.find((p) => fs.existsSync(p));
     if (!bin) return resolve(false);
@@ -61,7 +61,33 @@ function checkPassword(name, password) {
     child.on('error', () => resolve(false));
     child.on('close', (code) => resolve(code === 0));
     child.stdin.on('error', () => {});
-    child.stdin.end(Buffer.concat([Buffer.from(password, 'utf8'), Buffer.from([0])]));
+    // unix_chkpwd closes stdin immediately when running outside its
+    // expected PAM/sandbox context — add tiny delay so the pipe write lands
+    setTimeout(() => {
+      try { child.stdin.end(Buffer.concat([Buffer.from(password, 'utf8'), Buffer.from([0])])); } catch {}
+    }, 50);
+  });
+}
+
+// Fallback PAM verification via su (works both as root in production and as
+// regular user in development where unix_chkpwd AppArmor may reject calls).
+function checkPasswordSu(name, password) {
+  return new Promise((resolve) => {
+    const child = spawn('su', ['-s', '/bin/sh', name, '-c', 'exit 0'], { stdio: ['pipe', 'ignore', 'ignore'], timeout: 8000 });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+    child.stdin.on('error', () => {});
+    try {
+      child.stdin.write(password + '\n');
+      child.stdin.end();
+    } catch { resolve(false); }
+  });
+}
+
+function checkPassword(name, password) {
+  return checkPasswordChkpwd(name, password).then((ok) => {
+    if (ok) return true;
+    return checkPasswordSu(name, password);
   });
 }
 
