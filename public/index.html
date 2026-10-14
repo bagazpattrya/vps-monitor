@@ -257,27 +257,32 @@ header {
 
 /* Services Grid */
 .svc-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-bottom: auto;
 }
 .svc-item {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 10px 4px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
+.svc-item:last-child { border-bottom: 0; }
 .svc-name {
   font-weight: 500;
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--tx);
+  flex: 1;
+  min-width: 0;
 }
 .pill {
   display: inline-flex;
@@ -288,6 +293,8 @@ header {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .pill.ok { background: rgba(16, 185, 129, 0.15); color: var(--ok); }
 .pill.down { background: rgba(239, 68, 68, 0.15); color: var(--bad); }
@@ -376,10 +383,14 @@ code {
   background: transparent;
   padding: 0;
 }
+.card.c8 {
+  justify-content: flex-start;
+}
 .chart-box {
   position: relative;
-  height: 220px;
+  flex: 1;
   width: 100%;
+  min-height: 280px;
 }
 
 /* Git Projects */
