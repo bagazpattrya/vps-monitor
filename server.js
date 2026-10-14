@@ -498,20 +498,71 @@ function pullGitProject(targetPath) {
       : `git -C "${targetPath}" pull`;
     ensureFilemodeFalse(targetPath);
     const runFix = (out) => {
-      // Auto-fix perms agar CRUD tidak 500 setelah pull (storage/ + bootstrap/cache harus bisa ditulis www-data).
+      let combined = out;
       try {
         const isLaravel = fs.existsSync(path.join(targetPath, 'artisan'));
         const isWP = fs.existsSync(path.join(targetPath, 'wp-load.php'));
+        
+        // Laravel post-update tasks: migrate + Spatie permission seed + optimize:clear
+        if (isLaravel) {
+          const artisanCmd = (cmd) => (uid !== null && uid !== me)
+            ? `sudo -H -u "#${uid}" php "${path.join(targetPath, 'artisan')}" ${cmd}`
+            : `php "${path.join(targetPath, 'artisan')}" ${cmd}`;
+          
+          try {
+            const migOut = execSync(`${artisanCmd('migrate --force')} 2>&1`, { timeout: 45_000, cwd: targetPath }).toString();
+            combined += '\n--- php artisan migrate --force ---\n' + migOut;
+          } catch (mErr) {
+            combined += '\n--- php artisan migrate --force [FAILED] ---\n' + (mErr.stdout || mErr.message);
+          }
+
+          // Auto-detect Spatie permission seeders (tanpa perlu rename file di project)
+          try {
+            const seedersDir = path.join(targetPath, 'database', 'seeders');
+            if (fs.existsSync(seedersDir)) {
+              const files = fs.readdirSync(seedersDir);
+              const matches = files.filter((f) => /^(roles?|permissions?|roles?.*permissions?|permissions?.*roles?)seeder\.php$/i.test(f));
+              for (const seederFile of matches) {
+                const className = path.basename(seederFile, '.php');
+                try {
+                  const sOut = execSync(`${artisanCmd(`db:seed --class=${className} --force`)} 2>&1`, { timeout: 45_000, cwd: targetPath }).toString();
+                  combined += `\n--- php artisan db:seed --class=${className} --force ---\n` + sOut;
+                } catch (sErr) {
+                  combined += `\n--- php artisan db:seed --class=${className} [FAILED] ---\n` + (sErr.stdout || sErr.message);
+                }
+              }
+            }
+          } catch {}
+
+          // Spatie permission cache reset
+          try {
+            const pReset = execSync(`${artisanCmd('permission:cache-reset')} 2>&1`, { timeout: 20_000, cwd: targetPath }).toString();
+            if (pReset && !/there are no commands/i.test(pReset)) {
+              combined += '\n--- php artisan permission:cache-reset ---\n' + pReset;
+            }
+          } catch {}
+
+          try {
+            const optOut = execSync(`${artisanCmd('optimize:clear')} 2>&1`, { timeout: 30_000, cwd: targetPath }).toString();
+            combined += '\n--- php artisan optimize:clear ---\n' + optOut;
+          } catch (oErr) {
+            combined += '\n--- php artisan optimize:clear [FAILED] ---\n' + (oErr.stdout || oErr.message);
+          }
+        }
+
+        // Auto-fix permissions agar CRUD dan webserver tidak 500
         if (isLaravel || isWP) {
           let owner = null;
           try { owner = execSync(`id -nu ${uid} 2>/dev/null`, { timeout: 2000 }).toString().trim(); } catch {}
-          if (owner && uid !== null) {
+          if (owner && uid !== null && fs.existsSync('/var/www/fix-permissions.sh')) {
             const fixOut = execSync(`bash /var/www/fix-permissions.sh "${targetPath}" --user "${owner}" 2>&1`, { timeout: 30_000 }).toString();
-            return { ok: true, output: out + '\n--- fix-permissions ---\n' + fixOut };
+            combined += '\n--- fix-permissions ---\n' + fixOut;
           }
         }
-      } catch {}
-      return { ok: true, output: out };
+      } catch (fErr) {
+        combined += '\n--- post-update error ---\n' + fErr.message;
+      }
+      return { ok: true, output: combined };
     };
     exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
       gitCache.time = 0; // invalidate cache

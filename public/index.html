@@ -1032,7 +1032,7 @@ select.input { appearance: auto; max-width: 100%; }
       </h3>
       <div class="proc-controls">
         <input type="search" id="gitSearch" class="input" placeholder="Filter repos, folders, branches..." />
-        <button class="btn-batch" id="gitBatchPull" style="display:none">⬇ Pull Selected (<span id="gitSelectedCount">0</span>)</button>
+        <button class="btn-batch" id="gitBatchPull" style="display:none">↻ Update Selected (<span id="gitSelectedCount">0</span>)</button>
         <button class="btn" id="gitRefresh">Scan Repos</button>
       </div>
     </div>
@@ -1079,7 +1079,7 @@ select.input { appearance: auto; max-width: 100%; }
 <div class="modal-backdrop" id="gitModal">
   <div class="modal">
     <div class="modal-head">
-      <span id="gitModalTitle">Git Pull Output</span>
+      <span id="gitModalTitle">Project Update Output</span>
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
@@ -1458,9 +1458,9 @@ function renderGitProjects() {
                   ${r.dirty ? '<span class="pill down">modified</span>' : ''}
                 </div>
                 <div class="git-meta"><code>${r.hash}</code> · ${r.time} · ${r.message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
-                <div class="git-last-pull">Last Pull: <strong>${fmtDateTime(r.lastPull)}</strong></div>
+                <div class="git-last-pull">Last Update: <strong>${fmtDateTime(r.lastPull)}</strong></div>
               </div>
-              <button class="btn-pull" data-rel="${r.relPath}">⬇ Pull</button>
+              <button class="btn-pull" data-rel="${r.relPath}" title="git pull + migrate + optimize:clear">↻ Update</button>
             </div>
           `).join('')}
         </div>
@@ -1485,7 +1485,7 @@ async function gitProjects() {
 async function doPull(relPath, btn) {
   const safeId = 'item-' + relPath.replace(/[^a-zA-Z0-9_-]/g, '_');
   const card = document.getElementById(safeId);
-  if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
   if (card) { card.className = 'git-item pulling'; }
 
   try {
@@ -1497,15 +1497,15 @@ async function doPull(relPath, btn) {
     const d = await res.json();
     if (card) { card.className = 'git-item ' + (d.ok ? 'pull-ok' : 'pull-err'); }
     if (btn) {
-      btn.textContent = d.ok ? '✓ Pulled' : '✕ Error';
-      setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ Pull'; }, 3000);
+      btn.textContent = d.ok ? '✓ Updated' : '✕ Error';
+      setTimeout(() => { btn.disabled = false; btn.textContent = '↻ Update'; }, 3000);
     }
     return { relPath, ok: d.ok, output: d.output || d.error || 'Done' };
   } catch (err) {
     if (card) { card.className = 'git-item pull-err'; }
     if (btn) {
       btn.textContent = '✕ Error';
-      setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ Pull'; }, 3000);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '↻ Update'; }, 3000);
     }
     return { relPath, ok: false, output: err.message };
   }
@@ -1517,13 +1517,13 @@ async function doBatchPull() {
 
   const batchBtn = $('gitBatchPull');
   batchBtn.disabled = true;
-  batchBtn.textContent = 'Pulling Batch...';
+  batchBtn.textContent = 'Updating Batch...';
 
   const results = [];
   for (let i = 0; i < checked.length; i++) {
     const chk = checked[i];
     const rel = chk.dataset.rel;
-    batchBtn.textContent = `Pulling (${i + 1}/${checked.length})...`;
+    batchBtn.textContent = `Updating (${i + 1}/${checked.length})...`;
     const card = chk.closest('.git-item');
     const btn = card ? card.querySelector('.btn-pull') : null;
     const r = await doPull(rel, btn);
@@ -1531,11 +1531,11 @@ async function doBatchPull() {
   }
 
   batchBtn.disabled = false;
-  batchBtn.textContent = `⬇ Pull Selected (${checked.length})`;
+  batchBtn.textContent = `↻ Update Selected (${checked.length})`;
 
   // Display summary in modal
   const okCount = results.filter(r => r.ok).length;
-  $('gitModalTitle').textContent = `Batch Pull Completed: ${okCount}/${results.length} Succeeded`;
+  $('gitModalTitle').textContent = `Batch Update Completed: ${okCount}/${results.length} Succeeded`;
   $('gitModalBody').textContent = results.map(r => `[${r.ok ? 'OK' : 'ERR'}] ${r.relPath}\n${r.output}\n${'='.repeat(40)}`).join('\n\n');
   $('gitModalBody').className = 'modal-body ' + (okCount === results.length ? 'ok' : 'err');
   $('gitModal').classList.add('open');
@@ -1897,7 +1897,7 @@ $('gitList').addEventListener('click', async (e) => {
   if (btn && btn.dataset.rel) {
     const rel = btn.dataset.rel;
     const r = await doPull(rel, btn);
-    $('gitModalTitle').textContent = `git pull: ${rel}`;
+    $('gitModalTitle').textContent = `Update: ${rel}`;
     $('gitModalBody').textContent = r.output;
     $('gitModalBody').className = 'modal-body ' + (r.ok ? 'ok' : 'err');
     $('gitModal').classList.add('open');
