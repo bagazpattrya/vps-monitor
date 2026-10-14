@@ -14,7 +14,7 @@ const DATA_DIR = path.join(ROOT, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SAMPLE_INTERVAL_MS = 10_000;
 const MAX_POINTS = 8640; // 24h @ 10s
-const SCAN_ROOT = process.env.SCAN_DIR || (fs.existsSync('/home/zae/Codingan') ? '/home/zae/Codingan' : '/var/www');
+const SCAN_ROOT = process.env.SCAN_DIR || '/var/www';
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -957,12 +957,11 @@ function readFsFile(filePath, maxBytes = 524_288) {
 }
 
 // ---- Backup Monitoring & Download helpers ----
-// Hanya direktori backup MySQL sungguhan. Sengaja TIDAK fallback ke /var/backups
-// (isinya backup system dpkg/alternatives, bukan dump MySQL) agar panel tidak
-// menampilkan file yang salah. Set BACKUP_DIR di ecosystem.config.js bila beda lokasi.
+// Lokasi netral (tidak di home user mana pun agar awet walau akun dihapus).
+// Set BACKUP_DIR di ecosystem.config.js bila beda lokasi.
 const BACKUP_CANDIDATES = [
   process.env.BACKUP_DIR,
-  '/home/zae/backups'
+  '/var/backups/mysql'
 ].filter(Boolean);
 
 function getBackupRootDir() {
@@ -1043,7 +1042,7 @@ function getBackupInfo() {
     } catch {}
   }
 
-  const scriptPath = fs.existsSync('/home/zae/backup-mysql.sh') ? '/home/zae/backup-mysql.sh' : null;
+  const scriptPath = fs.existsSync('/usr/local/bin/backup-mysql.sh') ? '/usr/local/bin/backup-mysql.sh' : null;
 
   return {
     available: true,
@@ -1060,8 +1059,8 @@ function getBackupInfo() {
 
 function runManualBackup() {
   return new Promise((resolve) => {
-    const script = fs.existsSync('/home/zae/backup-mysql.sh') ? '/home/zae/backup-mysql.sh' : null;
-    if (!script) return resolve({ ok: false, error: 'Script /home/zae/backup-mysql.sh tidak ditemukan' });
+    const script = fs.existsSync('/usr/local/bin/backup-mysql.sh') ? '/usr/local/bin/backup-mysql.sh' : null;
+    if (!script) return resolve({ ok: false, error: 'Script /usr/local/bin/backup-mysql.sh tidak ditemukan' });
 
     let uid = null;
     try { uid = fs.statSync(script).uid; } catch {}

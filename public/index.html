@@ -1192,7 +1192,7 @@ select.input { appearance: auto; max-width: 100%; }
         <div class="card-head"><span>Database Backups</span><span class="pill ok" id="backupStatusPill">ACTIVE</span></div>
         <div class="metric-row"><div class="big" id="backupTotalFiles">0</div><div class="sub-val" id="backupTotalSize">0 B total</div></div>
       </div>
-      <div class="card-foot"><span>Storage Path</span><strong id="backupRootPath" style="color:var(--tx);font-family:var(--font-mono)">/home/zae/backups</strong></div>
+      <div class="card-foot"><span>Storage Path</span><strong id="backupRootPath" style="color:var(--tx);font-family:var(--font-mono)">/var/backups/mysql</strong></div>
     </div>
     <div class="card c4">
       <div>
@@ -2739,7 +2739,7 @@ $('btnToggleBackupLog').addEventListener('click', () => {
   }
 });
 $('backupRunBtn').addEventListener('click', async () => {
-  if (!confirm('Jalankan proses backup MySQL sekarang di server? Ini akan mengeksekusi /home/zae/backup-mysql.sh')) return;
+  if (!confirm('Jalankan proses backup MySQL sekarang di server? Ini akan mengeksekusi /usr/local/bin/backup-mysql.sh')) return;
   const btn = $('backupRunBtn');
   btn.disabled = true;
   btn.textContent = 'Menjalankan Backup...';
