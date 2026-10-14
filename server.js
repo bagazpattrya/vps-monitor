@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, execFile } = require('child_process');
 const auth = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -1076,7 +1076,361 @@ function runManualBackup() {
   });
 }
 
+// ---- Auto Deploy (Laravel Git-based SOP, Phase 1: temp subdomain) ----
+// Prinsip permission (anti bootstrap/cache 500):
+// - root hanya untuk: mysql, nginx, certbot, supervisor, cron, chown.
+// - git clone / composer / artisan SELALU sebagai deployer (user:www-data).
+// - .env 660, code 664, dir 775+setgid, storage+bootstrap/cache +ACL, verifikasi tulis www-data.
+const DEPLOY_JOBS = new Map();
+let deploySeq = 0;
+
+function shq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
+
+function runCmd(cmd, opts = {}) {
+  return new Promise((resolve) => {
+    exec(cmd, { timeout: opts.timeout || 120000, cwd: opts.cwd, env: { ...process.env, ...(opts.env || {}) }, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, output: (stdout || '') + (stderr || ''), error: err ? err.message : null });
+    });
+  });
+}
+function runFile(file, args, opts = {}) {
+  return new Promise((resolve) => {
+    execFile(file, args, { timeout: opts.timeout || 120000, cwd: opts.cwd, env: { ...process.env, ...(opts.env || {}) }, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, output: (stdout || '') + (stderr || ''), error: err ? err.message : null });
+    });
+  });
+}
+const asUser = (user, prog, args) => `sudo -H -u ${user} ${prog} ${args.map(shq).join(' ')}`;
+
+function vErr(msg) { return { ok: false, error: msg }; }
+function vDir(v) {
+  v = String(v || '').trim();
+  if (!/^[a-zA-Z0-9._-]+$/.test(v) || v === '.' || v === '..') return vErr('Nama folder tidak valid (huruf/angka/._-)');
+  return { ok: true, value: v };
+}
+function vDomain(v) {
+  v = String(v || '').trim().toLowerCase();
+  if (v.length > 253 || !/^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*\.[a-z]{2,}$/.test(v)) return vErr('Domain tidak valid');
+  return { ok: true, value: v };
+}
+function vRepo(v) {
+  v = String(v || '').trim();
+  const m = v.match(/^(https:\/\/github\.com\/bagazpattrya\/[A-Za-z0-9._-]+(\.git)?|git@github\.com:bagazpattrya\/[A-Za-z0-9._-]+(\.git)?)$/);
+  if (!m) return vErr('Repo harus github.com/bagazpattrya/* (https atau ssh)');
+  return { ok: true, value: v };
+}
+function vBranch(v) {
+  v = String(v || 'main').trim() || 'main';
+  if (!/^[A-Za-z0-9._/-]+$/.test(v) || v.length > 100) return vErr('Branch tidak valid');
+  return { ok: true, value: v };
+}
+function vLinuxUser(v) {
+  v = String(v || '').trim();
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(v)) return vErr('User deploy tidak valid');
+  try {
+    const out = execSync(`id -nG ${v} 2>/dev/null`).toString().trim().split(/\s+/);
+    if (!out.includes('www-data')) return vErr(`User ${v} belum masuk grup www-data (jalankan: usermod -aG www-data ${v})`);
+  } catch { return vErr(`User Linux ${v} tidak ada`); }
+  return { ok: true, value: v };
+}
+function vDbIdent(v, what, max) {
+  v = String(v || '').trim();
+  if (!/^[A-Za-z0-9_$]+$/.test(v) || v.length > max) return vErr(`${what} hanya boleh huruf/angka/_/$ (maks ${max})`);
+  return { ok: true, value: v };
+}
+function vAbsPath(v, what) {
+  v = String(v || '').trim();
+  if (!v.startsWith('/') || v.includes('\0')) return vErr(`${what} harus absolute path`);
+  return { ok: true, value: path.normalize(v) };
+}
+function phpBin() {
+  if (fs.existsSync('/run/php/php8.4-fpm.sock') && fs.existsSync('/usr/bin/php8.4')) return 'php8.4';
+  if (fs.existsSync('/usr/bin/php8.4')) return 'php8.4';
+  if (fs.existsSync('/usr/bin/php8.5')) return 'php8.5';
+  return 'php';
+}
+function jobRedact(job, s) {
+  let out = String(s || '');
+  for (const sec of job.secrets || []) if (sec) out = out.split(sec).join('***');
+  return out;
+}
+function jobStep(job, name, status, output) {
+  const clean = jobRedact(job, output || '');
+  let st = job.steps.find((s) => s.name === name);
+  if (!st) { st = { name, status, output: '' }; job.steps.push(st); }
+  st.status = status;
+  if (clean) st.output = (st.output ? st.output + '\n' : '') + clean.slice(-8000);
+  try { fs.appendFileSync(job.logFile, `\n===== ${name} [${status}] =====\n${clean.slice(-8000)}`); } catch {}
+}
+function newJob(type, label, secrets) {
+  const id = `dep-${Date.now().toString(36)}-${(++deploySeq).toString(36)}`;
+  const job = { id, type, label, status: 'running', steps: [], secrets: secrets || [], createdAt: Date.now(), logFile: path.join(DATA_DIR, `${id}.log`) };
+  DEPLOY_JOBS.set(id, job);
+  if (DEPLOY_JOBS.size > 20) { const first = DEPLOY_JOBS.keys().next().value; DEPLOY_JOBS.delete(first); }
+  return job;
+}
+function jobPublic(job) {
+  return { id: job.id, type: job.type, label: job.label, status: job.status, steps: job.steps, createdAt: job.createdAt, warn: job.warn || null };
+}
+
+async function runDeployJob(job, p) {
+  const dest = path.join('/var/www', p.dir);
+  const mysql = (sql) => runFile('mysql', ['-BNe', sql], { timeout: 15000 });
+  const ago = async (prog, args, opts) => runCmd(asUser(p.deployer, prog, args), opts);
+  try {
+    // 1. validasi sudah lolos di handler; cek folder belum ada
+    jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} db=${p.dbName}/${p.dbUser} type=${p.projectType} queue=${p.useQueue} scheduler=${p.useScheduler}`);
+    if (fs.existsSync(dest)) throw new Error(`Folder ${dest} sudah ada`);
+    jobStep(job, 'validate', 'ok', 'semua input valid');
+
+    if (p.dryRun) {
+      jobStep(job, 'dry-run: git ls-remote', 'running', '');
+      let r = await ago('git', ['ls-remote', p.repo, 'HEAD'], { timeout: 30000 });
+      if (!r.ok) throw new Error('git ls-remote gagal (repo/akses deploy key?)\n' + r.output);
+      jobStep(job, 'dry-run: git ls-remote', 'ok', r.output.slice(0, 300));
+      jobStep(job, 'dry-run: mysql', 'running', '');
+      r = await mysql('SELECT 1;');
+      if (!r.ok) throw new Error('mysql root socket gagal\n' + r.output);
+      jobStep(job, 'dry-run: mysql', 'ok', 'root socket OK');
+      jobStep(job, 'dry-run: dns+nginx', 'running', '');
+      r = await runCmd(`getent ahosts ${shq(p.domain)} 2>&1 || true`, { timeout: 15000 });
+      jobStep(job, 'dry-run: dns+nginx', r.output.trim() ? 'ok' : 'fail', r.output || '(domain belum resolve)');
+      if (!r.output.trim()) throw new Error(`DNS ${p.domain} belum mengarah ke mana pun`);
+      r = await runCmd('nginx -t 2>&1', { timeout: 15000 });
+      jobStep(job, 'dry-run: dns+nginx', r.ok ? 'ok' : 'fail', r.output);
+      if (!r.ok) throw new Error('nginx -t gagal (butuh root / config rusak)');
+      job.status = 'done';
+      return;
+    }
+
+    // 2. MySQL
+    jobStep(job, 'mysql: create db+user', 'running', '');
+    let r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
+    if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
+    jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
+
+    // 3. Clone sebagai deployer
+    jobStep(job, 'git clone', 'running', '');
+    r = await ago('git', ['clone', '--branch', p.branch, p.repo, dest], { timeout: 300000 });
+    if (!r.ok) throw new Error('git clone gagal\n' + r.output);
+    await runCmd(`chown -R ${p.deployer}:www-data ${shq(dest)}`);
+    await ago('git', ['-C', dest, 'config', 'core.filemode', 'false']);
+    await ago('git', ['-C', dest, 'config', 'core.sharedRepository', 'group']);
+    jobStep(job, 'git clone', 'ok', r.output.slice(-2000));
+
+    // 4. composer
+    jobStep(job, 'composer install', 'running', '');
+    r = await ago('composer', ['install', `--working-dir=${dest}`, '--no-interaction', '--prefer-dist', '--optimize-autoloader', '--no-dev'], { timeout: 600000 });
+    if (!r.ok) throw new Error('composer install gagal\n' + r.output.slice(-3000));
+    jobStep(job, 'composer install', 'ok', r.output.slice(-1500));
+
+    // 5. .env
+    jobStep(job, '.env', 'running', '');
+    const exPath = path.join(dest, '.env.example');
+    if (!fs.existsSync(exPath)) throw new Error('.env.example tidak ada (bukan Laravel?)');
+    let env = fs.readFileSync(exPath, 'utf8');
+    const setEnv = (k, v) => {
+      const re = new RegExp(`^${k}=.*$`, 'm');
+      env = re.test(env) ? env.replace(re, `${k}=${v}`) : env + `\n${k}=${v}\n`;
+    };
+    setEnv('APP_URL', `https://${p.domain}`);
+    setEnv('DB_DATABASE', p.dbName);
+    setEnv('DB_USERNAME', p.dbUser);
+    setEnv('DB_PASSWORD', p.dbPass);
+    if (p.appName) setEnv('APP_NAME', `"${p.appName.replace(/"/g, '')}"`);
+    for (const [k, v] of Object.entries(p.envExtra || {})) setEnv(k, v);
+    if (p.appKey) {
+      if (!/^base64:[A-Za-z0-9+/=]+$/.test(p.appKey)) throw new Error('APP_KEY format salah (harus base64:...)');
+      setEnv('APP_KEY', p.appKey);
+    }
+    fs.writeFileSync(path.join(dest, '.env'), env);
+    await runCmd(`chown ${p.deployer}:www-data ${shq(path.join(dest, '.env'))} && chmod 660 ${shq(path.join(dest, '.env'))}`);
+    if (!p.appKey) {
+      r = await ago(phpBin(), [path.join(dest, 'artisan'), 'key:generate', '--force'], { timeout: 60000 });
+      if (!r.ok) throw new Error('key:generate gagal\n' + r.output);
+    }
+    jobStep(job, '.env', 'ok', p.appKey ? 'APP_KEY reuse dari project lama' : 'APP_KEY baru di-generate');
+
+    // 6. DB: migrate atau import
+    if (p.projectType === 'new') {
+      jobStep(job, 'migrate --force', 'running', '');
+      r = await ago(phpBin(), [path.join(dest, 'artisan'), 'migrate', '--force'], { timeout: 300000 });
+      if (!r.ok) throw new Error('migrate gagal\n' + r.output.slice(-3000));
+      jobStep(job, 'migrate --force', 'ok', r.output.slice(-1500));
+    } else {
+      jobStep(job, 'import sql', 'running', p.sqlPath);
+      if (!fs.existsSync(p.sqlPath)) throw new Error(`File SQL tidak ada: ${p.sqlPath}`);
+      const isGz = p.sqlPath.endsWith('.gz');
+      const imp = isGz
+        ? `zcat ${shq(p.sqlPath)} | MYSQL_PWD=${shq(p.dbPass)} mysql -u ${shq(p.dbUser)} ${shq(p.dbName)}`
+        : `MYSQL_PWD=${shq(p.dbPass)} mysql -u ${shq(p.dbUser)} ${shq(p.dbName)} < ${shq(p.sqlPath)}`;
+      r = await runCmd(imp, { timeout: 600000 });
+      if (!r.ok) throw new Error('import SQL gagal (cek kredensial DB / file corrupt)\n' + r.output.slice(-3000));
+      jobStep(job, 'import sql', 'ok', `import ${p.sqlPath} OK (kredensial DB terverifikasi)`);
+    }
+
+    // 7-8. storage:link + optimize + fix perms + gate
+    jobStep(job, 'storage:link + optimize', 'running', '');
+    r = await ago(phpBin(), [path.join(dest, 'artisan'), 'storage:link'], { timeout: 60000 });
+    r = await ago(phpBin(), [path.join(dest, 'artisan'), 'optimize:clear'], { timeout: 120000 });
+    jobStep(job, 'storage:link + optimize', 'ok', r.output.slice(-1000));
+    jobStep(job, 'fix-permissions + gate www-data', 'running', '');
+    r = await runCmd(`bash /var/www/fix-permissions.sh ${shq(dest)} --user ${shq(p.deployer)} 2>&1`, { timeout: 120000 });
+    if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
+    for (const sub of ['storage', 'bootstrap/cache']) {
+      const t = path.join(dest, sub, '.writetest-www-data');
+      const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
+      if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
+    }
+    jobStep(job, 'fix-permissions + gate www-data', 'ok', 'www-data bisa tulis storage/ + bootstrap/cache');
+
+    // 9. DNS
+    jobStep(job, 'dns check', 'running', p.domain);
+    r = await runCmd(`getent ahosts ${shq(p.domain)} 2>&1 || true`, { timeout: 15000 });
+    if (!r.output.trim()) throw new Error(`DNS ${p.domain} belum resolve — buat A record dulu (SOP step 9)`);
+    jobStep(job, 'dns check', 'ok', r.output.trim().split('\n')[0]);
+
+    // 10-11. nginx
+    jobStep(job, 'nginx vhost', 'running', '');
+    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}/public;\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`;
+    fs.writeFileSync(`/etc/nginx/sites-available/${p.domain}`, vhost);
+    await runCmd(`ln -sf /etc/nginx/sites-available/${shq(p.domain)} /etc/nginx/sites-enabled/${shq(p.domain)}`);
+    r = await runCmd('nginx -t 2>&1', { timeout: 15000 });
+    if (!r.ok) throw new Error('nginx -t gagal\n' + r.output);
+    r = await runCmd('systemctl reload nginx 2>&1', { timeout: 30000 });
+    if (!r.ok) throw new Error('nginx reload gagal\n' + r.output);
+    r = await runCmd(`curl -s -m 15 -o /dev/null -w "%{http_code}" http://${p.domain}/ 2>&1`, { timeout: 30000 });
+    jobStep(job, 'nginx vhost', 'ok', `http://${p.domain} -> ${r.output.trim()}`);
+
+    // 12. certbot (non-fatal)
+    jobStep(job, 'certbot ssl', 'running', '');
+    r = await runCmd(`certbot --nginx -d ${shq(p.domain)} --non-interactive --agree-tos --register-unsafely-without-email --redirect 2>&1`, { timeout: 180000 });
+    jobStep(job, 'certbot ssl', r.ok ? 'ok' : 'warn', r.output.slice(-2000) || '(tidak ada output)');
+    if (!r.ok) job.warn = 'SSL gagal — site jalan di HTTP, ulangi certbot manual setelah DNS propagasi penuh';
+
+    // 13. supervisor (opsional)
+    if (p.useQueue) {
+      jobStep(job, 'supervisor worker', 'running', '');
+      const conf = `[program:${p.domain}-worker]\nprocess_name=%(program_name)s_%(process_num)02d\ncommand=php ${dest}/artisan queue:work --sleep=3 --tries=3\nautostart=true\nautorestart=true\nuser=www-data\nnumprocs=1\nredirect_stderr=true\nstdout_logfile=${dest}/storage/logs/worker.log\n`;
+      fs.writeFileSync(`/etc/supervisor/conf.d/${p.domain}-worker.conf`, conf);
+      r = await runCmd('supervisorctl reread 2>&1 && supervisorctl update 2>&1', { timeout: 60000 });
+      r = await runCmd(`supervisorctl start ${shq(p.domain + '-worker:*')} 2>&1`, { timeout: 60000 });
+      r = await runCmd(`supervisorctl status ${shq(p.domain + '-worker:*')} 2>&1`, { timeout: 15000 });
+      if (!/RUNNING/.test(r.output)) throw new Error('worker tidak RUNNING\n' + r.output);
+      jobStep(job, 'supervisor worker', 'ok', r.output.trim());
+    } else jobStep(job, 'supervisor worker', 'skip', 'nonaktif (opsi)');
+
+    // 14. cron scheduler (opsional, idempoten)
+    if (p.useScheduler) {
+      jobStep(job, 'cron scheduler', 'running', '');
+      const line = `* * * * * cd ${dest} && php artisan schedule:run >> /dev/null 2>&1`;
+      r = await runCmd(`crontab -u www-data -l 2>/dev/null | grep -F ${shq(dest)} || true`, { timeout: 15000 });
+      if (r.output.includes(dest)) {
+        jobStep(job, 'cron scheduler', 'skip', 'cron sudah ada (tidak diduplikasi)');
+      } else {
+        r = await runCmd(`(crontab -u www-data -l 2>/dev/null; echo ${shq(line)}) | crontab -u www-data - 2>&1`, { timeout: 15000 });
+        if (!r.ok) throw new Error('tambah cron gagal\n' + r.output);
+        jobStep(job, 'cron scheduler', 'ok', line);
+      }
+    } else jobStep(job, 'cron scheduler', 'skip', 'nonaktif (opsi)');
+
+    // 15. verifikasi akhir
+    jobStep(job, 'verify', 'running', '');
+    r = await runCmd(`curl -sk -m 15 -o /dev/null -w "%{http_code}" https://${p.domain}/ 2>&1`, { timeout: 30000 });
+    const httpsCode = r.output.trim();
+    r = await runCmd(`find ${shq(path.join(dest, 'storage'))} ${shq(path.join(dest, 'bootstrap/cache'))} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
+    if (r.output.trim()) throw new Error('Masih ada dir o+writable di storage/bootstrap (harusnya kosong)\n' + r.output);
+    jobStep(job, 'verify', 'ok', `https=${httpsCode}, tidak ada dir o+writable`);
+    job.status = 'done';
+  } catch (e) {
+    jobStep(job, 'ERROR', 'fail', String((e && e.message) || e).slice(0, 3000));
+    job.status = 'failed';
+  }
+}
+
+// ---- Storage transfer dari host lama (rsync via screen, SOP migrate) ----
+function xferName(project) {
+  return `vps-xfer-${String(project).replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 40)}-${String(Date.now() % 100000)}`;
+}
+async function runTransferJob(job, t) {
+  const fail = (msg, out) => { jobStep(job, 'ERROR', 'fail', msg + (out ? '\n' + String(out).slice(-2000) : '')); job.status = 'failed'; };
+  try {
+    jobStep(job, 'validate', 'running', `project=${t.project} ${t.user}@${t.host}:${t.port} src=${t.src}`);
+    const projDir = path.join('/var/www', t.project);
+    if (!fs.existsSync(projDir)) throw new Error(`Project ${t.project} tidak ada di /var/www`);
+    const dest = path.join(projDir, 'storage/app/public') + '/';
+    if (!/^[A-Za-z0-9._-]+$/.test(t.project)) throw new Error('Nama project tidak valid');
+    if (!/^([a-zA-Z0-9.-]+|\d{1,3}(\.\d{1,3}){3})$/.test(t.host)) throw new Error('IP/host tidak valid');
+    const port = parseInt(t.port, 10);
+    if (!(port >= 1 && port <= 65535)) throw new Error('Port 1-65535');
+    if (!/^[a-z_][a-z0-9_.-]{0,31}$/i.test(t.user)) throw new Error('SSH user tidak valid');
+    const src = path.normalize(t.src);
+    if (!src.startsWith('/') || src.includes('\0')) throw new Error('Source harus absolute path');
+    jobStep(job, 'validate', 'ok', `dest=${dest}`);
+
+    jobStep(job, 'preflight nc', 'running', `${t.host}:${port}`);
+    let r = await runFile('nc', ['-zv', '-w', '8', t.host, String(port)], { timeout: 15000 });
+    if (!r.ok) { fail(`Port ${port} di ${t.host} tidak terjangkau — cek IP/port di control panel host lama`, r.output); return; }
+    jobStep(job, 'preflight nc', 'ok', r.output.trim().split('\n').slice(-2).join(' '));
+
+    if (t.authType === 'password') {
+      r = await runCmd('command -v sshpass 2>/dev/null || (apt-get update -qq 2>&1 | tail -n 1; apt-get install -y -qq sshpass 2>&1 | tail -n 2)', { timeout: 180000 });
+      r = await runCmd('command -v sshpass', { timeout: 10000 });
+      if (!r.ok) { fail('sshpass tidak tersedia dan apt install gagal', r.output); return; }
+    }
+    await runCmd(`mkdir -p ${shq(dest)} && chown www-data:www-data ${shq(dest)}`);
+
+    const name = xferName(t.project);
+    job.transfer = { name, logFile: path.join(DATA_DIR, `${job.id}.xfer.log`), dest };
+    const sshBase = `ssh -p ${port} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10`;
+    const rsyncInner = `rsync -avz --progress -e ${shq(sshBase)} ${shq(t.user + '@' + t.host + ':' + src + '/')} ${shq(dest)} >> ${shq(job.transfer.logFile)} 2>&1; echo "RSYNC_EXIT:$?" >> ${shq(job.transfer.logFile)}`;
+    const launch = t.authType === 'password'
+      ? `env SSHPASS=${shq(t.password)} screen -S ${shq(name)} -dm bash -c ${shq(`export SSHPASS; sshpass -e ${rsyncInner}`)}}`
+      : `screen -S ${shq(name)} -dm bash -c ${shq(rsyncInner)}`;
+    try { fs.writeFileSync(job.transfer.logFile, `transfer ${name} dimulai ${new Date().toISOString()}\n`); } catch {}
+    r = await runCmd(`echo "" >> ${shq(job.transfer.logFile)} 2>/dev/null; ${launch} 2>&1`, { timeout: 15000 });
+    await new Promise((s) => setTimeout(s, 1500));
+    r = await runCmd(`screen -ls 2>&1 | grep ${shq(name)} || true`, { timeout: 10000 });
+    if (!r.output.includes(name)) {
+      const tail = fs.existsSync(job.transfer.logFile) ? fs.readFileSync(job.transfer.logFile, 'utf8').slice(-1500) : '';
+      fail('screen session gagal start', tail);
+      return;
+    }
+    jobStep(job, 'rsync running', 'ok', `screen ${name} (poll status untuk progres, cancel tersedia)`);
+    job.status = 'running-transfer';
+  } catch (e) { fail(String((e && e.message) || e)); }
+}
+function transferStatus(job) {
+  if (!job.transfer) return { running: false, logTail: null, exitCode: null };
+  let log = '';
+  try { log = fs.readFileSync(job.transfer.logFile, 'utf8'); } catch {}
+  let exitCode = null;
+  const m = log.match(/RSYNC_EXIT:(\d+)/);
+  if (m) exitCode = parseInt(m[1], 10);
+  let running = false;
+  try {
+    const out = execSync(`screen -ls 2>&1 || true`, { timeout: 10000 }).toString();
+    running = out.includes(job.transfer.name);
+  } catch {}
+  if (exitCode !== null && !running && job.status === 'running-transfer') {
+    job.status = exitCode === 0 ? 'finishing' : 'failed';
+    try {
+      if (exitCode === 0 && !fs.existsSync(job.transfer.logFile + '.chowned')) {
+        execSync(`chown -R www-data:www-data ${job.transfer.dest} 2>&1`);
+        fs.writeFileSync(job.transfer.logFile + '.chowned', 'ok');
+        fs.appendFileSync(job.transfer.logFile, '\n[chown www-data:www-data dest OK]\n');
+      }
+      if (exitCode === 23) fs.appendFileSync(job.transfer.logFile, '\n[code 23 = 1+ file gagal (biasanya permission 1 file), scroll ke atas cari failed-file lines]\n');
+    } catch (e) { try { fs.appendFileSync(job.transfer.logFile, '\n[chown gagal: ' + e.message + ']\n'); } catch {} }
+    if (exitCode === 0) job.status = 'done';
+    jobStep(job, exitCode === 0 ? 'rsync done' : 'rsync failed', exitCode === 0 ? 'ok' : 'fail', log.slice(-3000));
+  }
+  return { running, name: job.transfer.name, dest: job.transfer.dest, exitCode, logTail: log.split('\n').slice(-40).join('\n') };
+}
+
 const server = http.createServer(async (req, res) => {
+
+
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
 
@@ -1306,6 +1660,93 @@ const server = http.createServer(async (req, res) => {
     const r = await pullGitProject(full);
     if (!r.ok) return send(res, 500, JSON.stringify(r));
     return send(res, 200, JSON.stringify(r));
+  }
+
+  if (p === '/api/deploy' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const checks = [
+      ['dir', vDir(body.dir)], ['domain', vDomain(body.domain)], ['repo', vRepo(body.repo)],
+      ['branch', vBranch(body.branch)], ['deployer', vLinuxUser(body.deployer)],
+      ['dbName', vDbIdent(body.dbName, 'Nama database', 64)], ['dbUser', vDbIdent(body.dbUser, 'User database', 32)],
+    ];
+    for (const [k, c] of checks) if (!c.ok) return send(res, 400, JSON.stringify({ error: `${k}: ${c.error}` }));
+    if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
+    const projectType = body.projectType === 'existing' ? 'existing' : 'new';
+    const sqlPath = projectType === 'existing' ? String(body.sqlPath || '').trim() : '';
+    if (projectType === 'existing') {
+      const c = vAbsPath(sqlPath, 'Path SQL');
+      if (!c.ok) return send(res, 400, JSON.stringify({ error: c.error }));
+      if (!/\.(sql|sql\.gz)$/i.test(sqlPath)) return send(res, 400, JSON.stringify({ error: 'File SQL harus .sql / .sql.gz' }));
+      if (!fs.existsSync(sqlPath)) return send(res, 400, JSON.stringify({ error: `File SQL tidak ada: ${sqlPath}` }));
+    }
+    const envExtra = {};
+    for (const line of String(body.envExtra || '').split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const i = t.indexOf('=');
+      if (i < 1) return send(res, 400, JSON.stringify({ error: `envExtra baris salah (KEY=VALUE): ${t.slice(0, 40)}` }));
+      const k = t.slice(0, i).trim();
+      if (!/^[A-Z][A-Z0-9_]*$/.test(k) || ['APP_URL', 'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'APP_KEY'].includes(k)) {
+        return send(res, 400, JSON.stringify({ error: `envExtra key tidak valid / reserved: ${k}` }));
+      }
+      envExtra[k] = t.slice(i + 1).trim();
+    }
+    const params = {
+      dir: checks[0][1].value, domain: checks[1][1].value, repo: checks[2][1].value, branch: checks[3][1].value,
+      deployer: checks[4][1].value, dbName: checks[5][1].value, dbUser: checks[6][1].value, dbPass: body.dbPass,
+      projectType, sqlPath, appName: String(body.appName || '').trim().slice(0, 100) || null,
+      appKey: String(body.appKey || '').trim() || null,
+      useQueue: body.useQueue !== false, useScheduler: body.useScheduler !== false,
+      dryRun: body.dryRun === true, envExtra,
+    };
+    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass]);
+    audit(session.user, 'deploy.start', params.dir, `${params.domain} dryRun=${params.dryRun}`);
+    runDeployJob(job, params).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
+    return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
+  }
+  if (p === '/api/deploy/status' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const job = DEPLOY_JOBS.get(url.searchParams.get('id'));
+    if (!job) return send(res, 404, JSON.stringify({ error: 'Job tidak ada (mungkin server restart)' }));
+    return send(res, 200, JSON.stringify(jobPublic(job)));
+  }
+  if (p === '/api/deploy/jobs' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify({ jobs: [...DEPLOY_JOBS.values()].map(jobPublic) }));
+  }
+  if (p === '/api/deploy/transfer' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const t = {
+      project: String(body.project || '').trim(), host: String(body.host || '').trim(),
+      port: String(body.port || '22').trim(), user: String(body.user || '').trim(),
+      authType: body.authType === 'key' ? 'key' : 'password',
+      password: String(body.password || ''), src: String(body.src || '').trim(),
+    };
+    const job = newJob('transfer', `${t.project} <- ${t.user}@${t.host}`, [t.password]);
+    audit(session.user, 'transfer.start', t.project, `${t.user}@${t.host}:${t.port}`);
+    runTransferJob(job, t).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
+    return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
+  }
+  if (p === '/api/deploy/transfer/status' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const job = DEPLOY_JOBS.get(url.searchParams.get('id'));
+    if (!job || job.type !== 'transfer') return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
+    return send(res, 200, JSON.stringify({ ...jobPublic(job), transfer: transferStatus(job) }));
+  }
+  if (p === '/api/deploy/transfer/cancel' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const job = DEPLOY_JOBS.get(body.id);
+    if (!job || !job.transfer) return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
+    await runCmd(`screen -S ${shq(job.transfer.name)} -X quit 2>&1`, { timeout: 15000 });
+    job.status = 'cancelled';
+    audit(session.user, 'transfer.cancel', job.transfer.name);
+    return send(res, 200, JSON.stringify({ ok: true }));
   }
 
   let file = p === '/' ? '/index.html' : p;

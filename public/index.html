@@ -831,6 +831,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none"><span class="dot"></span>Backups</a>
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
+  <a href="#/deploy" class="nav-link" id="navLinkDeploy" data-view="deploy" style="display:none"><span class="dot"></span>Auto Deploy</a>
   <div class="nav-foot">
     Microspace VPS Monitor
   </div>
@@ -1341,6 +1342,70 @@ select.input { appearance: auto; max-width: 100%; }
       </div>
     </div>
   </div><!-- /view-users -->
+
+  <!-- VIEW: AUTO DEPLOY -->
+  <div class="view-pane" id="view-deploy">
+  <div class="card c12" id="deployCard">
+    <div class="sec-head">
+      <h3 class="sec-title"><span>Auto Deploy Laravel</span><span class="badge" id="deployJobsCount">0</span></h3>
+      <div class="proc-controls">
+        <button class="btn" id="deployJobsRefresh">Refresh Jobs</button>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+      Deploy project Laravel baru ke <code>/var/www/&lt;folder&gt;</code> + subdomain temp + SSL otomatis (SOP Git-based). Semua yang tidak bisa di-detect wajib diisi. Password DB tidak disimpan &amp; tidak tampil di log. Step sensitif permission (storage/bootstrap) otomatis di-fix + diuji tulis sebagai <code>www-data</code> sebelum go-live.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Folder di /var/www*<br><input id="depDir" class="input" style="width:100%" placeholder="myclient-app" /></label>
+      <label style="font-size:12px;color:var(--mut)">Repo (org internal)*<br><input id="depRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/repo.git" /></label>
+      <label style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" placeholder="main" /></label>
+      <label style="font-size:12px;color:var(--mut)">Temp domain*<br><input id="depDomain" class="input" style="width:100%" placeholder="myclient.microspace.id" /></label>
+      <label style="font-size:12px;color:var(--mut)">Deployer (user Linux, anggota www-data)*<br><input id="depDeployer" class="input" style="width:100%" placeholder="zae" /></label>
+      <label style="font-size:12px;color:var(--mut)">Tipe project<br><select id="depType" class="input" style="width:100%"><option value="new">Baru (migrate --force)</option><option value="existing">Existing (import SQL dari path server)</option></select></label>
+      <label style="font-size:12px;color:var(--mut)">DB name*<br><input id="depDbName" class="input" style="width:100%" placeholder="client_db" /></label>
+      <label style="font-size:12px;color:var(--mut)">DB user*<br><input id="depDbUser" class="input" style="width:100%" placeholder="client_user" /></label>
+      <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /></label>
+      <label style="font-size:12px;color:var(--mut)">Path SQL di server (existing only)<br><input id="depSqlPath" class="input" style="width:100%" placeholder="/var/backups/mysql/client_db_backup....sql.gz" /></label>
+      <label style="font-size:12px;color:var(--mut)">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
+      <label style="font-size:12px;color:var(--mut)">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
+    </div>
+    <label style="font-size:12px;color:var(--mut)">.env tambahan (KEY=VALUE per baris, untuk mail/API keys)<br><textarea id="depEnvExtra" class="input" style="width:100%;min-height:56px;font-family:var(--font-mono)" placeholder="MAIL_MAILER=smtp&#10;MAIL_HOST=..."></textarea></label>
+    <div style="display:flex;gap:16px;margin:10px 0;font-size:13px">
+      <label><input type="checkbox" id="depQueue" checked /> Queue worker (supervisor)</label>
+      <label><input type="checkbox" id="depSched" checked /> Scheduler (cron www-data)</label>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:12px">
+      <button class="btn" id="depDryRun">🔍 Dry-run check</button>
+      <button class="btn ok" id="depStart" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">🚀 Start Deploy</button>
+    </div>
+    <div id="depJobs" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+    <div id="depSteps" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+    <pre id="depOutput" style="background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;max-height:420px;overflow:auto;white-space:pre-wrap">Pilih job untuk melihat progres...</pre>
+  </div>
+  <div class="card c12" id="transferCard" style="margin-top:14px">
+    <div class="sec-head">
+      <h3 class="sec-title"><span>Migrate Storage dari Host Lama</span></h3>
+    </div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+      Rsync <code>storage/app/public/</code> dari hosting lama. Password SSH hanya sekali pakai (via env, tidak tampil di <code>ps</code>/log) dan <b>tidak disimpan</b>. Transfer jalan di screen agar selamat dari putus koneksi/restart panel.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Project (folder di /var/www)*<br><input id="xProject" class="input" style="width:100%" placeholder="oso-marketing" /></label>
+      <label style="font-size:12px;color:var(--mut)">IP host lama*<br><input id="xHost" class="input" style="width:100%" placeholder="82.180.152.60" /></label>
+      <label style="font-size:12px;color:var(--mut)">SSH port<br><input id="xPort" class="input" style="width:100%" placeholder="22" /></label>
+      <label style="font-size:12px;color:var(--mut)">SSH username*<br><input id="xUser" class="input" style="width:100%" placeholder="u882031126" /></label>
+      <label style="font-size:12px;color:var(--mut)">Auth<br><select id="xAuth" class="input" style="width:100%"><option value="password">Password sekali pakai</option><option value="key">SSH key (sudah terpasang)</option></select></label>
+      <label style="font-size:12px;color:var(--mut)">Password SSH (mode password)<br><input id="xPassword" type="password" class="input" style="width:100%" placeholder="••••••••" /></label>
+      <label style="font-size:12px;color:var(--mut;grid-column:1/-1)">Source path di host lama* (isi folder ini yang dicopy)<br><input id="xSrc" class="input" style="width:100%" placeholder="/home/u882031126/domains/theoso.id/project-marketing-management/storage/app/public/" /></label>
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:12px">
+      <button class="btn ok" id="xStart" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">⇄ Start Transfer</button>
+      <button class="btn danger" id="xCancel" style="display:none">✕ Cancel</button>
+    </div>
+    <div id="xStatus" style="font-size:12px;color:var(--mut);margin-bottom:8px">Belum ada transfer.</div>
+    <pre id="xLog" style="background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;max-height:320px;overflow:auto;white-space:pre-wrap">Log transfer...</pre>
+  </div>
+  </div><!-- /view-deploy -->
 </main>
 
 <div class="modal-backdrop" id="gitModal">
@@ -1532,8 +1597,9 @@ j('/api/me').then(m => {
     if ($('navLinkUsers')) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles')) $('navLinkFiles').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
+    if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy'].includes(currentView())) location.hash = '#/overview';
 }).catch(() => {});
 
 async function api(method, url, body) {
@@ -2608,6 +2674,24 @@ $('cronList').addEventListener('click', (e) => {
   const b = e.target.closest('[data-edit-cron]');
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
+$('depDryRun').addEventListener('click', () => depSubmit(true));
+$('depStart').addEventListener('click', () => depSubmit(false));
+$('deployJobsRefresh').addEventListener('click', () => deployJobsRefresh(false));
+$('depJobs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-depjob]');
+  if (b) depShow(b.dataset.depjob);
+});
+$('xStart').addEventListener('click', xferSubmit);
+$('xCancel').addEventListener('click', async () => {
+  if (!xferActiveId) return;
+  if (!confirm('Cancel transfer ini?')) return;
+  try {
+    await api('POST', '/api/deploy/transfer/cancel', { id: xferActiveId });
+    clearTimeout(xferPollTimer);
+    $('xCancel').style.display = 'none';
+    xferPoll();
+  } catch (e) { alert('Error: ' + e.message); }
+});
 $('storageRefresh').addEventListener('click', () => storage(true));
 
 // Sidebar Drawer & View Router (#/overview, #/storage, #/workers, #/git, #/processes)
@@ -2619,7 +2703,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'deploy'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2650,6 +2734,7 @@ function navigateView(name, refresh = true) {
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
+    if (view === 'deploy') deployJobsRefresh();
   }
 }
 
@@ -2664,6 +2749,94 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
     toggleSidebar(false);
   });
 });
+
+// ---- Auto Deploy ----
+let depActiveId = null;
+let depPollTimer = null;
+let xferActiveId = null;
+let xferPollTimer = null;
+
+function depForm() {
+  return {
+    dir: $('depDir').value.trim(), repo: $('depRepo').value.trim(), branch: $('depBranch').value.trim() || 'main',
+    domain: $('depDomain').value.trim(), deployer: $('depDeployer').value.trim(),
+    projectType: $('depType').value, dbName: $('depDbName').value.trim(), dbUser: $('depDbUser').value.trim(),
+    dbPass: $('depDbPass').value, sqlPath: $('depSqlPath').value.trim(),
+    appName: $('depAppName').value.trim(), appKey: $('depAppKey').value.trim(),
+    envExtra: $('depEnvExtra').value, useQueue: $('depQueue').checked, useScheduler: $('depSched').checked,
+  };
+}
+function depStepPill(s) {
+  const cls = s.status === 'ok' ? 'ok' : (s.status === 'fail' ? 'down' : '');
+  const icon = s.status === 'ok' ? '✓ ' : (s.status === 'fail' ? '✕ ' : (s.status === 'running' ? '… ' : (s.status === 'skip' ? '− ' : (s.status === 'warn' ? '! ' : ''))));
+  return `<span class="pill ${cls}" title="${(s.output || '').replace(/"/g, '&quot;').slice(-500)}">${icon}${s.name}</span>`;
+}
+async function depShow(id) {
+  depActiveId = id;
+  try {
+    const d = await api('GET', `/api/deploy/status?id=${encodeURIComponent(id)}`);
+    $('depJobsCount').textContent = d.steps.length;
+    $('depSteps').innerHTML = d.steps.map(depStepPill).join('') || '<span style="color:var(--mut);font-size:12px">Menunggu...</span>';
+    const last = [...d.steps].reverse().find(s => s.output) || d.steps[d.steps.length - 1];
+    $('depOutput').textContent = `[${d.id}] status=${d.status}${d.warn ? ' WARN: ' + d.warn : ''}\n\n` + (last && last.output ? `--- ${last.name} ---\n${last.output}` : '(belum ada output)');
+    const running = ['running', 'running-transfer'].includes(d.status);
+    if (running && !depPollTimer) depPollTimer = setInterval(() => { if (depActiveId) depShow(depActiveId); else clearInterval(depPollTimer); }, 3000);
+    if (!running && depPollTimer) { clearInterval(depPollTimer); depPollTimer = null; }
+    deployJobsRefresh(true);
+  } catch (e) { $('depOutput').textContent = 'Error: ' + e.message; }
+}
+async function deployJobsRefresh(silent) {
+  try {
+    const d = await api('GET', '/api/deploy/jobs');
+    $('deployJobsCount').textContent = d.jobs.length;
+    $('depJobs').innerHTML = d.jobs.length ? d.jobs.map(j =>
+      `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : '🚀'} ${j.label} — ${j.status}</button>`
+    ).join('') : '<span style="color:var(--mut);font-size:12px">Belum ada job.</span>';
+  } catch (e) { if (!silent) alert('Error: ' + e.message); }
+}
+async function depSubmit(dryRun) {
+  const body = { ...depForm(), dryRun };
+  if (!body.dir || !body.repo || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
+  if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
+  if (!confirm(dryRun ? 'Jalankan dry-run check (tanpa perubahan)?' : `Mulai deploy ${body.dir} (${body.domain})? Proses makan waktu beberapa menit.`)) return;
+  try {
+    const r = await api('POST', '/api/deploy', body);
+    depShow(r.id);
+  } catch (e) { alert('Error: ' + e.message); }
+}
+async function xferSubmit() {
+  const body = {
+    project: $('xProject').value.trim(), host: $('xHost').value.trim(), port: $('xPort').value.trim() || '22',
+    user: $('xUser').value.trim(), authType: $('xAuth').value, password: $('xPassword').value, src: $('xSrc').value.trim(),
+  };
+  if (!body.project || !body.host || !body.user || !body.src) return alert('Isi project, host, user, source path');
+  if (body.authType === 'password' && !body.password) return alert('Isi password SSH');
+  if (!confirm(`Start transfer ke ${body.project}/storage/app/public dari ${body.user}@${body.host}?`)) return;
+  try {
+    const r = await api('POST', '/api/deploy/transfer', body);
+    $('xPassword').value = '';
+    xferActiveId = r.id;
+    $('xCancel').style.display = '';
+    xferPoll();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+async function xferPoll() {
+  if (!xferActiveId) return;
+  try {
+    const d = await api('GET', `/api/deploy/transfer/status?id=${encodeURIComponent(xferActiveId)}`);
+    const t = d.transfer || {};
+    $('xStatus').innerHTML = `Transfer <strong>${t.name || ''}</strong>: ` +
+      (t.exitCode !== null && t.exitCode !== undefined ? (t.exitCode === 0 ? '<strong style="color:var(--ok)">SELESAI OK</strong>' : `<strong style="color:var(--bad)">GAGAL (exit ${t.exitCode})</strong>`) : (t.running ? '<strong>BERJALAN…</strong> (biarkan, bisa lama untuk folder besar)' : `status job: ${d.status}`));
+    $('xLog').textContent = t.logTail || '(belum ada log)';
+    if ((t.exitCode === null || t.exitCode === undefined) && t.running !== false) {
+      clearTimeout(xferPollTimer);
+      xferPollTimer = setTimeout(xferPoll, 5000);
+    } else {
+      $('xCancel').style.display = 'none';
+    }
+    deployJobsRefresh(true);
+  } catch (e) { $('xStatus').textContent = 'Error: ' + e.message; }
+}
 
 // UI Events
 $('gitSearch').addEventListener('input', renderGitProjects);
