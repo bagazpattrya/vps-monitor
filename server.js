@@ -203,12 +203,17 @@ function gitCmdFor(dir, args) {
   return `git -C "${dir}" ${args}`;
 }
 
+function ensureFilemodeFalse(dir) {
+  try { execSync(gitCmdFor(dir, 'config core.filemode false 2>/dev/null'), { timeout: 2000 }); } catch {}
+}
+
 function getGitProjects(force = false) {
   const now = Date.now();
   if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
   const dirs = scanGitDirs(SCAN_ROOT, 6);
   const projects = dirs.map((d) => {
     try {
+      ensureFilemodeFalse(d);
       const branch = execSync(gitCmdFor(d, 'rev-parse --abbrev-ref HEAD 2>/dev/null'), { timeout: 2000 }).toString().trim() || 'unknown';
       const log = execSync(gitCmdFor(d, 'log -1 --format="%h|%cr|%s" 2>/dev/null'), { timeout: 2000 }).toString().trim().split('|');
       const dirty = execSync(gitCmdFor(d, 'status --porcelain 2>/dev/null'), { timeout: 2000 }).toString().trim().length > 0;
@@ -263,10 +268,8 @@ function pullGitProject(targetPath) {
     const gitCmd = (uid !== null && uid !== me)
       ? `sudo -H -u "#${uid}" git -C "${targetPath}" pull`
       : `git -C "${targetPath}" pull`;
-    exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
-      gitCache.time = 0; // invalidate cache
-      const out = (stdout || '') + (stderr || '');
-      if (err) return resolve({ ok: false, error: err.message, output: out });
+    ensureFilemodeFalse(targetPath);
+    const runFix = (out) => {
       // Auto-fix perms agar CRUD tidak 500 setelah pull (storage/ + bootstrap/cache harus bisa ditulis www-data).
       try {
         const isLaravel = fs.existsSync(path.join(targetPath, 'artisan'));
@@ -276,11 +279,34 @@ function pullGitProject(targetPath) {
           try { owner = execSync(`id -nu ${uid} 2>/dev/null`, { timeout: 2000 }).toString().trim(); } catch {}
           if (owner && uid !== null) {
             const fixOut = execSync(`bash /var/www/fix-permissions.sh "${targetPath}" --user "${owner}" 2>&1`, { timeout: 30_000 }).toString();
-            return resolve({ ok: true, output: out + '\n--- fix-permissions ---\n' + fixOut });
+            return { ok: true, output: out + '\n--- fix-permissions ---\n' + fixOut };
           }
         }
       } catch {}
-      resolve({ ok: true, output: out });
+      return { ok: true, output: out };
+    };
+    exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
+      gitCache.time = 0; // invalidate cache
+      const out = (stdout || '') + (stderr || '');
+      if (!err) return resolve(runFix(out));
+      // Jika gagal karena local changes (umumnya sisa mode/permission, bukan edit beneran),
+      // amankan dulu via stash lalu coba pull sekali lagi. Tidak pakai reset --hard agar tidak hapus kerjaan.
+      if (/would be overwritten|local changes|Your local changes|stash your changes/i.test(out)) {
+        const stashCmd = (uid !== null && uid !== me)
+          ? `sudo -H -u "#${uid}" git -C "${targetPath}" stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`
+          : `git -C "${targetPath}" stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`;
+        exec(stashCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (serr, sstdout, sstderr) => {
+          const sout = (sstdout || '') + (sstderr || '');
+          exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err2, stdout2, stderr2) => {
+            gitCache.time = 0;
+            const out2 = out + '\n--- autostash ---\n' + sout + '\n--- retry pull ---\n' + ((stdout2 || '') + (stderr2 || ''));
+            if (err2) return resolve({ ok: false, error: err2.message + ' (local changes di-stash otomatis, cek git stash list)', output: out2 });
+            return resolve(runFix(out2));
+          });
+        });
+        return;
+      }
+      return resolve({ ok: false, error: err.message, output: out });
     });
   });
 }
