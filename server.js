@@ -1209,8 +1209,11 @@ async function runDeployJob(job, p) {
     if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
     jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
 
-    // 3. Clone sebagai deployer
+    // 3. Clone sebagai deployer. Pre-create dir sebagai root dulu karena grup
+    // www-data hanya r-x di /var/www (ACL) sehingga deployer tidak bisa mkdir langsung.
     jobStep(job, 'git clone', 'running', '');
+    r = await runCmd(`mkdir -p ${shq(dest)} && chown ${p.deployer}:www-data ${shq(dest)} && chmod 2755 ${shq(dest)}`);
+    if (!r.ok) throw new Error('mkdir project gagal\n' + r.output);
     r = await ago('git', ['clone', '--branch', p.branch, p.repo, dest], { timeout: 300000 });
     if (!r.ok) throw new Error('git clone gagal\n' + r.output);
     await runCmd(`chown -R ${p.deployer}:www-data ${shq(dest)}`);
