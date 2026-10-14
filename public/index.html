@@ -882,9 +882,11 @@ select.input { appearance: auto; max-width: 100%; }
       <table>
         <thead>
           <tr>
-            <th style="width:110px">User</th>
-            <th style="width:130px">Schedule</th>
+            <th style="width:90px">User</th>
+            <th style="width:110px">Cron Expression</th>
+            <th style="width:160px">Schedule (Terjemahan)</th>
             <th>Command</th>
+            <th style="width:70px;text-align:right">Action</th>
           </tr>
         </thead>
         <tbody id="cronList"></tbody>
@@ -961,6 +963,46 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="cronModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="cronModalTitle">Edit Cron Schedule</span>
+      <button class="btn" id="cronModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+      <div style="font-size:12px;color:var(--mut)">Command: <code id="cronEditCmd" style="word-break:break-all">—</code></div>
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Preset Schedule</label>
+        <select id="cronPreset" class="input" style="width:100%">
+          <option value="* * * * *">Setiap menit (default Laravel scheduler)</option>
+          <option value="*/2 * * * *">Setiap 2 menit</option>
+          <option value="*/5 * * * *">Setiap 5 menit</option>
+          <option value="*/10 * * * *">Setiap 10 menit</option>
+          <option value="*/15 * * * *">Setiap 15 menit</option>
+          <option value="*/30 * * * *">Setiap 30 menit</option>
+          <option value="0 * * * *">Setiap jam (menit 00)</option>
+          <option value="0 0 * * *">Setiap hari jam 00:00 (tengah malam)</option>
+          <option value="0 2 * * *">Setiap hari jam 02:00</option>
+          <option value="0 3 * * *">Setiap hari jam 03:00</option>
+          <option value="custom">Custom expression...</option>
+        </select>
+      </div>
+      <div id="cronCustomWrap" style="display:none">
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Custom Cron (min hour dom mon dow)</label>
+        <input id="cronCustom" class="input" style="width:100%;font-family:var(--font-mono)" placeholder="*/5 * * * *" />
+      </div>
+      <div style="font-size:12px">Jadwal aktif: <strong id="cronLivePreview" style="color:var(--ac)">—</strong></div>
+      <div style="font-size:11.5px;color:var(--mut);background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+        Catatan: perintah <code>php artisan schedule:run</code> di Laravel umumnya dijalankan tiap menit agar scheduler internal Laravel (<code>->daily()</code>, <code>->hourly()</code>) bekerja tepat waktu. Interval lebih jarang menghemat CPU tetapi menunda eksekusi task terjadwal.
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" id="cronModalCancel">Batal</button>
+        <button class="btn-batch" id="cronModalSave">Simpan Schedule</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1379,7 +1421,97 @@ async function doBatchPull() {
   gitProjects();
 }
 
-let rawSupProcs = [];
+function humanCron(expr) {
+  const e = (expr || '').trim();
+  if (e === '* * * * *') return 'Setiap menit';
+  if (e === '*/2 * * * *') return 'Setiap 2 menit';
+  if (e === '*/5 * * * *') return 'Setiap 5 menit';
+  if (e === '*/10 * * * *') return 'Setiap 10 menit';
+  if (e === '*/15 * * * *') return 'Setiap 15 menit';
+  if (e === '*/30 * * * *') return 'Setiap 30 menit';
+  if (e === '0 * * * *' || e === '@hourly') return 'Setiap jam (menit 00)';
+  if (e === '0 0 * * *' || e === '@daily') return 'Setiap hari jam 00:00';
+  if (e === '0 0 * * 0' || e === '@weekly') return 'Setiap Minggu jam 00:00';
+  if (e === '0 0 1 * *' || e === '@monthly') return 'Setiap tanggal 1 jam 00:00';
+
+  const m = e.match(/^(\d+|\*|\*\/\d+)\s+(\d+|\*|\*\/\d+)\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)$/);
+  if (m) {
+    const [, min, hr, dom, mon, dow] = m;
+    if (dom === '*' && mon === '*' && dow === '*') {
+      if (!isNaN(min) && !isNaN(hr)) return `Setiap hari jam ${hr.padStart(2, '0')}:${min.padStart(2, '0')}`;
+      if (min.startsWith('*/') && hr === '*') return `Setiap ${min.slice(2)} menit`;
+    }
+  }
+  return e;
+}
+
+let activeEditCron = null;
+
+function openEditCron(user, schedule, cmd) {
+  activeEditCron = { user, schedule, cmd };
+  $('cronModalTitle').textContent = `Edit Cron (${user})`;
+  $('cronEditCmd').textContent = cmd;
+
+  const preset = $('cronPreset');
+  const found = Array.from(preset.options).some(o => o.value === schedule);
+  if (found) {
+    preset.value = schedule;
+    $('cronCustomWrap').style.display = 'none';
+  } else {
+    preset.value = 'custom';
+    $('cronCustom').value = schedule;
+    $('cronCustomWrap').style.display = 'block';
+  }
+  updateCronPreview();
+  $('cronModal').classList.add('open');
+}
+
+function updateCronPreview() {
+  const p = $('cronPreset').value;
+  const expr = p === 'custom' ? $('cronCustom').value.trim() : p;
+  $('cronLivePreview').textContent = `${expr} (${humanCron(expr)})`;
+}
+
+$('cronPreset').addEventListener('change', () => {
+  $('cronCustomWrap').style.display = $('cronPreset').value === 'custom' ? 'block' : 'none';
+  updateCronPreview();
+});
+$('cronCustom').addEventListener('input', updateCronPreview);
+$('cronModalClose').addEventListener('click', () => $('cronModal').classList.remove('open'));
+$('cronModalCancel').addEventListener('click', () => $('cronModal').classList.remove('open'));
+
+$('cronModalSave').addEventListener('click', async () => {
+  if (!activeEditCron) return;
+  const p = $('cronPreset').value;
+  const newSched = p === 'custom' ? $('cronCustom').value.trim() : p;
+  if (!newSched) return alert('Schedule tidak boleh kosong');
+
+  const btn = $('cronModalSave');
+  btn.disabled = true;
+  btn.textContent = 'Menyimpan...';
+
+  try {
+    const res = await fetch('/api/workers/cron', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user: activeEditCron.user,
+        oldSchedule: activeEditCron.schedule,
+        newSchedule: newSched,
+        cmd: activeEditCron.cmd
+      })
+    });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || 'Gagal mengubah cron');
+    $('cronModal').classList.remove('open');
+    workers();
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Simpan Schedule';
+  }
+});
 let workerFilter = 'all';
 
 function renderSupervisorList() {
@@ -1460,11 +1592,23 @@ async function workers() {
 
     // Cron jobs
     if (!cron.jobs.length) {
-      $('cronList').innerHTML = '<tr><td colspan="3" style="color:var(--mut)">No cron jobs found</td></tr>';
+      $('cronList').innerHTML = '<tr><td colspan="5" style="color:var(--mut)">No cron jobs found</td></tr>';
     } else {
-      $('cronList').innerHTML = cron.jobs.map(c =>
-        `<tr><td><strong>${c.user}</strong></td><td><code>${c.schedule}</code></td><td><code class="cmd-code" title="${c.cmd.replace(/"/g, '&quot;')}">${c.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></td></tr>`
-      ).join('');
+      $('cronList').innerHTML = cron.jobs.map(c => {
+        const tr = humanCron(c.schedule);
+        const escUser = (c.user || '').replace(/"/g, '&quot;');
+        const escSched = (c.schedule || '').replace(/"/g, '&quot;');
+        const escCmd = (c.cmd || '').replace(/"/g, '&quot;');
+        return `<tr>
+          <td><strong>${c.user}</strong></td>
+          <td><code>${c.schedule}</code></td>
+          <td style="color:var(--ac);font-weight:500">${tr}</td>
+          <td><code class="cmd-code" title="${escCmd}">${c.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></td>
+          <td style="text-align:right">
+            <button class="btn-sm" data-edit-cron="1" data-user="${escUser}" data-sched="${escSched}" data-cmd="${escCmd}">✎ Edit</button>
+          </td>
+        </tr>`;
+      }).join('');
     }
 
     // Laravel logs select

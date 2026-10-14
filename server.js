@@ -297,6 +297,50 @@ function getCronJobs() {
   return { jobs, schedProcs };
 }
 
+function updateCronSchedule(user, oldSchedule, newSchedule, cmd) {
+  return new Promise((resolve) => {
+    if (!user || typeof user !== 'string' || !/^[a-z_][a-z0-9_.-]{0,31}$/i.test(user)) {
+      return resolve({ ok: false, error: 'Invalid user' });
+    }
+    const cleanSched = (newSchedule || '').trim();
+    if (!/^(@\w+|\S+\s+\S+\s+\S+\s+\S+\s+\S+)$/.test(cleanSched)) {
+      return resolve({ ok: false, error: 'Invalid cron format (must be 5 fields, e.g. */5 * * * *)' });
+    }
+    let current;
+    try {
+      current = execSync(`crontab -u ${user} -l 2>/dev/null`).toString();
+    } catch (e) {
+      return resolve({ ok: false, error: 'Cannot read crontab for user ' + user });
+    }
+    const lines = current.split('\n');
+    let replaced = false;
+    const cleanCmd = (cmd || '').trim();
+    const newLines = lines.map((l) => {
+      const trimmed = l.trim();
+      if (!replaced && !trimmed.startsWith('#') && trimmed.includes(cleanCmd)) {
+        replaced = true;
+        return `${cleanSched} ${cleanCmd}`;
+      }
+      return l;
+    });
+
+    if (!replaced) {
+      return resolve({ ok: false, error: 'Cron job command not found in crontab' });
+    }
+
+    try {
+      const child = exec(`crontab -u ${user} -`, (err, stdout, stderr) => {
+        if (err) return resolve({ ok: false, error: (stderr || err.message).trim() });
+        resolve({ ok: true, output: `Schedule updated to ${cleanSched}` });
+      });
+      child.stdin.write(newLines.join('\n'));
+      child.stdin.end();
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+    }
+  });
+}
+
 function tailLog(file, lines = 100) {
   return new Promise((resolve) => {
     if (!file || typeof file !== 'string' || file.includes('\0')) return resolve({ ok: false, error: 'Invalid log path' });
@@ -595,6 +639,13 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const r = await restartServiceUnit(body && body.unit);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/workers/cron' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await updateCronSchedule(body && body.user, body && body.oldSchedule, body && body.newSchedule, body && body.cmd);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/workers/log') {
