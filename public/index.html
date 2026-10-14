@@ -1364,7 +1364,7 @@ select.input { appearance: auto; max-width: 100%; }
       <label style="font-size:12px;color:var(--mut)">Tipe project<br><select id="depType" class="input" style="width:100%"><option value="new">Baru (migrate --force)</option><option value="existing">Existing (import SQL dari path server)</option></select></label>
       <label style="font-size:12px;color:var(--mut)">DB name*<br><input id="depDbName" class="input" style="width:100%" placeholder="client_db" /></label>
       <label style="font-size:12px;color:var(--mut)">DB user*<br><input id="depDbUser" class="input" style="width:100%" placeholder="client_user" /></label>
-      <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /></label>
+      <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><span style="display:flex;gap:6px"><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /><button class="btn-sm" id="depGenPass" title="Generate password acak 16 karakter">🎲</button></span></label>
       <label style="font-size:12px;color:var(--mut)">Path SQL di server (existing only)<br><input id="depSqlPath" class="input" style="width:100%" placeholder="/var/backups/mysql/client_db_backup....sql.gz" /></label>
       <label style="font-size:12px;color:var(--mut)">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
       <label style="font-size:12px;color:var(--mut)">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
@@ -2675,6 +2675,13 @@ $('cronList').addEventListener('click', (e) => {
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
 $('depDryRun').addEventListener('click', () => depSubmit(true));
+$('depGenPass').addEventListener('click', () => {
+  // 16 karakter tanpa yang bermasalah di shell/SQL: tanpa ' " \ $ ` !
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%-_?';
+  const buf = new Uint32Array(16);
+  crypto.getRandomValues(buf);
+  $('depDbPass').value = Array.from(buf, x => chars[x % chars.length]).join('');
+});
 $('depStart').addEventListener('click', () => depSubmit(false));
 $('deployJobsRefresh').addEventListener('click', () => deployJobsRefresh(false));
 $('depJobs').addEventListener('click', (e) => {
