@@ -1107,7 +1107,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (p === '/api/me') return send(res, 200, JSON.stringify(session));
+  if (p === '/api/me') return send(res, 200, JSON.stringify({ ...session, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
   if (p === '/api/stats') {
     const s = lastStats && (Date.now() - lastStats.time < SAMPLE_INTERVAL_MS * 1.5) ? lastStats : getStats();
     if (!lastStats || s !== lastStats) lastStats = s;

@@ -15,6 +15,11 @@ const MAX_FAILS = 5;
 const LOCK_MS = 15 * 60_000;
 const CHKPWD_CANDIDATES = ['/usr/sbin/unix_chkpwd', '/sbin/unix_chkpwd', '/usr/lib/unix_chkpwd'];
 const USERNAME_RE = /^[a-z_][a-z0-9_.-]{0,31}$/i;
+// Matikan login via akun Linux (unix_chkpwd) bila hanya user aplikasi yang boleh masuk.
+// Set ALLOW_LINUX_LOGIN=0 di env. Default 1 (aman: tidak mengunci siapa pun).
+// PENTING: buat minimal 1 app admin dulu sebelum set 0, kalau tidak tidak ada
+// yang bisa login sama sekali (users.json saat ini mungkin masih kosong).
+const ALLOW_LINUX_LOGIN = String(process.env.ALLOW_LINUX_LOGIN ?? '1') !== '0';
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
 const sessions = new Map(); // token -> { user, admin, exp }
@@ -303,7 +308,11 @@ async function login(req, name, password) {
     return { ok: true, status: 200, user: appUser.username, admin: !!appUser.admin, setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
   }
 
-  // 2. Fallback to local Linux system accounts
+  // 2. Fallback to local Linux system accounts (bisa dimatikan via ALLOW_LINUX_LOGIN=0).
+  // Otorisasi git pull/restart/etc TIDAK tergantung akun Linux: yang dipakai hanya
+  // session.admin (dari users.json) dan proses app yang jalan sebagai root mengeksekusi
+  // git sebagai owner folder. Jadi user aplikasi tanpa akun Linux tetap bisa pull.
+  if (!ALLOW_LINUX_LOGIN) return bad();
   const user = lookupUser(name);
   // Always run the password check so unknown vs. known users are indistinguishable by timing.
   const valid = await checkPassword(user ? user.name : 'nobody-' + crypto.randomBytes(4).toString('hex'), password);
@@ -331,6 +340,7 @@ module.exports = {
   login,
   logout,
   getSession,
+  ALLOW_LINUX_LOGIN,
   listAppUsers,
   createAppUser,
   updateAppUser,
