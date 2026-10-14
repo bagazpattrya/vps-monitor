@@ -828,6 +828,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/workers" class="nav-link" data-view="workers"><span class="dot"></span>Workers &amp; Cron</a>
   <a href="#/git" class="nav-link" data-view="git"><span class="dot"></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes"><span class="dot"></span>Processes</a>
+  <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none"><span class="dot"></span>Backups</a>
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <div class="nav-foot">
@@ -1183,6 +1184,85 @@ select.input { appearance: auto; max-width: 100%; }
   </div>
   </div><!-- /view-processes -->
 
+  <!-- VIEW: BACKUPS -->
+  <div class="view-pane" id="view-backups">
+    <!-- KPI Cards -->
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>Database Backups</span><span class="pill ok" id="backupStatusPill">ACTIVE</span></div>
+        <div class="metric-row"><div class="big" id="backupTotalFiles">0</div><div class="sub-val" id="backupTotalSize">0 B total</div></div>
+      </div>
+      <div class="card-foot"><span>Storage Path</span><strong id="backupRootPath" style="color:var(--tx);font-family:var(--font-mono)">/home/zae/backups</strong></div>
+    </div>
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>Latest Backup</span><span class="badge" id="backupLatestBadge">—</span></div>
+        <div class="metric-row"><div class="big" id="backupLatestAge" style="font-size:22px;margin-top:4px">—</div><div class="sub-val" id="backupLatestExact">—</div></div>
+      </div>
+      <div class="card-foot"><span>Jadwal Otomatis</span><strong style="color:var(--tx)">00:00 (Tengah Malam)</strong></div>
+    </div>
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>GFS Retention Policy</span><span class="badge accent">Pruning</span></div>
+        <div style="display:flex;justify-content:space-between;margin:12px 0 8px;font-size:12px">
+          <div>Daily: <strong id="backupCountDaily" style="color:var(--ok)">0</strong></div>
+          <div>Weekly: <strong id="backupCountWeekly" style="color:var(--ac)">0</strong></div>
+          <div>Monthly: <strong id="backupCountMonthly" style="color:var(--warn)">0</strong></div>
+        </div>
+      </div>
+      <div class="card-foot"><span style="font-size:11px;color:var(--mut)">7 Hari (Daily) · 8 Minggu (Weekly) · 12 Bulan (Monthly)</span></div>
+    </div>
+
+    <!-- Backups Table -->
+    <div class="card c12">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>Daftar Arsip Backup</span>
+          <span class="badge" id="backupFilteredCount">0</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="backupSearch" class="input" placeholder="Filter database atau nama file..." style="min-width:200px" />
+          <div class="tabs" id="backupFilterTabs">
+            <button class="tab active" data-cat="all">Semua</button>
+            <button class="tab" data-cat="daily">Daily</button>
+            <button class="tab" data-cat="weekly">Weekly</button>
+            <button class="tab" data-cat="monthly">Monthly</button>
+            <button class="tab" data-cat="other">Manual / Lainnya</button>
+          </div>
+          <button class="btn" id="backupRefreshBtn">↻ Refresh</button>
+          <button class="btn ok" id="backupRunBtn" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">▶ Jalankan Backup Sekarang</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Target Database</th>
+              <th>Nama Arsip File</th>
+              <th style="width:110px">Kategori</th>
+              <th style="width:110px">Ukuran</th>
+              <th style="width:170px">Waktu Backup</th>
+              <th style="width:120px;text-align:right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="backupList">
+            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat data backup...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Backup Log Output Card -->
+    <div class="card c12" id="backupLogCard">
+      <div class="sec-head">
+        <h3 class="sec-title">Log Eksekusi Backup (backup.log)</h3>
+        <button class="btn-sm" id="btnToggleBackupLog">Sembunyikan Log</button>
+      </div>
+      <pre id="backupLogBox" style="margin:0;padding:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:12px;line-height:1.5;overflow:auto;max-height:260px;white-space:pre-wrap;word-break:break-word;color:var(--tx)"></pre>
+    </div>
+  </div><!-- /view-backups -->
+
   <!-- VIEW: FILE EXPLORER -->
   <div class="view-pane" id="view-files">
     <div class="card c12" id="filesCard">
@@ -1451,8 +1531,9 @@ j('/api/me').then(m => {
   if (m.admin) {
     if ($('navLinkUsers')) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles')) $('navLinkFiles').style.display = '';
+    if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
   }
-  if (!m.admin && (currentView() === 'users' || currentView() === 'files')) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups'].includes(currentView())) location.hash = '#/overview';
 }).catch(() => {});
 
 async function api(method, url, body) {
@@ -1465,6 +1546,102 @@ async function api(method, url, body) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'Request gagal');
   return d;
+}
+
+// ---- Backup Monitoring ----
+let rawBackups = [];
+let backupFilterCat = 'all';
+
+function fmtBackupAge(ts) {
+  if (!ts) return '—';
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Baru saja';
+  if (mins < 60) return `${mins} menit yang lalu`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} jam yang lalu`;
+  const days = Math.floor(hrs / 24);
+  return `${days} hari yang lalu`;
+}
+
+async function backups() {
+  if (!isAdmin) return;
+  try {
+    const d = await j('/api/backups');
+    rawBackups = d.files || [];
+    $('backupTotalFiles').textContent = d.totalFiles || 0;
+    $('backupTotalSize').textContent = `${fmtBytes(d.totalBytes || 0)} total`;
+    $('backupRootPath').textContent = d.root || 'Tidak tersedia';
+    $('backupCountDaily').textContent = (d.categories || {}).daily || 0;
+    $('backupCountWeekly').textContent = (d.categories || {}).weekly || 0;
+    $('backupCountMonthly').textContent = (d.categories || {}).monthly || 0;
+
+    if (d.latestTime) {
+      $('backupLatestAge').textContent = fmtBackupAge(d.latestTime);
+      $('backupLatestExact').textContent = new Date(d.latestTime).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const ageMs = Date.now() - d.latestTime;
+      if (ageMs <= 86400000 * 1.5) {
+        $('backupStatusPill').textContent = 'HEALTHY';
+        $('backupStatusPill').className = 'pill ok';
+        $('backupLatestBadge').textContent = 'Fresh (≤36 jam)';
+      } else {
+        $('backupStatusPill').textContent = 'STALE';
+        $('backupStatusPill').className = 'pill warn';
+        $('backupLatestBadge').textContent = 'Terlambat (>36 jam)';
+      }
+    } else {
+      $('backupLatestAge').textContent = '—';
+      $('backupLatestExact').textContent = 'Belum ada backup';
+      $('backupStatusPill').textContent = 'EMPTY';
+      $('backupStatusPill').className = 'pill down';
+      $('backupLatestBadge').textContent = '—';
+    }
+
+    $('backupRunBtn').style.display = d.canRun ? '' : 'none';
+    const logBox = $('backupLogBox');
+    if (d.logTail) {
+      logBox.textContent = d.logTail;
+    } else {
+      logBox.textContent = 'Log backup.log tidak tersedia.';
+    }
+
+    renderBackups();
+  } catch {
+    $('backupList').innerHTML = '<tr><td colspan="6" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat data backup</td></tr>';
+  }
+}
+
+function renderBackups() {
+  const q = ($('backupSearch').value || '').trim().toLowerCase();
+  const list = rawBackups.filter(b => {
+    if (backupFilterCat !== 'all' && b.category !== backupFilterCat) return false;
+    if (!q) return true;
+    return b.name.toLowerCase().includes(q) || b.dbName.toLowerCase().includes(q);
+  });
+
+  $('backupFilteredCount').textContent = `${list.length} file`;
+  if (!list.length) {
+    $('backupList').innerHTML = `<tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">${rawBackups.length ? 'Tidak ada backup yang cocok dengan filter' : 'Belum ada file backup yang terdeteksi'}</td></tr>`;
+    return;
+  }
+
+  const catColor = (c) => c === 'daily' ? 'ok' : (c === 'weekly' ? 'warn' : (c === 'monthly' ? 'down' : ''));
+  $('backupList').innerHTML = list.map(b => {
+    const fullDate = b.mtime ? new Date(b.mtime).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+    const stale = b.mtime && (Date.now() - b.mtime > 86400000 * 3) ? ' <span class="pill down">stale</span>' : '';
+    return `
+      <tr>
+        <td><strong>${escHtml(b.dbName)}</strong>${stale}</td>
+        <td><code style="font-size:11.5px">${escHtml(b.name)}</code></td>
+        <td><span class="pill ${catColor(b.category)}">${escHtml(b.category.toUpperCase())}</span></td>
+        <td style="color:var(--mut);font-family:var(--font-mono)">${fmtBytes(b.size)}</td>
+        <td style="color:var(--mut)">${fullDate}</td>
+        <td style="text-align:right">
+          <a href="/api/backups/download?file=${encodeURIComponent(b.relPath)}" class="btn-sm ok" style="text-decoration:none" download>⬇ Download</a>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 // ---- Mini File Explorer ----
@@ -2442,7 +2619,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'files', 'users'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2470,6 +2647,7 @@ function navigateView(name, refresh = true) {
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
     if (view === 'processes') procs();
+    if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
   }
@@ -2536,6 +2714,45 @@ $('gitList').addEventListener('click', async (e) => {
 $('gitModalClose').addEventListener('click', () => $('gitModal').classList.remove('open'));
 $('gitModal').addEventListener('click', (e) => {
   if (e.target === $('gitModal')) $('gitModal').classList.remove('open');
+});
+
+// Backup Events
+$('backupRefreshBtn').addEventListener('click', backups);
+$('backupSearch').addEventListener('input', renderBackups);
+$('backupFilterTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('#backupFilterTabs .tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  backupFilterCat = btn.dataset.cat || 'all';
+  renderBackups();
+});
+$('btnToggleBackupLog').addEventListener('click', () => {
+  const box = $('backupLogBox');
+  const btn = $('btnToggleBackupLog');
+  if (box.style.display === 'none') {
+    box.style.display = 'block';
+    btn.textContent = 'Sembunyikan Log';
+  } else {
+    box.style.display = 'none';
+    btn.textContent = 'Tampilkan Log';
+  }
+});
+$('backupRunBtn').addEventListener('click', async () => {
+  if (!confirm('Jalankan proses backup MySQL sekarang di server? Ini akan mengeksekusi /home/zae/backup-mysql.sh')) return;
+  const btn = $('backupRunBtn');
+  btn.disabled = true;
+  btn.textContent = 'Menjalankan Backup...';
+  try {
+    const res = await api('POST', '/api/backups/run');
+    alert(res.output || 'Backup selesai dijalankan');
+    backups();
+  } catch (err) {
+    alert(err.message || 'Gagal menjalankan backup');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Jalankan Backup Sekarang';
+  }
 });
 
 // File Explorer Events
@@ -2744,6 +2961,7 @@ setInterval(() => {
   else if (v === 'workers') { workers(); }
   else if (v === 'storage') { storage(); }
   else if (v === 'git') { gitProjects(); }
+  else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
 }, 15000);
 </script>

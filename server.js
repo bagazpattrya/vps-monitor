@@ -956,6 +956,127 @@ function readFsFile(filePath, maxBytes = 524_288) {
   };
 }
 
+// ---- Backup Monitoring & Download helpers ----
+const BACKUP_CANDIDATES = [
+  process.env.BACKUP_DIR,
+  '/home/zae/backups',
+  '/var/backups',
+  '/backups',
+  '/backup'
+].filter(Boolean);
+
+function getBackupRootDir() {
+  for (const c of BACKUP_CANDIDATES) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+function getBackupInfo() {
+  const root = getBackupRootDir();
+  if (!root) {
+    return {
+      available: false,
+      root: null,
+      totalFiles: 0,
+      totalBytes: 0,
+      latestTime: null,
+      categories: { daily: 0, weekly: 0, monthly: 0, other: 0 },
+      files: [],
+      logTail: null,
+      canRun: false,
+    };
+  }
+
+  const files = [];
+  let totalBytes = 0;
+  let latestTime = null;
+  const categories = { daily: 0, weekly: 0, monthly: 0, other: 0 };
+
+  function scanFolder(dir, category) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory() && dir === root) {
+        const cat = ['daily', 'weekly', 'monthly'].includes(e.name.toLowerCase()) ? e.name.toLowerCase() : 'other';
+        scanFolder(full, cat);
+      } else if (e.isFile()) {
+        if (e.name === 'backup.log' || e.name.startsWith('.')) continue;
+        if (!/\.(sql|gz|tar|tgz|zip|dump|bak)$/i.test(e.name)) continue;
+        let s = null;
+        try { s = fs.statSync(full); } catch {}
+        if (!s) continue;
+
+        totalBytes += s.size;
+        if (!latestTime || s.mtimeMs > latestTime) latestTime = s.mtimeMs;
+
+        const cat = category || 'other';
+        categories[cat] = (categories[cat] || 0) + 1;
+
+        // Extract clean DB name from pattern (e.g. "bfin_db_backup12okt2026-DAILY.sql.gz" -> "bfin_db")
+        let dbName = e.name.replace(/_backup\d+.*$/i, '').replace(/_\d{8}_\d{6}.*$/i, '').replace(/\.(sql|gz|tar|tgz|zip|dump|bak).*$/i, '');
+        if (!dbName || dbName === e.name) dbName = e.name.split('.')[0];
+
+        files.push({
+          name: e.name,
+          relPath: path.relative(root, full),
+          category: cat,
+          dbName,
+          size: s.size,
+          mtime: s.mtimeMs,
+        });
+      }
+    }
+  }
+
+  scanFolder(root, null);
+  files.sort((a, b) => b.mtime - a.mtime);
+
+  // Read tail of backup.log if exists
+  let logTail = null;
+  const logFile = path.join(root, 'backup.log');
+  if (fs.existsSync(logFile)) {
+    try {
+      const txt = fs.readFileSync(logFile, 'utf8').trim().split('\n');
+      logTail = txt.slice(-60).join('\n');
+    } catch {}
+  }
+
+  const scriptPath = fs.existsSync('/home/zae/backup-mysql.sh') ? '/home/zae/backup-mysql.sh' : null;
+
+  return {
+    available: true,
+    root,
+    totalFiles: files.length,
+    totalBytes,
+    latestTime,
+    categories,
+    files,
+    logTail,
+    canRun: Boolean(scriptPath),
+  };
+}
+
+function runManualBackup() {
+  return new Promise((resolve) => {
+    const script = fs.existsSync('/home/zae/backup-mysql.sh') ? '/home/zae/backup-mysql.sh' : null;
+    if (!script) return resolve({ ok: false, error: 'Script /home/zae/backup-mysql.sh tidak ditemukan' });
+
+    let uid = null;
+    try { uid = fs.statSync(script).uid; } catch {}
+    const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
+    const cmd = (uid !== null && uid !== me)
+      ? `sudo -H -u "#${uid}" bash "${script}" --cron 2>&1`
+      : `bash "${script}" --cron 2>&1`;
+
+    exec(cmd, { timeout: 180_000 }, (err, stdout, stderr) => {
+      const out = (stdout || '') + (stderr || '');
+      resolve({ ok: !err, output: out || (err ? err.message : 'Backup selesai') });
+    });
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
@@ -1079,6 +1200,43 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
     return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
+  }
+  if (p === '/api/backups' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const info = getBackupInfo();
+    return send(res, 200, JSON.stringify(info));
+  }
+  if (p === '/api/backups/run' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    audit(session.user, 'backup.run', 'mysql');
+    const r = await runManualBackup();
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/backups/download') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const rel = url.searchParams.get('file');
+    if (!rel || typeof rel !== 'string' || rel.includes('..') || rel.includes('\0')) {
+      return send(res, 400, 'Invalid backup file path', 'text/plain');
+    }
+    const root = getBackupRootDir();
+    if (!root) return send(res, 404, 'Backup storage not configured', 'text/plain');
+    const full = path.normalize(path.join(root, rel));
+    if (!full.startsWith(root + path.sep) && full !== root) {
+      return send(res, 400, 'Invalid backup file path', 'text/plain');
+    }
+    if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
+      return send(res, 404, 'Backup file not found', 'text/plain');
+    }
+    const stat = fs.statSync(full);
+    const filename = path.basename(full);
+    audit(session.user, 'backup.download', rel, `size=${stat.size}`);
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
+      'Content-Length': stat.size,
+    });
+    fs.createReadStream(full).pipe(res);
+    return;
   }
   if (p === '/api/fs/list') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
