@@ -1076,6 +1076,23 @@ function runManualBackup() {
   });
 }
 
+// Cari seeder role/permission/user untuk dijalankan setelah migrate fresh.
+// Dipakai deploy project baru saja (DB kosong) — skip bila tidak ada.
+// TIDAK dipakai di pull flow (data live, seeder user bisa duplikat/reset user).
+function detectRoleSeeders(dir) {
+  try {
+    const seedersDir = path.join(dir, 'database', 'seeders');
+    if (!fs.existsSync(seedersDir)) return [];
+    const files = fs.readdirSync(seedersDir);
+    const isRolePerm = (f) => /^(roles?|permissions?|roles?.*permissions?|permissions?.*roles?)seeder\.php$/i.test(f);
+    const isUser = (f) => /^userseeder\.php$/i.test(f);
+    const matched = files.filter((f) => isRolePerm(f) || isUser(f));
+    // role/permission dulu, user terakhir (user bisa referensi role)
+    matched.sort((a, b) => (isUser(a) ? 1 : 0) - (isUser(b) ? 1 : 0));
+    return matched.map((f) => path.basename(f, '.php'));
+  } catch { return []; }
+}
+
 // ---- Auto Deploy (Laravel Git-based SOP, langsung ke domain produksi) ----
 // Prinsip permission (anti bootstrap/cache 500):
 // - root hanya untuk: mysql, nginx, certbot, supervisor, cron, chown.
@@ -1266,6 +1283,22 @@ async function runDeployJob(job, p) {
       r = await ago(phpBin(), [path.join(dest, 'artisan'), 'migrate', '--force'], { timeout: 300000 });
       if (!r.ok) throw new Error('migrate gagal\n' + r.output.slice(-3000));
       jobStep(job, 'migrate --force', 'ok', r.output.slice(-1500));
+
+      // Seeder role/permission/user bila ada di database/seeders, skip bila tidak ada.
+      const seeders = detectRoleSeeders(dest);
+      if (!seeders.length) {
+        jobStep(job, 'db:seed role/user', 'skip', 'tidak ada seeder role/permission/user');
+      } else {
+        jobStep(job, 'db:seed role/user', 'running', seeders.join(', '));
+        let sOut = '';
+        for (const cls of seeders) {
+          r = await ago(phpBin(), [path.join(dest, 'artisan'), 'db:seed', `--class=${cls}`, '--force'], { timeout: 120000 });
+          sOut += `\n--- db:seed --class=${cls} --force ---\n` + r.output.slice(-2000);
+          if (!r.ok) throw new Error(`seeder ${cls} gagal\n` + r.output.slice(-3000));
+        }
+        r = await ago(phpBin(), [path.join(dest, 'artisan'), 'permission:cache-reset'], { timeout: 60000 });
+        jobStep(job, 'db:seed role/user', 'ok', sOut.slice(-4000));
+      }
     } else {
       jobStep(job, 'import sql', 'running', p.sqlPath);
       if (!fs.existsSync(p.sqlPath)) throw new Error(`File SQL tidak ada: ${p.sqlPath}`);
