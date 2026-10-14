@@ -6,100 +6,1235 @@
 <title>VPS Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-:root{--bg:#0f1115;--card:#171b22;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--ok:#2fbf71;--warn:#f5a524;--bad:#f31260}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{padding:16px 20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-header h1{font-size:18px;margin:0}header .sub{color:var(--mut);font-size:12px}
-.wrap{padding:0 20px 30px;display:grid;gap:14px;grid-template-columns:repeat(12,1fr)}
-.card{background:var(--card);border:1px solid #232a35;border-radius:12px;padding:14px}
-.c3{grid-column:span 3}.c4{grid-column:span 4}.c6{grid-column:span 6}.c12{grid-column:span 12}
-@media(max-width:900px){.c3,.c4,.c6{grid-column:span 12}}
-.big{font-size:28px;font-weight:700}.mut{color:var(--mut);font-size:12px}
-.bar{height:8px;background:#242c38;border-radius:99px;overflow:hidden;margin-top:8px}.bar>i{display:block;height:100%;background:var(--ac)}
-table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #232a35}th{color:var(--mut);font-weight:600}
-.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;background:#242c38}.pill.ok{background:rgba(47,191,113,.2);color:var(--ok)}.pill.down{background:rgba(243,18,96,.2);color:var(--bad)}
-code{color:#9fd}
+:root {
+  --bg: #090b0e;
+  --bg-card: #11141a;
+  --bg-elev: #171b24;
+  --border: #222734;
+  --border-light: #2d3446;
+  --tx: #f0f4f8;
+  --mut: #8a94a6;
+  --ac: #3b82f6;
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+  --radius: 12px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--tx);
+  font: 13.5px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Header & Navbar */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(9, 11, 14, 0.82);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.meta-pills {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.badge {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--mut);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge strong { color: var(--tx); font-weight: 500; }
+
+.header-right {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.btn {
+  background: var(--bg-elev);
+  color: var(--tx);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn:hover {
+  background: var(--border);
+  border-color: var(--border-light);
+}
+
+/* Main Grid Layout */
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(12, 1fr);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: border-color 0.2s ease;
+}
+.card:hover { border-color: var(--border-light); }
+
+.c3 { grid-column: span 3; }
+.c4 { grid-column: span 4; }
+.c8 { grid-column: span 8; }
+.c12 { grid-column: span 12; }
+
+@media (max-width: 1100px) {
+  .c3 { grid-column: span 6; }
+  .c4, .c8 { grid-column: span 12; }
+}
+@media (max-width: 640px) {
+  header, .container { padding-left: 14px; padding-right: 14px; }
+  .c3 { grid-column: span 12; }
+}
+
+/* KPI Metric Cards */
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--mut);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+
+.metric-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.big {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.sub-val {
+  font-size: 12px;
+  color: var(--mut);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  height: 6px;
+  background: var(--bg-elev);
+  border-radius: 99px;
+  overflow: hidden;
+  margin: 12px 0 10px;
+}
+
+.bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--ac);
+  border-radius: 99px;
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.3s ease;
+}
+
+.card-foot {
+  display: flex;
+  justify-content: space-between;
+  color: var(--mut);
+  font-size: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Net Speed Layout */
+.net-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 6px 0 10px;
+}
+.net-box {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.net-label { font-size: 11px; color: var(--mut); display: flex; align-items: center; gap: 4px; }
+.net-speed { font-size: 16px; font-weight: 600; margin-top: 2px; }
+
+/* Section Headers & Controls */
+.sec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.sec-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tabs {
+  display: inline-flex;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.tab {
+  background: transparent;
+  color: var(--mut);
+  border: 0;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tab.active {
+  background: var(--bg-card);
+  color: var(--tx);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* Services Grid */
+.svc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: auto;
+}
+.svc-item {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.svc-name {
+  font-weight: 500;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.pill.ok { background: rgba(16, 185, 129, 0.15); color: var(--ok); }
+.pill.down { background: rgba(239, 68, 68, 0.15); color: var(--bad); }
+
+/* Table & Process Controls */
+.proc-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.input {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--tx);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font-size: 12.5px;
+  outline: none;
+  min-width: 200px;
+}
+.input:focus { border-color: var(--ac); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 -18px -18px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+th, td {
+  text-align: left;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  color: var(--mut);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(23, 27, 36, 0.5);
+  cursor: pointer;
+  user-select: none;
+}
+th:hover { color: var(--tx); }
+tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+
+.usage-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 90px;
+}
+.mini-bar {
+  width: 44px;
+  height: 5px;
+  background: var(--bg-elev);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.mini-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.cmd-code {
+  display: inline-block;
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: #cbd5e1;
+  background: transparent;
+  padding: 0;
+}
+.chart-box {
+  position: relative;
+  height: 220px;
+  width: 100%;
+}
+
+/* Git Projects */
+.git-list { display: flex; flex-direction: column; gap: 18px; }
+.git-group {
+  background: rgba(23, 27, 36, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.git-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.git-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.git-group-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .git-group-items { grid-template-columns: 1fr; }
+}
+.git-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: all 0.15s ease;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+.git-item:hover {
+  border-color: var(--border-light);
+  background: #1c212d;
+}
+.git-item.selected {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.08);
+}
+.git-item.pulling { border-color: var(--ac); background: rgba(59, 130, 246, 0.12); }
+.git-item.pull-ok { border-color: var(--ok); }
+.git-item.pull-err { border-color: var(--bad); }
+
+.git-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-card);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  margin: 0;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.git-item:hover .git-check {
+  border-color: var(--mut);
+}
+.git-check:checked {
+  background: var(--ac);
+  border-color: var(--ac);
+}
+.git-check:checked::before {
+  content: "";
+  width: 8px;
+  height: 4.5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(0.5px, -0.5px);
+}
+.git-info { flex: 1; min-width: 0; }
+.git-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.git-meta {
+  font-size: 12px;
+  color: var(--mut);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 3px;
+}
+.git-meta code { color: var(--ac); }
+.git-last-pull {
+  font-size: 11px;
+  color: var(--mut);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-pull {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--ok);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.2s, background 0.2s;
+}
+.btn-pull:hover { background: rgba(16, 185, 129, 0.2); }
+.btn-pull:disabled { opacity: 0.5; cursor: wait; }
+
+.btn-batch {
+  background: var(--ac);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.2s;
+}
+.btn-batch:disabled { opacity: 0.5; cursor: wait; }
+
+/* Log Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  max-width: 560px;
+  width: calc(100% - 40px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.modal-body {
+  padding: 14px 16px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.modal-body.ok { color: var(--ok); }
+.modal-body.err { color: var(--bad); }
 </style>
 </head>
 <body>
+
 <header>
-<h1>VPS Monitor</h1>
-<span class="sub" id="host">—</span>
-<span class="sub" id="uptime">—</span>
-<span class="sub">auto-refresh 3s · <code>/api/stats</code></span>
-<span style="margin-left:auto;display:flex;gap:10px;align-items:center">
-<span class="sub" id="who">—</span>
-<button id="logout" style="background:#242c38;color:var(--tx);border:0;border-radius:8px;padding:5px 12px;cursor:pointer">Logout</button>
-</span>
+  <div class="brand">
+    <span>VPS Monitor</span>
+  </div>
+  <div class="meta-pills">
+    <span class="badge" id="host"><strong>—</strong></span>
+    <span class="badge" id="os" style="display:none"></span>
+    <span class="badge" id="uptime">up —</span>
+    <span class="badge" id="time">—</span>
+  </div>
+  <div class="header-right">
+    <span class="badge" id="who"><strong>—</strong></span>
+    <button class="btn" id="logout">Logout</button>
+  </div>
 </header>
-<div class="wrap">
-<div class="card c3"><div class="mut">CPU <span id="cores"></span></div><div class="big" id="cpu">—</div><div class="bar"><i id="cpuBar"></i></div><div class="mut" id="load">—</div></div>
-<div class="card c3"><div class="mut">Memory</div><div class="big" id="mem">—</div><div class="bar"><i id="memBar"></i></div><div class="mut" id="memDet">—</div></div>
-<div class="card c3"><div class="mut">Disk /</div><div class="big" id="disk">—</div><div class="bar"><i id="diskBar"></i></div><div class="mut" id="diskDet">—</div></div>
-<div class="card c3"><div class="mut">Network (total)</div><div class="big" id="net">—</div><div class="mut" id="swap">—</div><div class="mut" id="time">—</div></div>
-<div class="card c6"><h3 style="margin:0 0 8px">History (last 2h)</h3><canvas id="hist" height="120"></canvas></div>
-<div class="card c6"><h3 style="margin:0 0 8px">Services</h3><div id="svc" style="display:flex;gap:8px;flex-wrap:wrap"></div><div class="mut" style="margin-top:8px">nginx · mysql · php8.4-fpm · mosquitto · redis · ssh via <code>systemctl is-active</code></div></div>
-<div class="card c12"><h3 style="margin:0 0 8px">Top processes</h3><table><thead><tr><th>PID</th><th>USER</th><th>CPU%</th><th>MEM%</th><th>CMD</th></tr></thead><tbody id="procs"></tbody></table></div>
+
+<main class="container">
+  <!-- CPU -->
+  <div class="card c3">
+    <div>
+      <div class="card-head">
+        <span>CPU Usage</span>
+        <span id="cores">—</span>
+      </div>
+      <div class="metric-row">
+        <div class="big" id="cpu">—</div>
+        <div class="sub-val" id="cpuModel">—</div>
+      </div>
+      <div class="bar"><i id="cpuBar"></i></div>
+    </div>
+    <div class="card-foot">
+      <span>Load Avg</span>
+      <strong id="load" style="color:var(--tx)">—</strong>
+    </div>
+  </div>
+
+  <!-- Memory -->
+  <div class="card c3">
+    <div>
+      <div class="card-head">
+        <span>Memory</span>
+        <span id="memAvail">—</span>
+      </div>
+      <div class="metric-row">
+        <div class="big" id="mem">—</div>
+        <div class="sub-val" id="memDet">—</div>
+      </div>
+      <div class="bar"><i id="memBar"></i></div>
+    </div>
+    <div class="card-foot">
+      <span id="swap">Swap: —</span>
+      <span id="cached">Cache: —</span>
+    </div>
+  </div>
+
+  <!-- Disk -->
+  <div class="card c3">
+    <div>
+      <div class="card-head">
+        <span>Disk Space (/)</span>
+        <span id="inodes">—</span>
+      </div>
+      <div class="metric-row">
+        <div class="big" id="disk">—</div>
+        <div class="sub-val" id="diskFree">—</div>
+      </div>
+      <div class="bar"><i id="diskBar"></i></div>
+    </div>
+    <div class="card-foot">
+      <span>Used / Total</span>
+      <strong id="diskDet" style="color:var(--tx)">—</strong>
+    </div>
+  </div>
+
+  <!-- Network -->
+  <div class="card c3">
+    <div>
+      <div class="card-head">
+        <span>Network Traffic</span>
+        <span>Live Rate</span>
+      </div>
+      <div class="net-grid">
+        <div class="net-box">
+          <div class="net-label"><span style="color:var(--ok)">↓</span> Download</div>
+          <div class="net-speed" id="netRxRate">0 B/s</div>
+        </div>
+        <div class="net-box">
+          <div class="net-label"><span style="color:var(--ac)">↑</span> Upload</div>
+          <div class="net-speed" id="netTxRate">0 B/s</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-foot">
+      <span>Total Traffic</span>
+      <strong id="netTotal" style="color:var(--tx)">—</strong>
+    </div>
+  </div>
+
+  <!-- History Chart -->
+  <div class="card c8">
+    <div class="sec-head">
+      <h3 class="sec-title">System Metrics History</h3>
+      <div class="tabs" id="histTabs">
+        <button class="tab" data-limit="90">15m</button>
+        <button class="tab" data-limit="360">1h</button>
+        <button class="tab active" data-limit="720">2h</button>
+        <button class="tab" data-limit="2160">6h</button>
+        <button class="tab" data-limit="8640">24h</button>
+      </div>
+    </div>
+    <div class="chart-box">
+      <canvas id="hist"></canvas>
+    </div>
+  </div>
+
+  <!-- Systemd Services -->
+  <div class="card c4">
+    <div class="sec-head">
+      <h3 class="sec-title">System Services</h3>
+      <span class="badge" id="svcSummary">—</span>
+    </div>
+    <div class="svc-grid" id="svc"></div>
+    <div class="card-foot" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <span>Checked via <code>systemctl is-active</code></span>
+      <span>15s interval</span>
+    </div>
+  </div>
+
+  <!-- Git Projects (DevOps) -->
+  <div class="card c12">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>Git Deployments</span>
+        <span class="badge" id="gitCount">0</span>
+      </h3>
+      <div class="proc-controls">
+        <input type="search" id="gitSearch" class="input" placeholder="Filter repos, folders, branches..." />
+        <button class="btn-batch" id="gitBatchPull" style="display:none">⬇ Pull Selected (<span id="gitSelectedCount">0</span>)</button>
+        <button class="btn" id="gitRefresh">Scan Repos</button>
+      </div>
+    </div>
+    <div class="git-list" id="gitList">
+      <span style="color:var(--mut);font-size:12px">Scanning for git repositories...</span>
+    </div>
+  </div>
+
+  <!-- Top Processes -->
+  <div class="card c12">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>Top Processes</span>
+        <span class="badge" id="procCount">0</span>
+      </h3>
+      <div class="proc-controls">
+        <input type="search" id="procSearch" class="input" placeholder="Filter command, user, or PID..." />
+        <div class="tabs" id="sortTabs">
+          <button class="tab active" data-sort="cpu">Sort: CPU%</button>
+          <button class="tab" data-sort="mem">Sort: MEM%</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>PID</th>
+            <th>User</th>
+            <th>State</th>
+            <th>CPU %</th>
+            <th>MEM %</th>
+            <th>RSS</th>
+            <th>Started</th>
+            <th>Command</th>
+          </tr>
+        </thead>
+        <tbody id="procs"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="gitModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="gitModalTitle">Git Pull Output</span>
+      <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div class="modal-body" id="gitModalBody"></div>
+  </div>
 </div>
+
 <script>
-const $=id=>document.getElementById(id);
-const fmtGB=b=>(b/1073741824).toFixed(1)+'G';
-const fmtMB=b=>b>1073741824?fmtGB(b):(b/1048576).toFixed(0)+'M';
+const $ = id => document.getElementById(id);
+
+const fmtBytes = (b) => {
+  if (!b || b <= 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(i > 2 ? 1 : 0) + ' ' + u[i];
+};
+
+const barColor = (pct) => {
+  if (pct >= 90) return 'var(--bad)';
+  if (pct >= 75) return 'var(--warn)';
+  return 'var(--ac)';
+};
+
+const setBar = (el, pct) => {
+  el.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  el.style.backgroundColor = barColor(pct);
+};
+
+const fmtCpu = (m) => (m || '')
+  .replace(/\s*with\s+Radeon.*$/i, '')
+  .replace(/\s*\d+-Core\s+Processor.*$/i, '')
+  .replace(/\s*Processor.*$/i, '')
+  .replace(/\(R\)|\(TM\)|CPU/gi, '')
+  .replace(/@\s*[\d.]+\s*GHz/gi, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 let chart;
-async function j(u){
- const r=await fetch(u);
- if(r.status===401){location.href='/login';throw new Error('unauthorized')}
- return r.json();
+let histLimit = 720;
+let prevNet = null;
+let rawProcs = [];
+let procSort = 'cpu';
+
+async function j(u) {
+  const r = await fetch(u);
+  if (r.status === 401) {
+    location.href = '/login';
+    throw new Error('unauthorized');
+  }
+  if (!r.ok) throw new Error('fetch error');
+  return r.json();
 }
-j('/api/me').then(m=>{$('who').textContent=m.user+(m.admin?' (admin)':'')}).catch(()=>{});
-$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.href='/login'};
-async function stats(){
- try{
-  const s=await j('/api/stats');
-  $('host').textContent=s.hostname+' · '+s.cpu.cores+' cores · '+s.cpu.model.slice(0,28);
-  const up=Math.floor(s.uptime);const d=Math.floor(up/86400),h=Math.floor(up%86400/3600),m=Math.floor(up%3600/60);
-  $('uptime').textContent=`up ${d}d ${h}h ${m}m`;
-  $('cores').textContent=`(${s.cpu.cores} cores)`;
-  $('cpu').textContent=s.cpu.pct+'%';$('cpuBar').style.width=s.cpu.pct+'%';
-  $('load').textContent=`load ${s.load.l1} ${s.load.l5} ${s.load.l15}`;
-  $('mem').textContent=s.mem.pct+'%';$('memBar').style.width=s.mem.pct+'%';
-  $('memDet').textContent=`${fmtMB(s.mem.used)} / ${fmtMB(s.mem.total)}`;
-  $('disk').textContent=s.disk.pct+'%';$('diskBar').style.width=s.disk.pct+'%';
-  $('diskDet').textContent=`${fmtGB(s.disk.used)} / ${fmtGB(s.disk.total)} avail ${fmtGB(s.disk.avail)}`;
-  $('net').textContent=`↓ ${fmtMB(s.net.rx)} ↑ ${fmtMB(s.net.tx)}`;
-  $('swap').textContent=`swap ${(s.mem.swapUsed/1048576).toFixed(0)}M / ${(s.mem.swapTotal/1048576).toFixed(0)}M`;
-  $('time').textContent=new Date(s.time).toLocaleString();
- }catch(e){}
+
+j('/api/me').then(m => {
+  $('who').innerHTML = `<strong>${m.user}</strong>${m.admin ? ' · admin' : ''}`;
+}).catch(() => {});
+
+$('logout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  location.href = '/login';
+};
+
+async function stats() {
+  try {
+    const s = await j('/api/stats');
+    $('host').innerHTML = `<strong>${s.hostname}</strong>`;
+    if (s.os && s.os !== s.hostname) {
+      $('os').innerHTML = `<strong>${s.os}</strong>`;
+      $('os').style.display = '';
+    } else {
+      $('os').style.display = 'none';
+    }
+
+    const up = Math.floor(s.uptime);
+    const d = Math.floor(up / 86400), h = Math.floor((up % 86400) / 3600), m = Math.floor((up % 3600) / 60);
+    $('uptime').textContent = `up ${d}d ${h}h ${m}m`;
+    $('time').textContent = new Date(s.time).toLocaleTimeString();
+
+    // CPU
+    $('cores').textContent = `${s.cpu.cores} Cores`;
+    $('cpu').textContent = s.cpu.pct.toFixed(1) + '\%';
+    const cm = fmtCpu(s.cpu.model);
+    $('cpuModel').textContent = cm;
+    $('cpuModel').title = s.cpu.model || '';
+    setBar($('cpuBar'), s.cpu.pct);$('load').textContent = `${s.load.l1.toFixed(2)} · ${s.load.l5.toFixed(2)} · ${s.load.l15.toFixed(2)}`;
+
+    // Memory
+    $('mem').textContent = s.mem.pct.toFixed(1) + '\%';$('memDet').textContent = `${fmtBytes(s.mem.used)} / ${fmtBytes(s.mem.total)}`;
+    $('memAvail').textContent = s.mem.available ? `${fmtBytes(s.mem.available)} avail` : '';
+    setBar($('memBar'), s.mem.pct);$('swap').textContent = s.mem.swapTotal ? `Swap: ${fmtBytes(s.mem.swapUsed)} / ${fmtBytes(s.mem.swapTotal)}` : 'Swap: Off';
+    $('cached').textContent = `Cache: ${fmtBytes((s.mem.cached || 0) + (s.mem.buffers || 0))}`;
+
+    // Disk
+    $('disk').textContent = s.disk.pct.toFixed(1) + '\%';$('diskFree').textContent = `${fmtBytes(s.disk.avail)} free`;
+    $('diskDet').textContent = `${fmtBytes(s.disk.used)} / ${fmtBytes(s.disk.total)}`;
+    $('inodes').textContent = s.disk.inodesPct != null ? `Inodes ${s.disk.inodesPct}%` : 'Mount /';
+    setBar($('diskBar'), s.disk.pct);
+
+    // Network Live Throughput + Total
+    if (prevNet && s.time > prevNet.time) {
+      const dt = (s.time - prevNet.time) / 1000;
+      const rxRate = Math.max(0, (s.net.rx - prevNet.rx) / dt);
+      const txRate = Math.max(0, (s.net.tx - prevNet.tx) / dt);
+      $('netRxRate').textContent = fmtBytes(rxRate) + '/s';$('netTxRate').textContent = fmtBytes(txRate) + '/s';
+    }
+    prevNet = { rx: s.net.rx, tx: s.net.tx, time: s.time };
+    $('netTotal').textContent = `↓ ${fmtBytes(s.net.rx)} · ↑ ${fmtBytes(s.net.tx)}`;
+  } catch (e) {}
 }
-async function procs(){
- try{
-  const d=await j('/api/processes');
-  $('procs').innerHTML=d.rows.map(r=>`<tr><td>${r.pid}</td><td>${r.user}</td><td>${r.cpu}</td><td>${r.mem}</td><td><code>${r.cmd.replace(/</g,'&lt;')}</code></td></tr>`).join('');
- }catch(e){}
+
+function renderProcs() {
+  const q = $('procSearch').value.trim().toLowerCase();
+  const filtered = rawProcs
+    .filter(r => !q || r.cmd.toLowerCase().includes(q) || r.user.toLowerCase().includes(q) || String(r.pid).includes(q))
+    .sort((a, b) => (b[procSort] || 0) - (a[procSort] || 0));
+
+  $('procCount').textContent = filtered.length;
+  $('procs').innerHTML = filtered.map(r => {
+    const rssBytes = (parseInt(r.rss, 10) || 0) * 1024;
+    const safeCmd = r.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<tr>
+      <td><code>${r.pid}</code></td>
+      <td><strong>${r.user}</strong></td>
+      <td style="color:var(--mut)">${r.stat || '—'}</td>
+      <td>
+        <div class="usage-cell">
+          <span style="width:38px">${r.cpu.toFixed(1)}%</span>
+          <div class="mini-bar"><i style="width:${Math.min(100, r.cpu)}%;background:${barColor(r.cpu)}"></i></div>
+        </div>
+      </td>
+      <td>
+        <div class="usage-cell">
+          <span style="width:38px">${r.mem.toFixed(1)}%</span>
+          <div class="mini-bar"><i style="width:${Math.min(100, r.mem)}%;background:${barColor(r.mem)}"></i></div>
+        </div>
+      </td>
+      <td style="color:var(--mut)">${fmtBytes(rssBytes)}</td>
+      <td style="color:var(--mut)">${r.start || '—'}</td>
+      <td><code class="cmd-code" title="${safeCmd}">${safeCmd}</code></td>
+    </tr>`;
+  }).join('');
 }
-async function svc(){
- try{
-  const d=await j('/api/services');
-  $('svc').innerHTML=d.services.map(s=>`<span class="pill ${s.active?'ok':'down'}">${s.active?'●':'○'} ${s.name}</span>`).join('');
- }catch(e){}
+
+async function procs() {
+  try {
+    const d = await j('/api/processes');
+    rawProcs = d.rows || [];
+    renderProcs();
+  } catch (e) {}
 }
-async function hist(){
- try{
-  const d=await j('/api/history?limit=720');
-  const labels=d.points.map(p=>new Date(p.t).toLocaleTimeString());
-  const data={
-   labels,
-   datasets:[
-    {label:'CPU %',data:d.points.map(p=>p.cpu),borderColor:'#4da3ff',pointRadius:0,tension:.3},
-    {label:'MEM %',data:d.points.map(p=>p.mem),borderColor:'#2fbf71',pointRadius:0,tension:.3},
-    {label:'Load1 x10',data:d.points.map(p=>p.l1*10),borderColor:'#f5a524',pointRadius:0,tension:.3,borderDash:[4,4]},
-   ]};
-  if(!chart)chart=new Chart($('hist'),{type:'line',data,options:{animation:false,scales:{y:{min:0,max:100}}}});
-  else{chart.data=data;chart.update()}
- }catch(e){}
+
+async function svc() {
+  try {
+    const d = await j('/api/services');
+    const upCount = d.services.filter(s => s.active).length;
+    $('svcSummary').innerHTML = `<strong>${upCount}/${d.services.length}</strong> active`;
+    $('svc').innerHTML = d.services.map(s => `
+      <div class="svc-item">
+        <span class="svc-name" title="${s.name}">${s.name}</span>
+        <span class="pill ${s.active ? 'ok' : 'down'}">${s.active ? '● Active' : '○ ' + s.status}</span>
+      </div>
+    `).join('');
+  } catch (e) {}
 }
-stats();procs();svc();hist();
-setInterval(stats,3000);setInterval(procs,5000);setInterval(svc,15000);setInterval(hist,30000);
+
+async function hist() {
+  try {
+    const d = await j(`/api/history?limit=${histLimit}`);
+    const labels = d.points.map(p => new Date(p.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const datasets = [
+      {
+        label: 'CPU %',
+        data: d.points.map(p => p.cpu),
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59, 130, 246, 0.12)',
+        fill: true,
+        borderWidth: 1.8,
+        pointRadius: 0,
+        tension: 0.3
+      },
+      {
+        label: 'MEM %',
+        data: d.points.map(p => p.mem),
+        borderColor: '#10b981',
+        backgroundColor: 'rgba(16, 185, 129, 0.08)',
+        fill: true,
+        borderWidth: 1.8,
+        pointRadius: 0,
+        tension: 0.3
+      },
+      {
+        label: 'Load1 (x10)',
+        data: d.points.map(p => +(p.l1 * 10).toFixed(1)),
+        borderColor: '#f59e0b',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        borderDash: [4, 4]
+      }
+    ];
+
+    if (!chart) {
+      chart = new Chart($('hist'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              labels: { color: '#8a94a6', boxWidth: 12, usePointStyle: true, font: { size: 11 } }
+            },
+            tooltip: {
+              backgroundColor: '#171b24',
+              titleColor: '#f0f4f8',
+              bodyColor: '#cbd5e1',
+              borderColor: '#2d3446',
+              borderWidth: 1
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 11 } },
+              grid: { color: 'rgba(34, 39, 52, 0.5)' }
+            },
+            y: {
+              min: 0,
+              max: 100,
+              ticks: { color: '#64748b', stepSize: 25, callback: v => v + '%', font: { size: 11 } },
+              grid: { color: 'rgba(34, 39, 52, 0.5)' }
+            }
+          }
+        }
+      });
+    } else {
+      chart.data.labels = labels;
+      chart.data.datasets = datasets;
+      chart.update();
+    }
+  } catch (e) {}
+}
+
+// UI Events
+$('procSearch').addEventListener('input', renderProcs);
+
+$('sortTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('#sortTabs .tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  procSort = btn.dataset.sort;
+  renderProcs();
+});
+
+$('histTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('#histTabs .tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  histLimit = parseInt(btn.dataset.limit, 10);
+  hist();
+});
+
+let rawGitProjects = [];
+let scanRootDir = '';
+
+function fmtDateTime(ts) {
+  if (!ts) return 'Never';
+  const d = new Date(ts);
+  return d.toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function updateBatchButton() {
+  const checked = document.querySelectorAll('.git-check:checked');
+  const count = checked.length;
+  $('gitSelectedCount').textContent = count;
+  $('gitBatchPull').style.display = count > 0 ? 'inline-flex' : 'none';
+
+  document.querySelectorAll('.git-item').forEach(item => {
+    const chk = item.querySelector('.repo-check');
+    if (chk && chk.checked) {
+      item.classList.add('selected');
+    } else {
+      item.classList.remove('selected');
+    }
+  });
+}
+
+function renderGitProjects() {
+  const q = ($('gitSearch').value || '').trim().toLowerCase();
+  const filtered = rawGitProjects.filter(r =>
+    !q ||
+    r.name.toLowerCase().includes(q) ||
+    r.group.toLowerCase().includes(q) ||
+    r.branch.toLowerCase().includes(q) ||
+    r.hash.toLowerCase().includes(q) ||
+    r.message.toLowerCase().includes(q)
+  );
+
+  $('gitCount').textContent = filtered.length;
+  if (!filtered.length) {
+    $('gitList').innerHTML = `<span style="color:var(--mut);font-size:12px">${rawGitProjects.length ? 'No repositories match filter' : 'No git repositories found'}</span>`;
+    updateBatchButton();
+    return;
+  }
+
+  const groups = {};
+  for (const item of filtered) {
+    const g = item.group || 'Projects';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(item);
+  }
+
+  $('gitList').innerHTML = Object.keys(groups).sort().map(grpName => {
+    const items = groups[grpName];
+    return `
+      <div class="git-group" data-grp="${grpName}">
+        <div class="git-group-head">
+          <span class="git-group-title">
+            <input type="checkbox" class="git-check group-check" title="Select all in ${grpName}" />
+            ${grpName}
+          </span>
+          <span class="badge"><strong>${items.length}</strong> repos</span>
+        </div>
+        <div class="git-group-items">
+          ${items.map(r => `
+            <div class="git-item" id="item-${r.relPath.replace(/[^a-zA-Z0-9_-]/g, '_')}">
+              <input type="checkbox" class="git-check repo-check" data-rel="${r.relPath}" />
+              <div class="git-info">
+                <div class="git-name">
+                  <span>${r.name}</span>
+                  <span class="pill ok">${r.branch}</span>
+                  ${r.dirty ? '<span class="pill down">modified</span>' : ''}
+                </div>
+                <div class="git-meta"><code>${r.hash}</code> · ${r.time} · ${r.message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
+                <div class="git-last-pull">Last Pull: <strong>${fmtDateTime(r.lastPull)}</strong></div>
+              </div>
+              <button class="btn-pull" data-rel="${r.relPath}">⬇ Pull</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  updateBatchButton();
+}
+
+async function gitProjects() {
+  try {
+    const d = await j('/api/git/projects');
+    rawGitProjects = d.projects || [];
+    scanRootDir = d.scanRoot || '';
+    renderGitProjects();
+  } catch (e) {
+    $('gitList').innerHTML = '<span style="color:var(--bad);font-size:12px">Failed loading git projects</span>';
+  }
+}
+
+async function doPull(relPath, btn) {
+  const safeId = 'item-' + relPath.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const card = document.getElementById(safeId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Pulling...'; }
+  if (card) { card.className = 'git-item pulling'; }
+
+  try {
+    const res = await fetch('/api/git/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relPath })
+    });
+    const d = await res.json();
+    if (card) { card.className = 'git-item ' + (d.ok ? 'pull-ok' : 'pull-err'); }
+    if (btn) {
+      btn.textContent = d.ok ? '✓ Pulled' : '✕ Error';
+      setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ Pull'; }, 3000);
+    }
+    return { relPath, ok: d.ok, output: d.output || d.error || 'Done' };
+  } catch (err) {
+    if (card) { card.className = 'git-item pull-err'; }
+    if (btn) {
+      btn.textContent = '✕ Error';
+      setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ Pull'; }, 3000);
+    }
+    return { relPath, ok: false, output: err.message };
+  }
+}
+
+async function doBatchPull() {
+  const checked = Array.from(document.querySelectorAll('.repo-check:checked'));
+  if (!checked.length) return;
+
+  const batchBtn = $('gitBatchPull');
+  batchBtn.disabled = true;
+  batchBtn.textContent = 'Pulling Batch...';
+
+  const results = [];
+  for (let i = 0; i < checked.length; i++) {
+    const chk = checked[i];
+    const rel = chk.dataset.rel;
+    batchBtn.textContent = `Pulling (${i + 1}/${checked.length})...`;
+    const card = chk.closest('.git-item');
+    const btn = card ? card.querySelector('.btn-pull') : null;
+    const r = await doPull(rel, btn);
+    results.push(r);
+  }
+
+  batchBtn.disabled = false;
+  batchBtn.textContent = `⬇ Pull Selected (${checked.length})`;
+
+  // Display summary in modal
+  const okCount = results.filter(r => r.ok).length;
+  $('gitModalTitle').textContent = `Batch Pull Completed: ${okCount}/${results.length} Succeeded`;
+  $('gitModalBody').textContent = results.map(r => `[${r.ok ? 'OK' : 'ERR'}] ${r.relPath}\n${r.output}\n${'='.repeat(40)}`).join('\n\n');
+  $('gitModalBody').className = 'modal-body ' + (okCount === results.length ? 'ok' : 'err');
+  $('gitModal').classList.add('open');
+
+  gitProjects();
+}
+
+// UI Events
+$('gitSearch').addEventListener('input', renderGitProjects);
+
+$('gitRefresh').addEventListener('click', () => {
+  $('gitList').innerHTML = '<span style="color:var(--mut);font-size:12px">Scanning for repositories...</span>';
+  gitProjects();
+});
+
+$('gitBatchPull').addEventListener('click', doBatchPull);
+
+$('gitList').addEventListener('change', (e) => {
+  if (e.target.classList.contains('group-check')) {
+    const grp = e.target.closest('.git-group');
+    if (grp) {
+      grp.querySelectorAll('.repo-check').forEach(c => c.checked = e.target.checked);
+    }
+  }
+  updateBatchButton();
+});
+
+$('gitList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.btn-pull');
+  if (btn && btn.dataset.rel) {
+    const rel = btn.dataset.rel;
+    const r = await doPull(rel, btn);
+    $('gitModalTitle').textContent = `git pull: ${rel}`;
+    $('gitModalBody').textContent = r.output;
+    $('gitModalBody').className = 'modal-body ' + (r.ok ? 'ok' : 'err');
+    $('gitModal').classList.add('open');
+    gitProjects();
+    return;
+  }
+
+  // Click card to toggle checkbox
+  if (!e.target.classList.contains('git-check')) {
+    const item = e.target.closest('.git-item');
+    if (item) {
+      const chk = item.querySelector('.repo-check');
+      if (chk) {
+        chk.checked = !chk.checked;
+        updateBatchButton();
+      }
+    }
+  }
+});
+
+$('gitModalClose').addEventListener('click', () => $('gitModal').classList.remove('open'));
+$('gitModal').addEventListener('click', (e) => {
+  if (e.target === $('gitModal')) $('gitModal').classList.remove('open');
+});
+
+// Init & Intervals
+stats(); procs(); svc(); hist(); gitProjects();
+setInterval(stats, 3000);
+setInterval(procs, 5000);
+setInterval(svc, 15000);
+setInterval(hist, 30000);
+setInterval(gitProjects, 30000);
 </script>
 </body>
 </html>

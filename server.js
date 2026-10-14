@@ -110,6 +110,15 @@ function netInfo() {
   } catch { return { rx: 0, tx: 0 }; }
 }
 
+function osName() {
+  try {
+    const f = fs.readFileSync('/etc/os-release', 'utf8');
+    const m = f.match(/^PRETTY_NAME="?([^"\n]+)"?/m);
+    if (m) return m[1];
+  } catch {}
+  return os.type() + ' ' + os.release();
+}
+
 function getStats() {
   const mem = memInfo();
   const disk = diskInfo();
@@ -117,6 +126,7 @@ function getStats() {
   return {
     time: Date.now(),
     hostname: os.hostname(),
+    os: osName(),
     uptime: os.uptime(),
     load: { l1: load[0], l5: load[1], l15: load[2] },
     cpu: { pct: Number(cpuPercent().toFixed(1)), cores: os.cpus().length, model: (os.cpus()[0] || {}).model || '' },
@@ -157,6 +167,93 @@ function getServices() {
     }
   });
   return out;
+}
+
+// ---- git projects scanner ----
+const SCAN_ROOT = process.env.SCAN_DIR || (fs.existsSync('/home/zae/Codingan') ? '/home/zae/Codingan' : '/var/www');
+let gitCache = { time: 0, projects: [] };
+
+function scanGitDirs(baseDir, maxDepth = 6) {
+  const repos = [];
+  function walk(dir, depth) {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory() && e.name === '.git') {
+        repos.push(dir);
+        return;
+      }
+    }
+    for (const e of entries) {
+      if (e.isDirectory() && !['node_modules', 'vendor', '.cache', 'storage', 'wp-includes', 'wp-admin'].includes(e.name)) {
+        walk(path.join(dir, e.name), depth + 1);
+      }
+    }
+  }
+  walk(baseDir, 1);
+  return repos;
+}
+
+function getGitProjects(force = false) {
+  const now = Date.now();
+  if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
+  const dirs = scanGitDirs(SCAN_ROOT, 6);
+  const projects = dirs.map((d) => {
+    try {
+      const branch = execSync(`git -C "${d}" rev-parse --abbrev-ref HEAD 2>/dev/null`, { timeout: 2000 }).toString().trim() || 'unknown';
+      const log = execSync(`git -C "${d}" log -1 --format="%h|%cr|%s" 2>/dev/null`, { timeout: 2000 }).toString().trim().split('|');
+      const dirty = execSync(`git -C "${d}" status --porcelain 2>/dev/null`, { timeout: 2000 }).toString().trim().length > 0;
+      let remote = '';
+      try { remote = execSync(`git -C "${d}" remote get-url origin 2>/dev/null`, { timeout: 1500 }).toString().trim(); } catch {}
+      let lastPull = null;
+      try {
+        const fetchHead = path.join(d, '.git', 'FETCH_HEAD');
+        if (fs.existsSync(fetchHead)) {
+          lastPull = fs.statSync(fetchHead).mtimeMs;
+        } else {
+          const ct = execSync(`git -C "${d}" log -1 --format="%ct" 2>/dev/null`, { timeout: 1500 }).toString().trim();
+          if (ct) lastPull = parseInt(ct, 10) * 1000;
+        }
+      } catch {}
+
+      const rel = path.relative(SCAN_ROOT, d);
+      const name = path.basename(d);
+      const parts = rel.split(path.sep);
+      const group = parts.length > 1 ? parts[0] : 'Projects';
+      return {
+        name,
+        group,
+        relPath: rel,
+        path: d,
+        branch,
+        hash: log[0] || '—',
+        time: log[1] || '—',
+        message: log[2] || '—',
+        dirty,
+        remote,
+        lastPull
+      };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  gitCache = { time: now, projects };
+  return projects;
+}
+
+function pullGitProject(targetPath) {
+  return new Promise((resolve) => {
+    const list = getGitProjects();
+    const match = list.find((p) => p.path === targetPath);
+    if (!match) return resolve({ ok: false, error: 'Project not in verified whitelist' });
+    exec(`git -C "${targetPath}" pull`, { timeout: 30_000 }, (err, stdout, stderr) => {
+      gitCache.time = 0; // invalidate cache
+      const out = (stdout || '') + (stderr || '');
+      if (err) return resolve({ ok: false, error: err.message, output: out });
+      resolve({ ok: true, output: out });
+    });
+  });
 }
 
 // ---- sampler ----
@@ -255,6 +352,27 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
     return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
+  }
+  if (p === '/api/git/projects') {
+    const projects = getGitProjects();
+    const safe = projects.map(({ path: _p, ...rest }) => rest); // hide absolute path
+    return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
+  }
+  if (p === '/api/git/pull' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const rel = body && body.relPath;
+    if (typeof rel !== 'string' || !rel || rel.includes('..') || rel.startsWith('/')) {
+      return send(res, 400, JSON.stringify({ error: 'Invalid project' }));
+    }
+    const full = path.normalize(path.join(SCAN_ROOT, rel));
+    if (!full.startsWith(SCAN_ROOT + path.sep) && full !== SCAN_ROOT) {
+      return send(res, 400, JSON.stringify({ error: 'Invalid project' }));
+    }
+    const r = await pullGitProject(full);
+    if (!r.ok) return send(res, 500, JSON.stringify(r));
+    return send(res, 200, JSON.stringify(r));
   }
 
   let file = p === '/' ? '/index.html' : p;
