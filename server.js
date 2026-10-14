@@ -649,9 +649,23 @@ function getGitProjects(force = false) {
   if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
   const dirs = scanGitDirs(SCAN_ROOT, 6);
   const projects = dirs.map((d) => {
+    const rel = path.relative(SCAN_ROOT, d);
+    const name = path.basename(d);
+    const parts = rel.split(path.sep);
+    const group = parts.length > 1 ? parts[0] : 'Projects';
+    const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null };
     try {
       ensureFilemodeFalse(d);
-      const branch = execSync(gitCmdFor(d, 'rev-parse --abbrev-ref HEAD 2>/dev/null'), { timeout: 2000 }).toString().trim() || 'unknown';
+    } catch {}
+    // rev-parse dulu: kalau gagal (repo rusak / permission), tetap tampilkan sebagai BROKEN
+    // supaya tidak hilang misterius dari panel.
+    let branch = 'unknown';
+    try {
+      branch = execSync(gitCmdFor(d, 'rev-parse --abbrev-ref HEAD 2>/dev/null'), { timeout: 2000 }).toString().trim() || 'unknown';
+    } catch (e) {
+      return { ...base, branch: 'BROKEN', hash: '—', time: '—', message: 'git repo tidak bisa dibaca (' + String((e && e.message) || e).slice(0, 100) + ')', dirty: false, broken: true };
+    }
+    try {
       const log = execSync(gitCmdFor(d, 'log -1 --format="%h|%cr|%s" 2>/dev/null'), { timeout: 2000 }).toString().trim().split('|');
       const dirty = execSync(gitCmdFor(d, 'status --porcelain 2>/dev/null'), { timeout: 2000 }).toString().trim().length > 0;
       let remote = '';
@@ -666,26 +680,9 @@ function getGitProjects(force = false) {
           if (ct) lastPull = parseInt(ct, 10) * 1000;
         }
       } catch {}
-
-      const rel = path.relative(SCAN_ROOT, d);
-      const name = path.basename(d);
-      const parts = rel.split(path.sep);
-      const group = parts.length > 1 ? parts[0] : 'Projects';
-      return {
-        name,
-        group,
-        relPath: rel,
-        path: d,
-        branch,
-        hash: log[0] || '—',
-        time: log[1] || '—',
-        message: log[2] || '—',
-        dirty,
-        remote,
-        lastPull
-      };
-    } catch {
-      return null;
+      return { ...base, branch, hash: log[0] || '—', time: log[1] || '—', message: log[2] || '—', dirty, remote, lastPull };
+    } catch (e) {
+      return { ...base, branch, hash: '—', time: '—', message: 'git repo error (' + String((e && e.message) || e).slice(0, 100) + ')', dirty: false, remote: '', lastPull: null, broken: true };
     }
   }).filter(Boolean);
   gitCache = { time: now, projects };
