@@ -1828,7 +1828,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
   }
   if (p === '/api/git/pull' && req.method === 'POST') {
-    if (!session.superadmin) return needSuper();
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const rel = body && body.relPath;

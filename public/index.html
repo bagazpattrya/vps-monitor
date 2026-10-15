@@ -1671,7 +1671,7 @@ j('/api/me').then(m => {
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
-  document.body.classList.toggle('no-pull', !m.superadmin);
+  document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
 
 async function api(method, url, body) {
