@@ -248,6 +248,23 @@ body.fullscreen-focus .chart-box {
 .nav-link.active .dot { opacity: 1; background: var(--ac); }
 .nav-foot { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--mut); }
 
+.side-user { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.side-user-avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(59, 130, 246, 0.15); color: var(--ac);
+  font-weight: 600; font-size: 13px; text-transform: uppercase;
+}
+.side-user-info { min-width: 0; flex: 1; }
+.side-user-name { color: var(--tx); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-user-role { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ac); }
+.side-user-logout {
+  background: rgba(239, 68, 68, 0.06); color: #f87171; cursor: pointer;
+  border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px;
+  width: 30px; height: 30px; flex: none; font-size: 14px;
+}
+.side-user-logout:hover { background: rgba(239, 68, 68, 0.15); }
+
 /* Main Grid Layout */
 .container {
   max-width: 1440px;
@@ -834,6 +851,14 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <a href="#/deploy" class="nav-link" id="navLinkDeploy" data-view="deploy" style="display:none"><span class="dot"></span>Auto Deploy</a>
   <div class="nav-foot">
+    <div class="side-user" id="sideUser" style="display:none">
+      <div class="side-user-avatar" id="sideUserAvatar">?</div>
+      <div class="side-user-info">
+        <div class="side-user-name" id="sideUserName">—</div>
+        <div class="side-user-role" id="sideUserRole"></div>
+      </div>
+      <button class="side-user-logout" id="sideLogout" title="Sign out">⏻</button>
+    </div>
     Microspace VPS Monitor
   </div>
 </aside>
@@ -1623,6 +1648,10 @@ j('/api/me').then(m => {
   isAdmin = !!m.admin;
   isSuper = !!m.superadmin;
   $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.role === 'superadmin' ? '<span class="role">superadmin</span>' : m.admin ? '<span class="role">admin</span>' : ''}`;
+  $('sideUserName').textContent = m.user;
+  $('sideUserAvatar').textContent = String(m.user || '?').charAt(0);
+  $('sideUserRole').textContent = m.role === 'superadmin' ? 'superadmin' : m.admin ? 'admin' : 'viewer';
+  $('sideUser').style.display = '';
   if (m.admin) {
     if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
@@ -1900,6 +1929,7 @@ function renderUsers() {
   `).join('');
 }
 
+$('sideLogout').onclick = () => $('logout').click();
 $('logout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' });
   location.href = '/login';
