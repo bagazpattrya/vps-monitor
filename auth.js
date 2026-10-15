@@ -22,7 +22,8 @@ const USERNAME_RE = /^[a-z_][a-z0-9_.-]{0,31}$/i;
 const ALLOW_LINUX_LOGIN = String(process.env.ALLOW_LINUX_LOGIN ?? '1') !== '0';
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
-const sessions = new Map(); // token -> { user, admin, exp }
+const ROLES = ['viewer', 'admin', 'superadmin'];
+const sessions = new Map(); // token -> { user, source: 'app'|'linux', role, exp }
 const fails = new Map();    // key -> { n, until }
 
 function readPasswd() {
@@ -113,7 +114,14 @@ function getSession(req) {
   const s = sessions.get(tok);
   if (!s) return null;
   if (s.exp < Date.now()) { sessions.delete(tok); return null; }
-  return { user: s.user, admin: s.admin };
+  if (s.source === 'app') {
+    // Baca ulang dari users.json supaya perubahan role/keyword/disabled langsung berlaku.
+    const u = loadAppUsers().find((x) => x.username.toLowerCase() === String(s.user).toLowerCase());
+    if (!u || u.disabled) { sessions.delete(tok); return null; }
+    const role = roleOf(u);
+    return { user: u.username, role, admin: role !== 'viewer', superadmin: role === 'superadmin', hiddenKeywords: role === 'superadmin' ? [] : normKeywords(u.hiddenKeywords) };
+  }
+  return { user: s.user, role: s.role, admin: s.role !== 'viewer', superadmin: s.role === 'superadmin', hiddenKeywords: [] };
 }
 
 function clientIp(req) {
@@ -151,6 +159,23 @@ function saveAppUsers(users) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), { mode: 0o600 });
 }
 
+// Role efektif sebuah user app. Data lama hanya punya boolean `admin`:
+// admin:true tanpa `role` dianggap superadmin (admin yang sudah ada tidak kehilangan akses).
+function roleOf(u) {
+  if (u && ROLES.includes(u.role)) return u.role;
+  return u && u.admin ? 'superadmin' : 'viewer';
+}
+
+function normKeywords(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(/[\r\n,]+/);
+  const out = [];
+  for (const x of arr) {
+    const k = String(x || '').trim().toLowerCase().slice(0, 64);
+    if (k && !out.includes(k)) out.push(k);
+  }
+  return out.slice(0, 50);
+}
+
 function hashPassword(password, salt) {
   return new Promise((resolve, reject) => {
     crypto.scrypt(password, salt, 64, (err, derivedKey) => {
@@ -184,14 +209,18 @@ function revokeUserSessions(username) {
 function listAppUsers() {
   return loadAppUsers().map((u) => ({
     username: u.username,
-    admin: !!u.admin,
+    role: roleOf(u),
+    admin: roleOf(u) !== 'viewer',
+    hiddenKeywords: normKeywords(u.hiddenKeywords),
     disabled: !!u.disabled,
     createdAt: u.createdAt || null,
     updatedAt: u.updatedAt || null,
   }));
 }
 
-async function createAppUser(username, password, admin = false) {
+async function createAppUser(username, password, role = 'viewer', hiddenKeywords = []) {
+  if (role === true) role = 'admin';
+  if (!ROLES.includes(role)) role = 'viewer';
   const name = String(username || '').trim();
   if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(name)) {
     return { ok: false, error: 'Username must be 3-32 alphanumeric characters (. _ - allowed)' };
@@ -209,7 +238,9 @@ async function createAppUser(username, password, admin = false) {
     username: name,
     salt,
     hash,
-    admin: Boolean(admin),
+    role,
+    admin: role !== 'viewer',
+    hiddenKeywords: normKeywords(hiddenKeywords),
     disabled: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -220,7 +251,9 @@ async function createAppUser(username, password, admin = false) {
     ok: true,
     user: {
       username: newUser.username,
+      role: newUser.role,
       admin: newUser.admin,
+      hiddenKeywords: newUser.hiddenKeywords,
       disabled: newUser.disabled,
       createdAt: newUser.createdAt,
     },
@@ -236,8 +269,15 @@ async function updateAppUser(username, changes = {}) {
   const target = users[idx];
   let sessionRevokeNeeded = false;
 
-  if (typeof changes.admin === 'boolean') {
+  if (typeof changes.role === 'string' && ROLES.includes(changes.role)) {
+    target.role = changes.role;
+    target.admin = changes.role !== 'viewer';
+  } else if (typeof changes.admin === 'boolean') {
+    target.role = changes.admin ? (roleOf(target) === 'viewer' ? 'admin' : roleOf(target)) : 'viewer';
     target.admin = changes.admin;
+  }
+  if (changes.hiddenKeywords !== undefined) {
+    target.hiddenKeywords = normKeywords(changes.hiddenKeywords);
   }
   if (typeof changes.disabled === 'boolean') {
     target.disabled = changes.disabled;
@@ -262,7 +302,9 @@ async function updateAppUser(username, changes = {}) {
     ok: true,
     user: {
       username: target.username,
-      admin: target.admin,
+      role: roleOf(target),
+      admin: roleOf(target) !== 'viewer',
+      hiddenKeywords: normKeywords(target.hiddenKeywords),
       disabled: target.disabled,
       updatedAt: target.updatedAt,
     },
@@ -304,8 +346,9 @@ async function login(req, name, password) {
 
     fails.delete(key);
     const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, { user: appUser.username, admin: !!appUser.admin, exp: Date.now() + SESSION_TTL_MS });
-    return { ok: true, status: 200, user: appUser.username, admin: !!appUser.admin, setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
+    sessions.set(token, { user: appUser.username, source: 'app', exp: Date.now() + SESSION_TTL_MS });
+    const role = roleOf(appUser);
+    return { ok: true, status: 200, user: appUser.username, role, admin: role !== 'viewer', setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
   }
 
   // 2. Fallback to local Linux system accounts (bisa dimatikan via ALLOW_LINUX_LOGIN=0).
@@ -320,8 +363,10 @@ async function login(req, name, password) {
 
   fails.delete(key);
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { user: user.name, admin: user.admin, exp: Date.now() + SESSION_TTL_MS });
-  return { ok: true, status: 200, user: user.name, admin: user.admin, setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
+  // Akun Linux: sudo/root = superadmin (perilaku lama = akses penuh), lainnya viewer.
+  const lrole = user.admin ? 'superadmin' : 'viewer';
+  sessions.set(token, { user: user.name, source: 'linux', role: lrole, exp: Date.now() + SESSION_TTL_MS });
+  return { ok: true, status: 200, user: user.name, role: lrole, admin: user.admin, setCookie: cookieHeader(req, token, SESSION_TTL_MS / 1000) };
 }
 
 function logout(req) {
@@ -346,4 +391,7 @@ module.exports = {
   updateAppUser,
   deleteAppUser,
   loadAppUsers,
+  ROLES,
+  roleOf,
+  normKeywords,
 };

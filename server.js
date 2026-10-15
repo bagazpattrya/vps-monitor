@@ -15,6 +15,10 @@ const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SAMPLE_INTERVAL_MS = 10_000;
 const MAX_POINTS = 8640; // 24h @ 10s
 const SCAN_ROOT = process.env.SCAN_DIR || '/var/www';
+// Keyword global (dipisah koma) untuk menyembunyikan project dari non-superadmin.
+// Keyword per-user ditambahkan di atas ini (lihat hiddenKeywordsFor).
+const GLOBAL_HIDDEN_KEYWORDS = String(process.env.HIDDEN_PROJECT_KEYWORDS || '')
+  .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -644,6 +648,19 @@ function ensureFilemodeFalse(dir) {
   try { execSync(gitCmdFor(dir, 'config core.filemode false 2>/dev/null'), { timeout: 2000 }); } catch {}
 }
 
+// Superadmin melihat semuanya; user lain: keyword global + keyword miliknya sendiri.
+function hiddenKeywordsFor(session) {
+  if (!session || session.superadmin) return [];
+  return [...new Set([...GLOBAL_HIDDEN_KEYWORDS, ...(session.hiddenKeywords || [])])];
+}
+// true bila nilai (string, atau objek yang di-JSON-kan) mengandung salah satu keyword.
+function isHidden(session, value) {
+  const kws = hiddenKeywordsFor(session);
+  if (!kws.length || value == null) return false;
+  const s = (typeof value === 'string' ? value : JSON.stringify(value)).toLowerCase();
+  return kws.some((k) => s.includes(k));
+}
+
 function getGitProjects(force = false) {
   const now = Date.now();
   if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
@@ -1055,6 +1072,24 @@ function getBackupInfo() {
     logTail,
     canRun: Boolean(scriptPath),
   };
+}
+
+// Terapkan hidden keywords ke daftar backup: file disaring, total dihitung ulang,
+// dan baris log yang menyebut keyword dibuang.
+function filterBackupInfo(session, info) {
+  if (!info || !info.available || !hiddenKeywordsFor(session).length) return info;
+  const files = info.files.filter((f) => !isHidden(session, [f.name, f.relPath, f.dbName]));
+  const categories = { daily: 0, weekly: 0, monthly: 0, other: 0 };
+  let totalBytes = 0;
+  let latestTime = null;
+  for (const f of files) {
+    categories[f.category] = (categories[f.category] || 0) + 1;
+    totalBytes += f.size;
+    if (!latestTime || f.mtime > latestTime) latestTime = f.mtime;
+  }
+  const logTail = info.logTail == null ? null
+    : info.logTail.split('\n').filter((l) => !isHidden(session, l)).join('\n');
+  return { ...info, files, totalFiles: files.length, totalBytes, latestTime, categories, logTail };
 }
 
 function runManualBackup() {
@@ -1529,7 +1564,7 @@ const server = http.createServer(async (req, res) => {
     const r = await auth.login(req, body && body.username, body && body.password);
     if (!r.ok) return send(res, r.status, JSON.stringify({ error: r.error }));
     res.setHeader('Set-Cookie', r.setCookie);
-    return send(res, 200, JSON.stringify({ user: r.user, admin: r.admin }));
+    return send(res, 200, JSON.stringify({ user: r.user, admin: r.admin, role: r.role }));
   }
   if (p === '/api/logout' && req.method === 'POST') {
     res.setHeader('Set-Cookie', auth.logout(req));
@@ -1547,7 +1582,12 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (p === '/api/me') return send(res, 200, JSON.stringify({ ...session, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
+  const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
+
+  if (p === '/api/me') {
+    const { hiddenKeywords: _hk, ...me } = session; // keyword tidak perlu sampai ke browser
+    return send(res, 200, JSON.stringify({ ...me, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
+  }
   if (p === '/api/stats') {
     const s = lastStats && (Date.now() - lastStats.time < SAMPLE_INTERVAL_MS * 1.5) ? lastStats : getStats();
     if (!lastStats || s !== lastStats) lastStats = s;
@@ -1561,16 +1601,27 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/storage') {
     const force = url.searchParams.get('force') === '1';
     const s = getStorageBreakdown(force);
-    return send(res, 200, JSON.stringify(s));
+    if (!hiddenKeywordsFor(session).length) return send(res, 200, JSON.stringify(s));
+    return send(res, 200, JSON.stringify({
+      ...s,
+      projects: (s.projects || []).filter((x) => !isHidden(session, [x.name, x.relPath])),
+      largeLogs: (s.largeLogs || []).filter((x) => !isHidden(session, x.path)),
+    }));
   }
   if (p === '/api/workers') {
     const [sup, crn] = await Promise.all([getSupervisorStatus(), Promise.resolve(getCronJobs())]);
-    return send(res, 200, JSON.stringify({ time: Date.now(), supervisor: sup, cron: crn, laravelLogs: laravelLogPaths() }));
+    return send(res, 200, JSON.stringify({
+      time: Date.now(),
+      supervisor: sup.filter((x) => !isHidden(session, x)),
+      cron: crn.filter((x) => !isHidden(session, x)),
+      laravelLogs: laravelLogPaths().filter((x) => !isHidden(session, x)),
+    }));
   }
   if (p === '/api/workers/supervisor' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    if (isHidden(session, body && body.name)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
     audit(session.user, 'worker.supervisor', body && body.name, body && body.action);
     const r = await supervisorAction(body && body.action, body && body.name);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
@@ -1594,37 +1645,47 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/workers/log') {
     const file = url.searchParams.get('file');
     const lines = url.searchParams.get('lines') || 100;
+    if (isHidden(session, file)) return send(res, 404, JSON.stringify({ ok: false, error: 'Not found' }));
     const r = await tailLog(file, lines);
     return send(res, r.ok ? 200 : 404, JSON.stringify(r));
   }
   if (p === '/api/users' && req.method === 'GET') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     return send(res, 200, JSON.stringify({ users: auth.listAppUsers() }));
   }
   if (p === '/api/users' && req.method === 'POST') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
-    const r = await auth.createAppUser(body && body.username, body && body.password, body && body.admin);
+    const r = await auth.createAppUser(body && body.username, body && body.password, body && (body.role || (body.admin ? 'admin' : 'viewer')), body && body.hiddenKeywords);
     if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
-    audit(session.user, 'user.create', r.user.username, `admin=${r.user.admin}`);
+    audit(session.user, 'user.create', r.user.username, `role=${r.user.role}`);
     return send(res, 200, JSON.stringify(r));
   }
   if (p === '/api/users' && req.method === 'PATCH') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const target = String((body && body.username) || '');
-    if (target.toLowerCase() === String(session.user).toLowerCase() && (body.disabled === true || body.admin === false)) {
+    const isSelf = target.toLowerCase() === String(session.user).toLowerCase();
+    if (isSelf && (body.disabled === true || body.admin === false || (body.role && body.role !== 'superadmin'))) {
       return send(res, 400, JSON.stringify({ error: 'Cannot demote or disable yourself' }));
     }
-    const r = await auth.updateAppUser(target, { admin: body.admin, disabled: body.disabled, password: body.password });
+    // Jangan sampai tidak ada superadmin tersisa (superadmin terakhir tidak boleh di-demote/disable).
+    const all = auth.listAppUsers();
+    const tgt = all.find((u) => u.username.toLowerCase() === target.toLowerCase());
+    const demoting = tgt && tgt.role === 'superadmin' && !tgt.disabled &&
+      ((body.role && body.role !== 'superadmin') || body.admin === false || body.disabled === true);
+    if (demoting && all.filter((u) => u.role === 'superadmin' && !u.disabled).length <= 1) {
+      return send(res, 400, JSON.stringify({ error: 'Cannot demote or disable the last superadmin' }));
+    }
+    const r = await auth.updateAppUser(target, { role: body.role, admin: body.role ? undefined : body.admin, hiddenKeywords: body.hiddenKeywords, disabled: body.disabled, password: body.password });
     if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
-    audit(session.user, 'user.update', r.user.username);
+    audit(session.user, 'user.update', r.user.username, `role=${r.user.role}`);
     return send(res, 200, JSON.stringify(r));
   }
   if (p === '/api/users' && req.method === 'DELETE') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const target = String((body && body.username) || '');
@@ -1642,7 +1703,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/backups' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    const info = getBackupInfo();
+    const info = filterBackupInfo(session, getBackupInfo());
     return send(res, 200, JSON.stringify(info));
   }
   if (p === '/api/backups/run' && req.method === 'POST') {
@@ -1657,6 +1718,7 @@ const server = http.createServer(async (req, res) => {
     if (!rel || typeof rel !== 'string' || rel.includes('..') || rel.includes('\0')) {
       return send(res, 400, 'Invalid backup file path', 'text/plain');
     }
+    if (isHidden(session, rel)) return send(res, 404, 'Backup file not found', 'text/plain');
     const root = getBackupRootDir();
     if (!root) return send(res, 404, 'Backup storage not configured', 'text/plain');
     const full = path.normalize(path.join(root, rel));
@@ -1686,7 +1748,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (p === '/api/fs/list') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     const targetDir = url.searchParams.get('path') || SCAN_ROOT;
     try {
       const data = listFsDirectory(targetDir);
@@ -1697,7 +1759,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (p === '/api/fs/read') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     const targetFile = url.searchParams.get('path');
     if (!targetFile) return send(res, 400, JSON.stringify({ error: 'Path required' }));
     try {
@@ -1709,7 +1771,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (p === '/api/fs/download') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     const target = safeFsPath(url.searchParams.get('path'));
     if (!target || !fs.existsSync(target) || fs.statSync(target).isDirectory()) {
       return send(res, 404, 'File not found', 'text/plain');
@@ -1726,12 +1788,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (p === '/api/git/projects') {
-    const projects = getGitProjects();
+    const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));
     const safe = projects.map(({ path: _p, ...rest }) => rest); // hide absolute path
     return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
   }
   if (p === '/api/git/pull' && req.method === 'POST') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (!session.superadmin) return needSuper();
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const rel = body && body.relPath;
@@ -1822,12 +1884,12 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/deploy/status' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const job = DEPLOY_JOBS.get(url.searchParams.get('id'));
-    if (!job) return send(res, 404, JSON.stringify({ error: 'Job tidak ada (mungkin server restart)' }));
+    if (!job || isHidden(session, job.label)) return send(res, 404, JSON.stringify({ error: 'Job tidak ada (mungkin server restart)' }));
     return send(res, 200, JSON.stringify(jobPublic(job)));
   }
   if (p === '/api/deploy/jobs' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    return send(res, 200, JSON.stringify({ jobs: [...DEPLOY_JOBS.values()].map(jobPublic) }));
+    return send(res, 200, JSON.stringify({ jobs: [...DEPLOY_JOBS.values()].map(jobPublic).filter((j) => !isHidden(session, j.label)) }));
   }
   if (p === '/api/deploy/transfer' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));

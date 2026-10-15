@@ -657,6 +657,7 @@ code {
   align-items: center;
   gap: 4px;
 }
+body.no-pull .btn-pull, body.no-pull .git-check, body.no-pull #gitBatchPull { display: none !important; }
 .btn-pull {
   background: rgba(16, 185, 129, 0.12);
   color: var(--ok);
@@ -1505,9 +1506,17 @@ select.input { appearance: auto; max-width: 100%; }
         <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Password (min. 6 karakter)</label>
         <input id="addPassword" type="password" class="input" style="width:100%" placeholder="••••••••" required minlength="6" />
       </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-        <input type="checkbox" id="addAdmin" style="cursor:pointer" />
-        <label for="addAdmin" style="font-size:13px;cursor:pointer">Role Administrator (Akses Git pull, workers &amp; user management)</label>
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Role</label>
+        <select id="addRole" class="input" style="width:100%">
+          <option value="viewer">Viewer — hanya melihat</option>
+          <option value="admin">Admin — workers, backups, deploy (tanpa Files &amp; Git pull)</option>
+          <option value="superadmin">Superadmin — akses penuh</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Sembunyikan project (keyword, pisah koma) — tidak berlaku untuk superadmin</label>
+        <input id="addHidden" class="input" style="width:100%" placeholder="contoh: companyapp, payroll" />
       </div>
       <div id="addUserErr" style="font-size:12px;color:var(--bad);display:none"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
@@ -1536,10 +1545,18 @@ select.input { appearance: auto; max-width: 100%; }
         <input id="editPassword" type="password" class="input" style="width:100%" placeholder="Password baru (min. 6 karakter)" minlength="6" />
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-          <input type="checkbox" id="editAdmin" style="cursor:pointer" />
-          <span>Role Administrator</span>
-        </label>
+        <div>
+          <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Role</label>
+          <select id="editRole" class="input" style="width:100%">
+            <option value="viewer">Viewer</option>
+            <option value="admin">Admin</option>
+            <option value="superadmin">Superadmin</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Sembunyikan project (keyword, pisah koma)</label>
+          <input id="editHidden" class="input" style="width:100%" placeholder="contoh: companyapp, payroll" />
+        </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
           <input type="checkbox" id="editDisabled" style="cursor:pointer" />
           <span style="color:var(--warn)">Nonaktifkan Akun (Disabled)</span>
@@ -1601,16 +1618,20 @@ async function j(u) {
 }
 
 let isAdmin = false;
+let isSuper = false;
 j('/api/me').then(m => {
   isAdmin = !!m.admin;
-  $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.admin ? '<span class="role">admin</span>' : ''}`;
+  isSuper = !!m.superadmin;
+  $('who').innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><strong>${m.user}</strong>${m.role === 'superadmin' ? '<span class="role">superadmin</span>' : m.admin ? '<span class="role">admin</span>' : ''}`;
   if (m.admin) {
-    if ($('navLinkUsers')) $('navLinkUsers').style.display = '';
-    if ($('navLinkFiles')) $('navLinkFiles').style.display = '';
+    if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
+    if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy'].includes(currentView())) location.hash = '#/overview';
+  if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
+  document.body.classList.toggle('no-pull', !m.superadmin);
 }).catch(() => {});
 
 async function api(method, url, body) {
@@ -1866,7 +1887,7 @@ function renderUsers() {
   $('usersList').innerHTML = rawUsers.map(u => `
     <tr>
       <td><strong>${escHtml(u.username)}</strong></td>
-      <td>${u.admin ? '<span class="pill ok">admin</span>' : '<span class="pill">viewer</span>'}</td>
+      <td>${u.role === 'superadmin' ? '<span class="pill ok">superadmin</span>' : u.admin ? '<span class="pill ok">admin</span>' : '<span class="pill">viewer</span>'}${u.role !== 'superadmin' && (u.hiddenKeywords || []).length ? ` <span class="pill" title="Project tersembunyi: ${escHtml(u.hiddenKeywords.join(', '))}">hide ${u.hiddenKeywords.length}</span>` : ''}</td>
       <td>${u.disabled ? '<span class="pill down">disabled</span>' : '<span class="pill ok">active</span>'}</td>
       <td style="color:var(--mut)">${fmtUserDate(u.createdAt)}</td>
       <td style="color:var(--mut)">${fmtUserDate(u.updatedAt)}</td>
@@ -3030,7 +3051,8 @@ $('usersRefresh').addEventListener('click', () => users());
 $('btnOpenAddUser').addEventListener('click', () => {
   $('addUsername').value = '';
   $('addPassword').value = '';
-  $('addAdmin').checked = false;
+  $('addRole').value = 'viewer';
+  $('addHidden').value = '';
   $('addUserErr').style.display = 'none';
   $('addUserModal').classList.add('open');
 });
@@ -3044,14 +3066,15 @@ $('addUserForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const username = $('addUsername').value.trim();
   const password = $('addPassword').value;
-  const admin = $('addAdmin').checked;
+  const role = $('addRole').value;
+  const hiddenKeywords = $('addHidden').value;
   const errEl = $('addUserErr');
   const btn = $('addUserSubmit');
   errEl.style.display = 'none';
   btn.disabled = true;
   btn.textContent = 'Menyimpan...';
   try {
-    await api('POST', '/api/users', { username, password, admin });
+    await api('POST', '/api/users', { username, password, role, hiddenKeywords });
     $('addUserModal').classList.remove('open');
     users();
   } catch (err) {
@@ -3072,7 +3095,8 @@ $('editUserModal').addEventListener('click', (e) => {
 $('editUserForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const username = $('editUsername').value;
-  const admin = $('editAdmin').checked;
+  const role = $('editRole').value;
+  const hiddenKeywords = $('editHidden').value;
   const disabled = $('editDisabled').checked;
   const password = $('editPassword').value.trim();
   const errEl = $('editUserErr');
@@ -3080,7 +3104,7 @@ $('editUserForm').addEventListener('submit', async (e) => {
   errEl.style.display = 'none';
   btn.disabled = true;
   btn.textContent = 'Menyimpan...';
-  const payload = { username, admin, disabled };
+  const payload = { username, role, hiddenKeywords, disabled };
   if (password) payload.password = password;
   try {
     await api('PATCH', '/api/users', payload);
@@ -3104,7 +3128,8 @@ $('usersList').addEventListener('click', async (e) => {
     $('editUsername').value = u.username;
     $('editUsernameDisplay').textContent = u.username;
     $('editPassword').value = '';
-    $('editAdmin').checked = !!u.admin;
+    $('editRole').value = u.role || (u.admin ? 'admin' : 'viewer');
+    $('editHidden').value = (u.hiddenKeywords || []).join(', ');
     $('editDisabled').checked = !!u.disabled;
     $('editUserErr').style.display = 'none';
     $('editUserModal').classList.add('open');
