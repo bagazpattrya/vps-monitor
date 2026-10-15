@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync, exec, execFile } = require('child_process');
+const { execSync, exec, execFile, spawn } = require('child_process');
 const auth = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -1092,23 +1092,54 @@ function filterBackupInfo(session, info) {
   return { ...info, files, totalFiles: files.length, totalBytes, latestTime, categories, logTail };
 }
 
-function runManualBackup() {
-  return new Promise((resolve) => {
-    const script = fs.existsSync('/usr/local/bin/backup-mysql.sh') ? '/usr/local/bin/backup-mysql.sh' : null;
-    if (!script) return resolve({ ok: false, error: 'Script /usr/local/bin/backup-mysql.sh tidak ditemukan' });
+// Backup berjalan di background; UI polling /api/backups/status.
+// Progress = estimasi dari durasi backup sebelumnya (script tidak melaporkan persen).
+const BACKUP_META_FILE = path.join(DATA_DIR, 'backup-meta.json');
+const backupJob = { running: false, startedAt: 0, finishedAt: 0, ok: null, output: '', expectedMs: 0 };
 
-    let uid = null;
-    try { uid = fs.statSync(script).uid; } catch {}
-    const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
-    const cmd = (uid !== null && uid !== me)
-      ? `sudo -H -u "#${uid}" bash "${script}" --cron 2>&1`
-      : `bash "${script}" --cron 2>&1`;
+function loadBackupExpectedMs() {
+  try { return JSON.parse(fs.readFileSync(BACKUP_META_FILE, 'utf8')).lastDurationMs || 0; } catch { return 0; }
+}
 
-    exec(cmd, { timeout: 180_000 }, (err, stdout, stderr) => {
-      const out = (stdout || '') + (stderr || '');
-      resolve({ ok: !err, output: out || (err ? err.message : 'Backup selesai') });
-    });
+function startManualBackup() {
+  if (backupJob.running) return { ok: true, already: true };
+  const script = fs.existsSync('/usr/local/bin/backup-mysql.sh') ? '/usr/local/bin/backup-mysql.sh' : null;
+  if (!script) return { ok: false, error: 'Script /usr/local/bin/backup-mysql.sh tidak ditemukan' };
+
+  let uid = null;
+  try { uid = fs.statSync(script).uid; } catch {}
+  const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
+  const cmd = (uid !== null && uid !== me)
+    ? `sudo -H -u "#${uid}" bash "${script}" --cron 2>&1`
+    : `bash "${script}" --cron 2>&1`;
+
+  Object.assign(backupJob, { running: true, startedAt: Date.now(), finishedAt: 0, ok: null, output: '', expectedMs: loadBackupExpectedMs() });
+  const child = spawn('bash', ['-c', cmd]);
+  const append = (d) => { backupJob.output = (backupJob.output + d.toString()).slice(-20000); };
+  const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, 180_000);
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (e) => append(e.message));
+  child.on('close', (code) => {
+    clearTimeout(timer);
+    backupJob.running = false;
+    backupJob.finishedAt = Date.now();
+    backupJob.ok = code === 0;
+    if (!backupJob.output) backupJob.output = backupJob.ok ? 'Backup selesai' : `Backup gagal (exit ${code})`;
+    if (backupJob.ok) {
+      try { fs.writeFileSync(BACKUP_META_FILE, JSON.stringify({ lastDurationMs: backupJob.finishedAt - backupJob.startedAt })); } catch {}
+    }
   });
+  return { ok: true };
+}
+
+function backupStatus() {
+  const j = backupJob;
+  const elapsed = j.startedAt ? (j.finishedAt || Date.now()) - j.startedAt : 0;
+  let percent = null;
+  if (j.running && j.expectedMs > 0) percent = Math.min(95, Math.round((elapsed / j.expectedMs) * 100));
+  if (!j.running && j.ok) percent = 100;
+  return { running: j.running, ok: j.ok, elapsedMs: elapsed, expectedMs: j.expectedMs, percent, output: j.output };
 }
 
 // Cari seeder role/permission/user untuk dijalankan setelah migrate fresh.
@@ -1709,8 +1740,12 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/backups/run' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     audit(session.user, 'backup.run', 'mysql');
-    const r = await runManualBackup();
+    const r = startManualBackup();
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/backups/status' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify(backupStatus()));
   }
   if (p === '/api/backups/download') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));

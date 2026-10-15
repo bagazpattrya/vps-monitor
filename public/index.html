@@ -1261,6 +1261,17 @@ select.input { appearance: auto; max-width: 100%; }
         </div>
       </div>
 
+      <div id="backupProgress" style="display:none;margin:10px 0">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span id="backupProgressLabel">Menjalankan backup...</span>
+          <span id="backupProgressPct"></span>
+        </div>
+        <div style="height:10px;background:var(--bg-elev);border:1px solid var(--border,#333);border-radius:6px;overflow:hidden">
+          <div id="backupProgressBar" style="height:100%;width:0;background:var(--ok);transition:width .4s"></div>
+        </div>
+        <pre id="backupProgressLog" style="max-height:140px;overflow:auto;font-size:11px;margin:6px 0 0;white-space:pre-wrap"></pre>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead>
@@ -3025,18 +3036,55 @@ $('btnToggleBackupLog').addEventListener('click', () => {
     btn.textContent = 'Tampilkan Log';
   }
 });
+let backupPollTimer = null;
+function renderBackupProgress(st) {
+  const box = $('backupProgress'), bar = $('backupProgressBar');
+  box.style.display = 'block';
+  const sec = Math.round(st.elapsedMs / 1000);
+  const indeterminate = st.running && st.percent == null;
+  bar.style.width = (indeterminate ? 100 : (st.percent || 0)) + '%';
+  bar.style.opacity = indeterminate ? '.5' : '1';
+  bar.style.background = (!st.running && st.ok === false) ? 'var(--err, #e5484d)' : 'var(--ok)';
+  $('backupProgressPct').textContent = st.running
+    ? (st.percent != null ? `~${st.percent}% · ${sec}s` : `${sec}s`)
+    : (st.ok ? `100% · ${sec}s` : `Gagal · ${sec}s`);
+  $('backupProgressLabel').textContent = st.running ? 'Menjalankan backup...' : (st.ok ? 'Backup selesai' : 'Backup gagal');
+  const log = $('backupProgressLog');
+  log.textContent = st.output || '';
+  log.scrollTop = log.scrollHeight;
+}
+function stopBackupPoll() { clearInterval(backupPollTimer); backupPollTimer = null; }
+async function pollBackup() {
+  const btn = $('backupRunBtn');
+  try {
+    const st = await api('GET', '/api/backups/status');
+    renderBackupProgress(st);
+    if (st.running) {
+      btn.disabled = true;
+      btn.textContent = 'Menjalankan Backup...';
+      return;
+    }
+  } catch {}
+  stopBackupPoll();
+  btn.disabled = false;
+  btn.textContent = '▶ Jalankan Backup Sekarang';
+  backups();
+}
+function watchBackup() {
+  stopBackupPoll();
+  pollBackup();
+  backupPollTimer = setInterval(pollBackup, 1500);
+}
 $('backupRunBtn').addEventListener('click', async () => {
   if (!confirm('Jalankan proses backup MySQL sekarang di server? Ini akan mengeksekusi /usr/local/bin/backup-mysql.sh')) return;
   const btn = $('backupRunBtn');
   btn.disabled = true;
   btn.textContent = 'Menjalankan Backup...';
   try {
-    const res = await api('POST', '/api/backups/run');
-    alert(res.output || 'Backup selesai dijalankan');
-    backups();
+    await api('POST', '/api/backups/run');
+    watchBackup();
   } catch (err) {
     alert(err.message || 'Gagal menjalankan backup');
-  } finally {
     btn.disabled = false;
     btn.textContent = '▶ Jalankan Backup Sekarang';
   }
