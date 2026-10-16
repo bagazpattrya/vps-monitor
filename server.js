@@ -1551,7 +1551,11 @@ async function runDeployJob(job, p) {
     if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
     await runCmd(`chmod 640 ${shq(path.join(dest, isWP ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
     for (const sub of (isWP ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
-      await runCmd(`mkdir -p ${shq(path.join(dest, sub))} && chown ${p.deployer}:www-data ${shq(path.join(dest, sub))} && chmod 2755 ${shq(path.join(dest, sub))}`);
+      const wd = shq(path.join(dest, sub));
+      // JANGAN chmod 2755 di sini: itu menurunkan mask ACL dari fix-permissions.sh menjadi r-x
+      // sehingga www-data terkunci (gate gagal). Standar script: 775+setgid, lalu setfacl
+      // dijalankan SESUDAH chmod agar mask dihitung ulang dan www-data tetap rwx.
+      await runCmd(`mkdir -p ${wd} && chown ${p.deployer}:www-data ${wd} && chmod 2775 ${wd} && { setfacl -m u:www-data:rwx -m d:u:www-data:rwx ${wd} 2>/dev/null; } || true`);
       const t = path.join(dest, sub, '.writetest-www-data');
       const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
       if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
