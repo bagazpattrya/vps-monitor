@@ -1145,6 +1145,7 @@ select.input { appearance: auto; max-width: 100%; }
           <button class="tab" data-filter="down">Down / Stopped</button>
         </div>
         <button class="btn" id="workerRefresh">Refresh</button>
+        <button class="btn-sm" id="btnScanSched" title="php artisan schedule:list untuk semua app Laravel">⏱ Scan all tasks</button>
         <button class="btn-sm" id="btnRestartCron" title="systemctl restart cron">↻ Cron</button>
         <button class="btn-sm" id="btnRestartSup" title="systemctl restart supervisor">↻ Supervisor</button>
       </div>
@@ -2903,7 +2904,8 @@ async function workers() {
           <td><code>${c.schedule}</code></td>
           <td style="color:var(--ac);font-weight:500">${tr}</td>
           <td><code class="cmd-code" title="${escCmd}">${c.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</code></td>
-          <td style="text-align:right">
+          <td style="text-align:right;white-space:nowrap">
+            ${schedDir(c.cmd) ? `<button class="btn-sm" data-sched-tasks="${schedDir(c.cmd).replace(/"/g, '&quot;')}" title="Lihat task yang dijalankan schedule:run">☰ Tasks</button> ` : ''}
             ${isSystem
               ? `<span style="font-size:11px;color:var(--mut)" title="System cron hanya bisa diedit via SSH sebagai root">🔒 system</span>`
               : `<button class="btn-sm" data-edit-cron="1" data-user="${escUser}" data-sched="${escSched}" data-cmd="${escCmd}" data-source="${escSrc}">✎ Edit</button>`}
@@ -3006,7 +3008,52 @@ $('supList').addEventListener('click', (e) => {
   const b = e.target.closest('[data-sup]');
   if (b) supAction(b.dataset.sup, b.dataset.name, b);
 });
+function schedDir(cmd) {
+  const m = String(cmd || '').match(/cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*&&.*artisan\s+schedule:run/);
+  return m ? (m[1] || m[2] || m[3]) : '';
+}
+function openModalText(title, text, ok) {
+  $('gitModalTitle').textContent = title;
+  $('gitModalBody').textContent = text;
+  $('gitModalBody').className = 'modal-body' + (ok === false ? ' err' : '');
+  $('gitModal').classList.add('open');
+}
+async function showSchedTasks(dir) {
+  openModalText('schedule:list — ' + dir, 'Loading...');
+  try {
+    const d = await j('/api/workers/schedule?dir=' + encodeURIComponent(dir));
+    if (!d.ok) return openModalText('schedule:list — ' + dir, d.error || d.raw || 'Failed', false);
+    openModalText('schedule:list — ' + dir, d.tasks.length
+      ? d.tasks.map(t => `${t.expr.padEnd(16)} ${t.cmd}\n${' '.repeat(17)}next: ${t.next}`).join('\n')
+      : (d.raw || '(no scheduled tasks)'));
+  } catch (e) { openModalText('schedule:list — ' + dir, e.message, false); }
+}
+async function scanAllSched(btn) {
+  btn.disabled = true; const old = btn.textContent; btn.textContent = 'Scanning...';
+  openModalText('Scheduled tasks — semua app', 'Scanning... (bisa 10-60 detik, booting tiap app Laravel)');
+  try {
+    const d = await j('/api/workers/schedule?all=1');
+    const rows = [];
+    const failed = [];
+    for (const a of d.apps) {
+      if (!a.ok) { failed.push(`${a.name}: ${a.error}`); continue; }
+      for (const t of a.tasks) rows.push({ app: a.name, ...t });
+    }
+    // task yang bukan "* * * * *" dulu — itu yang biasanya penyebab spike periodik
+    const isMin = (t) => t.expr.trim() === '* * * * *';
+    rows.sort((x, y) => (isMin(x) - isMin(y)) || x.expr.localeCompare(y.expr) || x.app.localeCompare(y.app));
+    const w = Math.max(10, ...rows.map(r => r.app.length));
+    let out = `${rows.length} task di ${d.apps.length} app\n\n` +
+      rows.map(r => `${r.expr.padEnd(16)} ${r.app.padEnd(w)}  ${r.cmd}`).join('\n');
+    if (failed.length) out += '\n\n--- gagal ---\n' + failed.join('\n');
+    openModalText('Scheduled tasks — semua app', out);
+  } catch (e) { openModalText('Scheduled tasks — semua app', e.message, false); }
+  btn.disabled = false; btn.textContent = old;
+}
+$('btnScanSched').addEventListener('click', (e) => scanAllSched(e.target));
 $('cronList').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-sched-tasks]');
+  if (t) { showSchedTasks(t.dataset.schedTasks); return; }
   const b = e.target.closest('[data-edit-cron]');
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
@@ -3703,13 +3750,15 @@ setInterval(stats, 3000);
 setInterval(() => {
   const v = currentView();
   if (v === 'overview') { svc(); hist(); }
-  else if (v === 'processes') { procs(); }
   else if (v === 'workers') { workers(); }
   else if (v === 'storage') { storage(); }
   else if (v === 'git') { gitProjects(); }
   else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
 }, 15000);
+
+// Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif
+setInterval(() => { if (currentView() === 'processes') procs(); }, 5000);
 </script>
 </body>
 </html>

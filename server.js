@@ -533,6 +533,54 @@ function getCronJobs() {
   return { jobs, schedProcs };
 }
 
+// ---- laravel schedule:list (apa sebenarnya yang dijalankan tiap `schedule:run`) ----
+const scheduleCache = new Map(); // dir -> { time, data }
+function cronArtisanDirs() {
+  const dirs = new Set();
+  for (const j of getCronJobs().jobs) {
+    const m = String(j.cmd).match(/cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*&&.*artisan\s+schedule:run/);
+    const d = m && (m[1] || m[2] || m[3]);
+    if (d && fs.existsSync(path.join(d, 'artisan'))) dirs.add(d);
+  }
+  return dirs;
+}
+function parseScheduleList(out) {
+  const tasks = [];
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\S+\s+\S+\s+\S+\s+\S+\s+\S+)\s+(.*?)\s*\.{2,}\s*(?:Next Due:\s*)?(.*)$/);
+    if (m) tasks.push({ expr: m[1], cmd: m[2].trim(), next: m[3].trim() });
+  }
+  return tasks;
+}
+function getScheduleList(dir) {
+  const hit = scheduleCache.get(dir);
+  if (hit && Date.now() - hit.time < 60_000) return Promise.resolve(hit.data);
+  return new Promise((resolve) => {
+    let uid = null;
+    const me = typeof process.getuid === 'function' ? process.getuid() : null;
+    try { uid = fs.statSync(dir).uid; } catch {}
+    const artisan = path.join(dir, 'artisan');
+    const cmd = (uid !== null && uid !== me)
+      ? `sudo -H -u "#${uid}" php "${artisan}" schedule:list --no-ansi 2>&1`
+      : `php "${artisan}" schedule:list --no-ansi 2>&1`;
+    exec(cmd, { timeout: 25_000, cwd: dir, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      const raw = String(stdout || '').trim();
+      const data = { dir, name: path.basename(dir), ok: !err, raw: raw.slice(0, 8000), tasks: err ? [] : parseScheduleList(raw) };
+      if (err) data.error = (raw.split('\n').filter(Boolean).pop() || err.message).slice(0, 300);
+      scheduleCache.set(dir, { time: Date.now(), data });
+      resolve(data);
+    });
+  });
+}
+async function getAllSchedules() {
+  const dirs = [...cronArtisanDirs()];
+  const out = [];
+  for (let i = 0; i < dirs.length; i += 3) { // maks 3 paralel supaya scan tidak bikin spike CPU sendiri
+    out.push(...await Promise.all(dirs.slice(i, i + 3).map(getScheduleList)));
+  }
+  return out;
+}
+
 function updateCronSchedule(user, oldSchedule, newSchedule, cmd, source) {
   return new Promise((resolve) => {
     if (source && String(source).startsWith('system:')) {
@@ -1890,6 +1938,17 @@ const server = http.createServer(async (req, res) => {
       cron: crnOut,
       laravelLogs: laravelLogPaths().filter((x) => !isHidden(session, x)),
     }));
+  }
+  if (p === '/api/workers/schedule') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    if (url.searchParams.get('all') === '1') {
+      audit(session.user, 'worker.schedule', 'all', 'scan');
+      const all = (await getAllSchedules()).filter((x) => !isHidden(session, x.dir));
+      return send(res, 200, JSON.stringify({ time: Date.now(), apps: all }));
+    }
+    const dir = url.searchParams.get('dir');
+    if (!dir || !cronArtisanDirs().has(dir) || isHidden(session, dir)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    return send(res, 200, JSON.stringify(await getScheduleList(dir)));
   }
   if (p === '/api/workers/supervisor' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
