@@ -1360,7 +1360,9 @@ async function runDeployJob(job, p) {
     // 2. MySQL
     jobStep(job, 'mysql: create db+user', 'running', '');
     // CREATE IF NOT EXISTS saja tidak cukup: retry dengan password baru harus update password user lama.
-    r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
+    // sqlStr: escape backslash DULU lalu quote — password ber-backslash kalau tidak, MySQL salah parse.
+    const sqlStr = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
     if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
     jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
 
@@ -1402,14 +1404,19 @@ async function runDeployJob(job, p) {
       const samplePath = path.join(dest, 'wp-config-sample.php');
       if (!fs.existsSync(samplePath)) throw new Error('wp-config-sample.php tidak ada (bukan WordPress?)');
       let wp = fs.readFileSync(samplePath, 'utf8');
+      // phpStr: escape backslash DULU lalu quote (PHP single-quote: \\ dan \' satu-satunya escape).
+      const phpStr = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const wset = (k, v) => {
         const re = new RegExp(`define\\(\\s*'${k}'\\s*,\\s*'.*?'\\s*\\)`);
-        wp = re.test(wp) ? wp.replace(re, `define( '${k}', '${v.replace(/'/g, `\\'`)}' )`) : wp + `\ndefine( '${k}', '${v.replace(/'/g, `\\'`)}' );\n`;
+        // replacer FUNCTION, bukan string: nilai acak (salts/password) mengandung $& $' $` $$
+        // yang di String.replace ditafsirkan pola khusus -> wp-config rusak acak (parse error).
+        const repl = `define( '${k}', '${phpStr(v)}' )`;
+        wp = re.test(wp) ? wp.replace(re, () => repl) : wp + `\n${repl};\n`;
       };
       wset('DB_NAME', p.dbName);
       wset('DB_USER', p.dbUser);
       wset('DB_PASSWORD', p.dbPass);
-      wp = wp.replace(/(\$table_prefix\s*=\s*')[^']*(')/, `$1${p.tablePrefix}$2`);
+      wp = wp.replace(/(\$table_prefix\s*=\s*')[^']*(')/, (m, a, b) => `${a}${p.tablePrefix}${b}`);
       // salts: coba API wordpress.org, fallback random lokal.
       // Validasi KELENGKAPAN (8 define utuh): fetch terpotong = wp-config rusak = parse error misterius di eval wp-cli.
       let salts = '';
@@ -1421,7 +1428,7 @@ async function runDeployJob(job, p) {
         salts = ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT']
           .map((k) => `define( '${k}', '${randomBytes(48).toString('hex')}' );`).join('\n');
       }
-      wp = wp.replace(/define\(\s*'AUTH_KEY'[\s\S]*?NONCE_SALT'\s*,\s*'[^']*'\s*\)/, salts);
+      wp = wp.replace(/define\(\s*'AUTH_KEY'[\s\S]*?NONCE_SALT'\s*,\s*'[^']*'\s*\)/, () => salts);
       if (!/AUTH_KEY/.test(wp)) wp += '\n' + salts + '\n';
       wp += `\ndefine( 'WP_HOME', 'https://${p.domain}' );\ndefine( 'WP_SITEURL', 'https://${p.domain}' );\ndefine( 'DISABLE_WP_CRON', true );\ndefine( 'FS_METHOD', 'direct' );\n`;
       fs.writeFileSync(path.join(dest, 'wp-config.php'), wp);
@@ -1437,7 +1444,8 @@ async function runDeployJob(job, p) {
     let env = fs.readFileSync(exPath, 'utf8');
     const setEnv = (k, v) => {
       const re = new RegExp(`^${k}=.*$`, 'm');
-      env = re.test(env) ? env.replace(re, `${k}=${v}`) : env + `\n${k}=${v}\n`;
+      // Function replacer: nilai dengan $ (SMTP password dsb) bukan pola khusus String.replace.
+      env = re.test(env) ? env.replace(re, () => `${k}=${v}`) : env + `\n${k}=${v}\n`;
     };
     setEnv('APP_URL', `https://${p.domain}`);
     // Paksa mysql: banyak .env.example Laravel default DB_CONNECTION=sqlite.
