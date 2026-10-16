@@ -1586,6 +1586,24 @@ select.input { appearance: auto; max-width: 100%; }
   </div>
 </div>
 
+<div class="modal-backdrop" id="envModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="envModalTitle">Edit .env</span>
+      <button class="btn" id="envModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto">
+      <div style="font-size:12px;color:var(--mut);margin-bottom:8px">Setelah disimpan, otomatis menjalankan <code>php artisan optimize:clear</code>. Backup sebelumnya disimpan sebagai <code>.env.bak</code>.</div>
+      <textarea id="envText" spellcheck="false" style="width:100%;min-height:320px;font-family:monospace;font-size:12px;background:var(--bg-elev);color:inherit;border:1px solid var(--border,#444);border-radius:8px;padding:10px;box-sizing:border-box;white-space:pre;overflow:auto" disabled></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button class="btn" id="envCancel">Batal</button>
+        <button class="btn-pull" id="envSave" disabled>Save &amp; Optimize Clear</button>
+      </div>
+      <pre id="envOut" class="modal-body" style="display:none;margin-top:10px;padding:10px;background:var(--bg-elev);border-radius:8px;max-height:220px"></pre>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="cronModal">
   <div class="modal">
     <div class="modal-head">
@@ -2614,6 +2632,7 @@ function renderGitProjects() {
                 <button class="btn-pull-more" data-rel="${r.relPath}" title="More actions">▾</button>
                 <div class="pull-menu">
                   <button class="act-seed" data-rel="${r.relPath}">Run Seeder…</button>
+                  <button class="act-env" data-rel="${r.relPath}">Edit .env…</button>
                 </div>
               </div>
             </div>
@@ -3320,8 +3339,49 @@ $('seedModalClose').addEventListener('click', closeSeedModal);
 $('seedCancel').addEventListener('click', closeSeedModal);
 $('seedModal').addEventListener('click', (e) => { if (e.target === $('seedModal')) closeSeedModal(); });
 
+let envRel = null;
+async function openEnvModal(rel) {
+  envRel = rel;
+  $('envModalTitle').textContent = `Edit .env: ${rel}`;
+  const ta = $('envText');
+  ta.value = 'Loading…'; ta.disabled = true;
+  $('envSave').disabled = true;
+  $('envOut').style.display = 'none';
+  $('envModal').classList.add('open');
+  try {
+    const d = await j('/api/git/env?relPath=' + encodeURIComponent(rel));
+    ta.value = d.content || '';
+    ta.disabled = false;
+    $('envSave').disabled = false;
+  } catch (e) {
+    ta.value = e.message || 'Gagal memuat .env';
+  }
+}
+$('envSave').addEventListener('click', async () => {
+  if (!confirm(`Simpan .env di ${envRel} lalu jalankan optimize:clear?`)) return;
+  const btn = $('envSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const out = $('envOut');
+  out.style.display = ''; out.className = 'modal-body'; out.textContent = 'Menyimpan…';
+  try {
+    const d = await api('POST', '/api/git/env', { relPath: envRel, content: $('envText').value });
+    out.textContent = d.output || 'Done';
+    out.classList.add('ok');
+  } catch (e) {
+    out.textContent = e.message;
+    out.classList.add('err');
+  }
+  btn.textContent = 'Save & Optimize Clear';
+  btn.disabled = false;
+});
+const closeEnvModal = () => $('envModal').classList.remove('open');
+$('envModalClose').addEventListener('click', closeEnvModal);
+$('envCancel').addEventListener('click', closeEnvModal);
+
 $('gitList').addEventListener('click', async (e) => {
-  const more = e.target.closest('.btn-pull-more');
+  const envBtn = e.target.closest('.act-env');
+  if (envBtn) { closePullMenus(); openEnvModal(envBtn.dataset.rel); return; }
+  const more =e.target.closest('.btn-pull-more');
   if (more) {
     const menu = more.parentElement.querySelector('.pull-menu');
     const wasOpen = menu.classList.contains('open');

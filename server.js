@@ -778,6 +778,38 @@ async function runSeeders(rel, classes) {
   return { ok: allOk, output: output.trim() };
 }
 
+function readProjectEnv(rel) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  const f = path.join(pr.full, '.env');
+  try { return { ok: true, content: fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '', exists: fs.existsSync(f) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+}
+
+// Simpan .env (in-place agar owner/mode tetap), lalu php artisan optimize:clear.
+async function saveProjectEnv(rel, content) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  if (typeof content !== 'string' || content.length > 256 * 1024) return { ok: false, error: 'Konten .env tidak valid / terlalu besar' };
+  const f = path.join(pr.full, '.env');
+  let output = '';
+  try {
+    const existed = fs.existsSync(f);
+    if (existed) { try { fs.copyFileSync(f, f + '.bak'); } catch {} }
+    fs.writeFileSync(f, content);
+    if (!existed && pr.uid !== null && pr.uid !== pr.me) { try { fs.chownSync(f, pr.uid, fs.statSync(pr.full).gid); } catch {} }
+    output += '.env tersimpan\n';
+  } catch (e) {
+    return { ok: false, error: 'Gagal menyimpan .env: ' + e.message };
+  }
+  const args = [path.join(pr.full, 'artisan'), 'optimize:clear'];
+  const r = (pr.uid !== null && pr.uid !== pr.me)
+    ? await runFile('sudo', ['-H', '-u', `#${pr.uid}`, 'php', ...args], { cwd: pr.full, timeout: 60000 })
+    : await runFile('php', args, { cwd: pr.full, timeout: 60000 });
+  output += `\n--- php artisan optimize:clear ${r.ok ? '' : '[FAILED] '}---\n${r.output || r.error || ''}`;
+  return { ok: r.ok, output: output.trim() };
+}
+
 function pullGitProject(targetPath) {
   return new Promise((resolve) => {
     const list = getGitProjects();
@@ -2079,6 +2111,23 @@ const server = http.createServer(async (req, res) => {
     const pr = resolveGitProject(rel);
     if (pr.error) return send(res, 400, JSON.stringify({ error: pr.error }));
     return send(res, 200, JSON.stringify({ seeders: listSeeders(pr.full) }));
+  }
+  if (p === '/api/git/env' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const rel = url.searchParams.get('relPath');
+    if (isHidden(session, rel)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    audit(session.user, 'git.env.read', rel);
+    const r = readProjectEnv(rel);
+    return send(res, r.ok ? 200 : 400, JSON.stringify(r));
+  }
+  if (p === '/api/git/env' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    if (isHidden(session, body && body.relPath)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    audit(session.user, 'git.env.save', body && body.relPath);
+    const r = await saveProjectEnv(body && body.relPath, body && body.content);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/git/seed' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
