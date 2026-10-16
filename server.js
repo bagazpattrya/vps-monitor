@@ -1657,6 +1657,19 @@ const server = http.createServer(async (req, res) => {
     const r = await supervisorAction(body && body.action, body && body.name);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
+  if (p === '/api/pm2/restart' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    audit(session.user, 'pm2.restart', process.env.pm_id || 'vps-monitor', 'restart');
+    send(res, 200, JSON.stringify({ ok: true }));
+    // Jalankan setelah response terkirim; proses ini sendiri akan di-restart oleh pm2.
+    setTimeout(() => {
+      const target = process.env.pm_id !== undefined ? process.env.pm_id : (process.env.PM2_APP_NAME || 'vps-monitor');
+      const child = spawn('pm2', ['restart', String(target)], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' });
+      child.on('error', () => {});
+      child.unref();
+    }, 300);
+    return;
+  }
   if (p === '/api/workers/service' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;

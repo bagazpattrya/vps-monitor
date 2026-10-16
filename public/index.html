@@ -246,6 +246,13 @@ body.fullscreen-focus .chart-box {
 .nav-link.active { background: rgba(59, 130, 246, 0.12); color: var(--tx); }
 .nav-link .dot { width: 7px; height: 7px; border-radius: 99px; background: currentColor; opacity: 0.5; flex-shrink: 0; }
 .nav-link.active .dot { opacity: 1; background: var(--ac); }
+.nav-action {
+  margin: 8px 0 0; padding: 9px 12px; border-radius: 8px; cursor: pointer; text-align: left;
+  font-size: 13px; font-weight: 500; color: #fbbf24;
+  background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.nav-action:hover { background: rgba(245, 158, 11, 0.16); }
+.nav-action:disabled { opacity: 0.6; cursor: wait; }
 .nav-foot { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--mut); }
 
 .side-user { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
@@ -850,6 +857,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <a href="#/deploy" class="nav-link" id="navLinkDeploy" data-view="deploy" style="display:none"><span class="dot"></span>Auto Deploy</a>
+  <button class="nav-action" id="pm2RestartBtn" style="display:none" title="Restart aplikasi ini via pm2">⟳ PM2 Restart</button>
   <div class="nav-foot">
     <div class="side-user" id="sideUser" style="display:none">
       <div class="side-user-avatar" id="sideUserAvatar">?</div>
@@ -1668,6 +1676,7 @@ j('/api/me').then(m => {
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
+    $('pm2RestartBtn').style.display = '';
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
@@ -1941,6 +1950,21 @@ function renderUsers() {
 }
 
 $('sideLogout').onclick = () => $('logout').click();
+
+$('pm2RestartBtn').onclick = async () => {
+  if (!confirm('Restart aplikasi VPS Monitor via pm2? Dashboard akan terputus beberapa detik.')) return;
+  const btn = $('pm2RestartBtn');
+  btn.disabled = true;
+  btn.textContent = '⟳ Restarting…';
+  try {
+    await api('POST', '/api/pm2/restart');
+    setTimeout(() => location.reload(), 4000);
+  } catch (e) {
+    alert('Restart gagal: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '⟳ PM2 Restart';
+  }
+};
 $('logout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' });
   location.href = '/login';
