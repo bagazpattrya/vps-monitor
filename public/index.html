@@ -681,7 +681,29 @@ code {
   align-items: center;
   gap: 4px;
 }
-body.no-pull .btn-pull, body.no-pull .git-check, body.no-pull #gitBatchPull { display: none !important; }
+body.no-pull .pull-split, body.no-pull .btn-pull, body.no-pull .git-check, body.no-pull #gitBatchPull { display: none !important; }
+.pull-split { position: relative; display: inline-flex; flex: none; }
+.pull-split .btn-pull { border-radius: 8px 0 0 8px; }
+.btn-pull-more {
+  background: rgba(16, 185, 129, 0.12); color: var(--ok);
+  border: 1px solid rgba(16, 185, 129, 0.3); border-left: 0; border-radius: 0 8px 8px 0;
+  padding: 5px 8px; font-size: 11px; cursor: pointer;
+}
+.btn-pull-more:hover { background: rgba(16, 185, 129, 0.2); }
+.pull-menu {
+  display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 50; min-width: 160px;
+  background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 8px; padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.pull-menu.open { display: block; }
+.pull-menu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--tx);
+  padding: 7px 10px; font-size: 12px; border-radius: 6px; cursor: pointer;
+}
+.pull-menu button:hover { background: var(--bg-elev); }
+.seed-list { max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+.seed-list label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 12.5px; border-radius: 6px; cursor: pointer; font-family: var(--font-mono); }
+.seed-list label:hover { background: var(--bg-elev); }
 .btn-pull {
   background: rgba(16, 185, 129, 0.12);
   color: var(--ok);
@@ -1471,6 +1493,24 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="seedModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="seedModalTitle">Run Seeder</span>
+      <button class="btn" id="seedModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto">
+      <div style="font-size:12px;color:var(--mut);margin-bottom:8px">Pilih seeder yang akan dijalankan (<code>db:seed --class=… --force</code>). Seeder bisa mengubah data live — pastikan aman diulang.</div>
+      <div class="seed-list" id="seedList">Loading…</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button class="btn" id="seedCancel">Batal</button>
+        <button class="btn-pull" id="seedRun" disabled>Run Selected</button>
+      </div>
+      <pre id="seedOut" class="modal-body" style="display:none;margin-top:10px;padding:10px;background:var(--bg-elev);border-radius:8px;max-height:220px"></pre>
+    </div>
   </div>
 </div>
 
@@ -2395,7 +2435,13 @@ function renderGitProjects() {
                 <div class="git-meta"><code>${r.hash}</code> · ${r.time} · ${r.message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
                 <div class="git-last-pull">Last Update: <strong>${fmtDateTime(r.lastPull)}</strong></div>
               </div>
-              <button class="btn-pull" data-rel="${r.relPath}" title="git pull + migrate + optimize:clear">↻ Update</button>
+              <div class="pull-split">
+                <button class="btn-pull" data-rel="${r.relPath}" title="git pull + migrate + optimize:clear">↻ Update</button>
+                <button class="btn-pull-more" data-rel="${r.relPath}" title="More actions">▾</button>
+                <div class="pull-menu">
+                  <button class="act-seed" data-rel="${r.relPath}">Run Seeder…</button>
+                </div>
+              </div>
             </div>
           `).join('')}
         </div>
@@ -3007,7 +3053,65 @@ $('gitList').addEventListener('change', (e) => {
   updateBatchButton();
 });
 
+let seedRel = null;
+const closePullMenus = () => document.querySelectorAll('.pull-menu.open').forEach(m => m.classList.remove('open'));
+document.addEventListener('click', (e) => { if (!e.target.closest('.pull-split')) closePullMenus(); });
+
+async function openSeedModal(rel) {
+  seedRel = rel;
+  $('seedModalTitle').textContent = `Run Seeder: ${rel}`;
+  $('seedList').textContent = 'Loading…';
+  $('seedOut').style.display = 'none';
+  $('seedRun').disabled = true;
+  $('seedModal').classList.add('open');
+  try {
+    const d = await j('/api/git/seeders?relPath=' + encodeURIComponent(rel));
+    const list = d.seeders || [];
+    $('seedList').innerHTML = list.length
+      ? list.map(s => `<label><input type="checkbox" class="seed-chk" value="${escHtml(s)}" /> ${escHtml(s)}</label>`).join('')
+      : '<span style="color:var(--mut);font-size:12px;padding:6px 8px;display:block">Tidak ada seeder di database/seeders</span>';
+  } catch (e) {
+    $('seedList').innerHTML = `<span style="color:var(--bad);font-size:12px;padding:6px 8px;display:block">${escHtml(e.message || 'Gagal memuat seeder')}</span>`;
+  }
+}
+$('seedList').addEventListener('change', () => {
+  $('seedRun').disabled = !document.querySelector('.seed-chk:checked');
+});
+$('seedRun').addEventListener('click', async () => {
+  const classes = Array.from(document.querySelectorAll('.seed-chk:checked')).map(c => c.value);
+  if (!classes.length) return;
+  if (!confirm(`Jalankan ${classes.length} seeder di ${seedRel}?\n\n${classes.join('\n')}`)) return;
+  const btn = $('seedRun');
+  btn.disabled = true; btn.textContent = 'Running…';
+  const out = $('seedOut');
+  out.style.display = ''; out.className = 'modal-body'; out.textContent = 'Menjalankan…';
+  try {
+    const d = await api('POST', '/api/git/seed', { relPath: seedRel, classes });
+    out.textContent = d.output || 'Done';
+    out.classList.add('ok');
+  } catch (e) {
+    out.textContent = e.message;
+    out.classList.add('err');
+  }
+  btn.textContent = 'Run Selected';
+  btn.disabled = !document.querySelector('.seed-chk:checked');
+});
+const closeSeedModal = () => $('seedModal').classList.remove('open');
+$('seedModalClose').addEventListener('click', closeSeedModal);
+$('seedCancel').addEventListener('click', closeSeedModal);
+$('seedModal').addEventListener('click', (e) => { if (e.target === $('seedModal')) closeSeedModal(); });
+
 $('gitList').addEventListener('click', async (e) => {
+  const more = e.target.closest('.btn-pull-more');
+  if (more) {
+    const menu = more.parentElement.querySelector('.pull-menu');
+    const wasOpen = menu.classList.contains('open');
+    closePullMenus();
+    if (!wasOpen) menu.classList.add('open');
+    return;
+  }
+  const seedBtn = e.target.closest('.act-seed');
+  if (seedBtn) { closePullMenus(); openSeedModal(seedBtn.dataset.rel); return; }
   const btn = e.target.closest('.btn-pull');
   if (btn && btn.dataset.rel) {
     const rel = btn.dataset.rel;

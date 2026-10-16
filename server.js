@@ -706,6 +706,56 @@ function getGitProjects(force = false) {
   return projects;
 }
 
+// Validasi relPath project git (whitelist) dan kembalikan { full, uid, me } atau { error }.
+function resolveGitProject(rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes('..') || rel.startsWith('/')) return { error: 'Invalid project' };
+  const full = path.normalize(path.join(SCAN_ROOT, rel));
+  if (!full.startsWith(SCAN_ROOT + path.sep) && full !== SCAN_ROOT) return { error: 'Invalid project' };
+  if (!getGitProjects().some((p) => p.path === full)) return { error: 'Project not in verified whitelist' };
+  if (!fs.existsSync(path.join(full, 'artisan'))) return { error: 'Bukan project Laravel (artisan tidak ditemukan)' };
+  let uid = null;
+  try { uid = fs.statSync(full).uid; } catch {}
+  const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
+  return { full, uid, me };
+}
+
+// Daftar seeder (class) di database/seeders, termasuk subfolder.
+function listSeeders(dir) {
+  const root = path.join(dir, 'database', 'seeders');
+  const out = [];
+  const walk = (d, prefix) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory()) walk(path.join(d, e.name), prefix + e.name + '\\');
+      else if (/^[A-Za-z0-9_]+\.php$/.test(e.name)) out.push(prefix + e.name.slice(0, -4));
+    }
+  };
+  walk(root, '');
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+async function runSeeders(rel, classes) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  const available = new Set(listSeeders(pr.full));
+  if (!Array.isArray(classes) || !classes.length) return { ok: false, error: 'Pilih minimal satu seeder' };
+  for (const c of classes) if (typeof c !== 'string' || !available.has(c)) return { ok: false, error: `Seeder tidak valid: ${c}` };
+  let output = '';
+  let allOk = true;
+  for (const c of classes) {
+    // Subfolder -> namespace Database\Seeders\Sub\Class; root seeder tetap class name saja.
+    const cls = c.includes('\\') ? `Database\\Seeders\\${c}` : c;
+    const args = [path.join(pr.full, 'artisan'), 'db:seed', `--class=${cls}`, '--force'];
+    const r = (pr.uid !== null && pr.uid !== pr.me)
+      ? await runFile('sudo', ['-H', '-u', `#${pr.uid}`, 'php', ...args], { cwd: pr.full, timeout: 120000 })
+      : await runFile('php', args, { cwd: pr.full, timeout: 120000 });
+    output += `\n--- php artisan db:seed --class=${cls} ${r.ok ? '' : '[FAILED] '}---\n${r.output || r.error || ''}\n`;
+    if (!r.ok) { allOk = false; break; }
+  }
+  return { ok: allOk, output: output.trim() };
+}
+
 function pullGitProject(targetPath) {
   return new Promise((resolve) => {
     const list = getGitProjects();
@@ -1839,6 +1889,23 @@ const server = http.createServer(async (req, res) => {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));
     const safe = projects.map(({ path: _p, ...rest }) => rest); // hide absolute path
     return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
+  }
+  if (p === '/api/git/seeders') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const rel = url.searchParams.get('relPath');
+    if (isHidden(session, rel)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    const pr = resolveGitProject(rel);
+    if (pr.error) return send(res, 400, JSON.stringify({ error: pr.error }));
+    return send(res, 200, JSON.stringify({ seeders: listSeeders(pr.full) }));
+  }
+  if (p === '/api/git/seed' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    if (isHidden(session, body && body.relPath)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    audit(session.user, 'git.seed', body && body.relPath, Array.isArray(body && body.classes) ? body.classes.join(',') : '');
+    const r = await runSeeders(body && body.relPath, body && body.classes);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/git/pull' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
