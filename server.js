@@ -1520,6 +1520,18 @@ async function runDeployJob(job, p) {
       jobStep(job, 'theme clone', 'ok', r.output.slice(-1500));
     }
 
+    // 6c. Plugin wajib WP baru: Advanced Custom Fields (free) install+activate.
+    // Non-fatal (warn): site tetap jalan tanpa ACF, tapi theme yang depend bisa error.
+    // Catatan: ACF PRO butuh lisensi/zip manual — tidak bisa auto-install.
+    if (isWP && p.projectType === 'new') {
+      jobStep(job, 'plugin ACF', 'running', '');
+      r = await ago('/usr/local/bin/wp', ['plugin', 'install', 'advanced-custom-fields', '--activate', `--path=${dest}`], { timeout: 180000, env: { WP_CLI_CACHE_DIR: '/tmp/wp-cli-cache' } });
+      if (!r.ok) {
+        jobStep(job, 'plugin ACF', 'warn', 'install/activate ACF gagal, install manual via wp-admin:\n' + r.output.slice(-1500));
+        job.warn = (job.warn ? job.warn + ' | ' : '') + 'ACF gagal terinstall otomatis';
+      } else jobStep(job, 'plugin ACF', 'ok', r.output.slice(-1500));
+    }
+
     // 7-8. storage:link + optimize + fix perms + gate (Laravel). WP: langsung perms.
     if (isWP) {
       jobStep(job, 'storage:link + optimize', 'skip', 'bukan Laravel');
