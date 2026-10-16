@@ -878,6 +878,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none"><span class="dot"></span>Backups</a>
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
+  <a href="#/activity" class="nav-link" id="navLinkActivity" data-view="activity" style="display:none"><span class="dot"></span>Activity Log</a>
   <a href="#/deploy" class="nav-link" id="navLinkDeploy" data-view="deploy" style="display:none"><span class="dot"></span>Auto Deploy</a>
   <button class="nav-action" id="pm2RestartBtn" style="display:none" title="Restart aplikasi ini via pm2">⟳ PM2 Restart</button>
   <div class="nav-foot">
@@ -1410,6 +1411,55 @@ select.input { appearance: auto; max-width: 100%; }
     </div>
   </div><!-- /view-users -->
 
+  <!-- VIEW: ACTIVITY LOG -->
+  <div class="view-pane" id="view-activity">
+    <div class="card c12" id="activityCard">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>User Activity</span>
+          <span class="badge" id="activityCount">0</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="activitySearch" class="input" placeholder="Filter target / detail..." style="min-width:180px" />
+          <input type="search" id="activityUser" class="input" placeholder="User..." style="width:110px" />
+          <select id="activityAction" class="input">
+            <option value="">Semua aksi</option>
+            <option value="ui.view">Viewing page</option>
+            <option value="ui.click">Clicks</option>
+            <option value="auth.">Login/out</option>
+            <option value="git.">Git</option>
+            <option value="backup.">Backup</option>
+            <option value="deploy.">Deploy</option>
+            <option value="user.">User mgmt</option>
+            <option value="worker.">Worker</option>
+            <option value="fs.">Files</option>
+          </select>
+          <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:4px"><input type="checkbox" id="activityAuto" checked /> Auto</label>
+          <button class="btn" id="activityRefresh">Refresh</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--mut);margin-bottom:14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+        Viewing page + klik penting + aksi server (git pull, deploy, backup, worker, user). Terbaru di atas.
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:150px">Waktu</th>
+              <th style="width:120px">User</th>
+              <th style="width:170px">Aksi</th>
+              <th>Target</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="activityList">
+            <tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">Memuat activity...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-activity -->
+
   <!-- VIEW: AUTO DEPLOY -->
   <div class="view-pane" id="view-deploy">
   <div class="card c12" id="deployCard">
@@ -1738,12 +1788,38 @@ j('/api/me').then(m => {
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
+    if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups', 'deploy'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
+
+function trackActivity(action, target, details) {
+  try {
+    fetch('/api/activity/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, target: String(target || ''), details: String(details || '') }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
+
+// Klik penting: tombol/tab/aksi (bukan nav sidebar = sudah dilacak sebagai view).
+let lastClickTrack = { key: '', t: 0 };
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('button, .tab, .nav-action, [data-depjob], [data-pull], [data-gitpull], [data-cat], [data-sort], [data-limit], [data-filter]');
+  if (!el || el.closest('.sidebar-close') || el.id === 'vpsMonitorBtn') return;
+  if (['logout', 'sideLogout', 'sidebarClose', 'sidebarOverlay'].includes(el.id)) return;
+  const label = (el.dataset.track || el.id || el.dataset.sort || el.dataset.limit || el.dataset.filter || el.dataset.cat || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!label) return;
+  const now = Date.now();
+  if (label === lastClickTrack.key && now - lastClickTrack.t < 600) return;
+  lastClickTrack = { key: label, t: now };
+  trackActivity('click', label, el.tagName.toLowerCase());
+}, true);
 
 async function api(method, url, body) {
   const r = await fetch(url, {
@@ -2011,7 +2087,83 @@ function renderUsers() {
   `).join('');
 }
 
-$('sideLogout').onclick = () => $('logout').click();
+// ---- Activity Log ----
+let rawActivity = [];
+let activityTimer = null;
+let activityTotal = 0;
+const ACTIVITY_LABELS = {
+  'ui.view': ['viewing page', ''],
+  'ui.click': ['click', ''],
+  'auth.login': ['login', 'ok'],
+  'auth.login.fail': ['login FAILED', 'down'],
+  'auth.logout': ['logout', ''],
+  'git.pull': ['git pull', 'warn'],
+  'git.seed': ['git seed', 'warn'],
+  'backup.run': ['backup run', 'warn'],
+  'backup.download': ['backup download', ''],
+  'deploy.start': ['deploy', 'warn'],
+  'transfer.start': ['transfer', 'warn'],
+  'transfer.cancel': ['transfer cancel', 'down'],
+  'user.create': ['user create', 'warn'],
+  'user.update': ['user update', 'warn'],
+  'user.delete': ['user delete', 'down'],
+  'worker.supervisor': ['worker', ''],
+  'worker.service': ['service', ''],
+  'worker.cron': ['cron', ''],
+  'pm2.restart': ['pm2 restart', 'warn'],
+  'fs.list': ['fs list', ''],
+  'fs.read': ['fs read', ''],
+  'fs.download': ['fs download', ''],
+};
+function activityLabel(a) {
+  const e = ACTIVITY_LABELS[a] || [a, ''];
+  return `<span class="pill ${e[1]}">${escHtml(e[0])}</span>`;
+}
+async function activity() {
+  if (!isAdmin) return;
+  try {
+    const d = await j('/api/activity?limit=200');
+    rawActivity = d.entries || [];
+    activityTotal = d.total || rawActivity.length;
+    renderActivity();
+  } catch {
+    $('activityList').innerHTML = '<tr><td colspan="5" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat activity</td></tr>';
+  }
+}
+function renderActivity() {
+  const q = ($('activitySearch').value || '').trim().toLowerCase();
+  const qu = ($('activityUser').value || '').trim().toLowerCase();
+  const qa = $('activityAction').value;
+  let list = rawActivity;
+  if (q) list = list.filter((a) => (a.target + ' ' + a.details).toLowerCase().includes(q));
+  if (qu) list = list.filter((a) => String(a.user).toLowerCase().includes(qu));
+  if (qa) list = list.filter((a) => String(a.action).startsWith(qa));
+  $('activityCount').textContent = list.length + (list.length !== rawActivity.length ? ' / ' + rawActivity.length : '');
+  if (!list.length) {
+    $('activityList').innerHTML = '<tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">Tidak ada aktivitas cocok.</td></tr>';
+    return;
+  }
+  $('activityList').innerHTML = list.map((a) => `
+    <tr>
+      <td style="color:var(--mut);white-space:nowrap">${fmtUserDate(a.t)}</td>
+      <td><strong>${escHtml(a.user)}</strong></td>
+      <td>${activityLabel(a.action)}</td>
+      <td style="font-family:var(--font-mono);font-size:12px">${escHtml(a.target)}</td>
+      <td style="color:var(--mut);font-size:12px">${escHtml(a.details)}</td>
+    </tr>
+  `).join('');
+}
+function activityAutoToggle() {
+  if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
+  if ($('activityAuto').checked && currentView() === 'activity') {
+    activityTimer = setInterval(() => { if (currentView() === 'activity') activity(); else activityAutoToggle(); }, 10000);
+  }
+}
+$('activityRefresh').onclick = () => activity();
+$('activitySearch').addEventListener('input', renderActivity);
+$('activityUser').addEventListener('input', renderActivity);
+$('activityAction').addEventListener('change', renderActivity);
+$('activityAuto').addEventListener('change', activityAutoToggle);
 
 $('pm2RestartBtn').onclick = async () => {
   if (!confirm('Restart aplikasi VPS Monitor via pm2? Dashboard akan terputus beberapa detik.')) return;
@@ -2947,7 +3099,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'deploy'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2967,6 +3119,7 @@ function navigateView(name, refresh = true) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 
   if (refresh) {
+    trackActivity('view', view);
     if (view === 'overview') {
       stats(); svc(); hist();
       setTimeout(() => { try { if (typeof chart !== 'undefined' && chart) chart.resize(); } catch {} }, 80);
@@ -2978,6 +3131,7 @@ function navigateView(name, refresh = true) {
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
+    if (view === 'activity') { activity(); activityAutoToggle(); }
     if (view === 'deploy') deployJobsRefresh();
   }
 }

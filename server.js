@@ -12,6 +12,8 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const ACTIVITY_FILE = path.join(DATA_DIR, 'activity.jsonl');
+const MAX_ACTIVITY = 5000;
 const SAMPLE_INTERVAL_MS = 10_000;
 const MAX_POINTS = 8640; // 24h @ 10s
 const SCAN_ROOT = process.env.SCAN_DIR || '/var/www';
@@ -29,6 +31,26 @@ try {
     if (Array.isArray(raw)) history = raw.slice(-MAX_POINTS);
   }
 } catch { history = []; }
+
+// ---- user activity log (append-only JSONL, ring in-memory) ----
+let activity = [];
+let activityDirty = false;
+try {
+  if (fs.existsSync(ACTIVITY_FILE)) {
+    activity = fs.readFileSync(ACTIVITY_FILE, 'utf8').split('\n').filter(Boolean).slice(-MAX_ACTIVITY)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  }
+} catch { activity = []; }
+
+function logActivity(user, action, target, details = '') {
+  activity.push({ t: Date.now(), user: String(user || '?'), action: String(action || '').slice(0, 40), target: String(target ?? '').slice(0, 200), details: String(details ?? '').slice(0, 300) });
+  if (activity.length > MAX_ACTIVITY) activity = activity.slice(-MAX_ACTIVITY);
+  activityDirty = true;
+}
+setInterval(() => {
+  if (!activityDirty) return;
+  try { fs.writeFileSync(ACTIVITY_FILE, activity.map((a) => JSON.stringify(a)).join('\n') + '\n'); activityDirty = false; } catch {}
+}, 60_000).unref();
 
 // ---- collectors ----
 let prevCpu = null;
@@ -917,6 +939,7 @@ function serveFile(res, file) {
 function audit(user, action, target, details = '') {
   const ts = new Date().toISOString();
   console.log(`[AUDIT ${ts}] user=${user} action=${action} target=${target}${details ? ' ' + details : ''}`);
+  logActivity(user, action, target, details);
 }
 
 // ---- Mini File Explorer helpers ----
@@ -1772,11 +1795,14 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const r = await auth.login(req, body && body.username, body && body.password);
-    if (!r.ok) return send(res, r.status, JSON.stringify({ error: r.error }));
+    if (!r.ok) { logActivity(body && body.username, 'auth.login.fail', '', String(r.error || '').slice(0, 100)); return send(res, r.status, JSON.stringify({ error: r.error })); }
+    logActivity(r.user, 'auth.login', '', `role=${r.role || ''}`);
     res.setHeader('Set-Cookie', r.setCookie);
     return send(res, 200, JSON.stringify({ user: r.user, admin: r.admin, role: r.role }));
   }
   if (p === '/api/logout' && req.method === 'POST') {
+    const s0 = auth.getSession(req);
+    if (s0) logActivity(s0.user, 'auth.logout', '');
     res.setHeader('Set-Cookie', auth.logout(req));
     return send(res, 200, JSON.stringify({ ok: true }));
   }
@@ -1929,6 +1955,27 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
     return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
+  }
+  if (p === '/api/activity/track' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse(await readBody(req, 2048)); } catch { return send(res, 204, ''); }
+    const action = String((body && body.action) || '').slice(0, 24).replace(/[^\w.]/g, '');
+    if (action) logActivity(session.user, 'ui.' + action, body && body.target, body && body.details);
+    return send(res, 204, '');
+  }
+  if (p === '/api/activity' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const limit = Math.min(1000, Math.max(10, parseInt(url.searchParams.get('limit') || '200', 10)));
+    const qUser = String(url.searchParams.get('user') || '').toLowerCase();
+    const qAction = String(url.searchParams.get('action') || '').toLowerCase();
+    const qSearch = String(url.searchParams.get('search') || '').toLowerCase();
+    let rows = activity;
+    if (qUser) rows = rows.filter((a) => String(a.user).toLowerCase().includes(qUser));
+    if (qAction) rows = rows.filter((a) => String(a.action).toLowerCase().includes(qAction));
+    if (qSearch) rows = rows.filter((a) => (a.target + ' ' + a.details).toLowerCase().includes(qSearch));
+    if (hiddenKeywordsFor(session).length) rows = rows.filter((a) => !isHidden(session, [a.target, a.details]));
+    const out = rows.slice(-limit).reverse();
+    return send(res, 200, JSON.stringify({ total: rows.length, entries: out }));
   }
   if (p === '/api/backups' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
