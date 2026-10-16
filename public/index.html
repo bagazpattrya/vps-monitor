@@ -1423,6 +1423,7 @@ select.input { appearance: auto; max-width: 100%; }
       Deploy project Laravel baru ke <code>/var/www/&lt;folder&gt;</code> + domain produksi + SSL otomatis (SOP Git-based). Semua yang tidak bisa di-detect wajib diisi. Password DB tidak disimpan &amp; tidak tampil di log. Step sensitif permission (storage/bootstrap) otomatis di-fix + diuji tulis sebagai <code>www-data</code> sebelum go-live.
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Framework*<br><select id="depFramework" class="input" style="width:100%"><option value="laravel">Laravel</option><option value="wordpress">WordPress</option></select></label>
       <label style="font-size:12px;color:var(--mut)">Repo (org internal)*<br><input id="depRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/repo.git" /></label>
       <label style="font-size:12px;color:var(--mut)">Folder di /var/www*<br><input id="depDir" class="input" style="width:100%" placeholder="myclient-app" /></label>
       <label style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" value="main" /></label>
@@ -1433,10 +1434,21 @@ select.input { appearance: auto; max-width: 100%; }
       <label style="font-size:12px;color:var(--mut)">DB user*<br><input id="depDbUser" class="input" style="width:100%" placeholder="client_user" /></label>
       <label style="font-size:12px;color:var(--mut)">DB password (min 8)*<br><span style="display:flex;gap:6px"><input id="depDbPass" type="password" class="input" style="width:100%" placeholder="••••••••" /><button class="btn-sm" id="depShowPass" title="Lihat/sembunyikan">👁</button><button class="btn-sm" id="depCopyPass" title="Copy">⧉</button><button class="btn-sm" id="depGenPass" title="Generate password acak 16 karakter">🎲</button></span></label>
       <label style="font-size:12px;color:var(--mut)">Path SQL di server (existing only)<br><input id="depSqlPath" class="input" style="width:100%" placeholder="/var/backups/mysql/client_db_backup....sql.gz" /></label>
-      <label style="font-size:12px;color:var(--mut)">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
-      <label style="font-size:12px;color:var(--mut)">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
+      <label style="font-size:12px;color:var(--mut)" id="depAppNameWrap">APP_NAME (opsional)<br><input id="depAppName" class="input" style="width:100%" placeholder="My Client" /></label>
+      <label style="font-size:12px;color:var(--mut)" id="depAppKeyWrap">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
     </div>
-    <label style="font-size:12px;color:var(--mut)">.env tambahan (KEY=VALUE per baris, untuk API keys dll)<br><textarea id="depEnvExtra" class="input" style="width:100%;min-height:56px;font-family:var(--font-mono)" placeholder="MIDTRANS_SERVER_KEY=..."></textarea></label>
+    <div id="depWpOnly" style="display:none">
+    <div style="font-size:13px;font-weight:600;margin:12px 0 8px">WordPress</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Site title*<br><input id="depWpTitle" class="input" style="width:100%" placeholder="My Client Site" /></label>
+      <label style="font-size:12px;color:var(--mut)">Table prefix<br><input id="depWpPrefix" class="input" style="width:100%" value="wp_" /></label>
+      <label style="font-size:12px;color:var(--mut)">WP admin user* (project baru)<br><input id="depWpUser" class="input" style="width:100%" placeholder="admin" /></label>
+      <label style="font-size:12px;color:var(--mut)">WP admin email* (project baru)<br><input id="depWpEmail" class="input" style="width:100%" placeholder="admin@example.com" /></label>
+      <label style="font-size:12px;color:var(--mut)">WP admin password* (min 8, project baru)<br><span style="display:flex;gap:6px"><input id="depWpPass" type="password" class="input" style="width:100%" placeholder="••••••••" /><button class="btn-sm" id="depWpShow" title="Lihat/sembunyikan">👁</button><button class="btn-sm" id="depWpGen" title="Generate">🎲</button></span></label>
+    </div>
+    </div>
+    <label id="depEnvExtraWrap" style="font-size:12px;color:var(--mut)">.env tambahan (KEY=VALUE per baris, untuk API keys dll)<br><textarea id="depEnvExtra" class="input" style="width:100%;min-height:56px;font-family:var(--font-mono)" placeholder="MIDTRANS_SERVER_KEY=..."></textarea></label>
+    <div id="depMailWrap">
     <div style="font-size:13px;font-weight:600;margin:12px 0 8px">SMTP / Mail</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--mut)">Mailer<br><select id="depMailMailer" class="input" style="width:100%"><option value="log">log (default dev)</option><option value="smtp">smtp</option></select></label>
@@ -1448,8 +1460,9 @@ select.input { appearance: auto; max-width: 100%; }
       <label style="font-size:12px;color:var(--mut)">From address<br><input id="depMailFrom" class="input" style="width:100%" placeholder="hello@example.com" /></label>
       <label style="font-size:12px;color:var(--mut)">From name<br><input id="depMailFromName" class="input" style="width:100%" placeholder="${APP_NAME}" /></label>
     </div>
+    </div>
     <div style="display:flex;gap:16px;margin:10px 0;font-size:13px">
-      <label><input type="checkbox" id="depQueue" checked /> Queue worker (supervisor)</label>
+      <label id="depQueueWrap"><input type="checkbox" id="depQueue" checked /> Queue worker (supervisor, Laravel)</label>
       <label><input type="checkbox" id="depSched" checked /> Scheduler (cron www-data)</label>
     </div>
     <div style="display:flex;gap:10px;margin-bottom:12px">
@@ -2817,6 +2830,27 @@ $('cronList').addEventListener('click', (e) => {
   const b = e.target.closest('[data-edit-cron]');
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
+function depFrameworkToggle() {
+  const wp = $('depFramework').value === 'wordpress';
+  $('depWpOnly').style.display = wp ? '' : 'none';
+  for (const id of ['depAppNameWrap', 'depAppKeyWrap', 'depEnvExtraWrap', 'depMailWrap', 'depQueueWrap']) {
+    const el = $(id);
+    if (el) el.style.display = wp ? 'none' : '';
+  }
+  const sched = $('depSched');
+  if (sched) sched.nextSibling.textContent = wp ? ' WP-Cron (cron www-data tiap 5 mnt)' : ' Scheduler (cron www-data)';
+}
+$('depFramework').addEventListener('change', depFrameworkToggle);
+$('depWpShow').addEventListener('click', () => {
+  const el = $('depWpPass');
+  el.type = el.type === 'password' ? 'text' : 'password';
+});
+$('depWpGen').addEventListener('click', () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%-_?';
+  const buf = new Uint32Array(12);
+  crypto.getRandomValues(buf);
+  $('depWpPass').value = Array.from(buf, x => chars[x % chars.length]).join('');
+});
 $('depDryRun').addEventListener('click', () => depSubmit(true));
 // Auto-fill berantai: repo -> folder -> dbName/dbUser. Field yang sudah diketik manual tidak dioverride.
 const depAuto = { folder: true, dbName: true, dbUser: true };
@@ -2949,9 +2983,12 @@ function depForm() {
   return {
     dir: $('depDir').value.trim(), repo: $('depRepo').value.trim(), branch: $('depBranch').value.trim() || 'main',
     domain: $('depDomain').value.trim(), deployer: $('depDeployer').value.trim(),
+    framework: $('depFramework').value,
     projectType: $('depType').value, dbName: $('depDbName').value.trim(), dbUser: $('depDbUser').value.trim(),
     dbPass: $('depDbPass').value, sqlPath: $('depSqlPath').value.trim(),
     appName: $('depAppName').value.trim(), appKey: $('depAppKey').value.trim(),
+    tablePrefix: $('depWpPrefix').value.trim(), wpTitle: $('depWpTitle').value.trim(),
+    wpAdminUser: $('depWpUser').value.trim(), wpAdminEmail: $('depWpEmail').value.trim(), wpAdminPass: $('depWpPass').value,
     envExtra: $('depEnvExtra').value, useQueue: $('depQueue').checked, useScheduler: $('depSched').checked,
     mail: {
       mailer: $('depMailMailer').value, scheme: $('depMailScheme').value.trim(),
@@ -2993,6 +3030,7 @@ async function depSubmit(dryRun) {
   const body = { ...depForm(), dryRun };
   if (!body.dir || !body.repo || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
   if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
+  if (body.framework === 'wordpress' && body.projectType === 'new' && (!body.wpTitle || !body.wpAdminUser || !body.wpAdminEmail || !body.wpAdminPass)) return alert('WordPress baru wajib isi site title + admin user/email/password');
   if (!confirm(dryRun ? 'Jalankan dry-run check (tanpa perubahan)?' : `Mulai deploy ${body.dir} (${body.domain})? Proses makan waktu beberapa menit.`)) return;
   try {
     const r = await api('POST', '/api/deploy', body);

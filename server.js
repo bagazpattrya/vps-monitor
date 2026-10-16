@@ -1312,7 +1312,7 @@ async function runDeployJob(job, p) {
   const ago = async (prog, args, opts) => runCmd(asUser(p.deployer, prog, args), opts);
   try {
     // 1. validasi sudah lolos di handler; cek folder belum ada
-    jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} db=${p.dbName}/${p.dbUser} type=${p.projectType} queue=${p.useQueue} scheduler=${p.useScheduler}`);
+    jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} db=${p.dbName}/${p.dbUser} fw=${p.framework} type=${p.projectType} queue=${p.useQueue} scheduler=${p.useScheduler}`);
     if (fs.existsSync(dest)) throw new Error(`Folder ${dest} sudah ada`);
     jobStep(job, 'validate', 'ok', 'semua input valid');
 
@@ -1321,6 +1321,12 @@ async function runDeployJob(job, p) {
       let r = await ago('git', ['ls-remote', p.repo, 'HEAD'], { timeout: 30000 });
       if (!r.ok) throw new Error('git ls-remote gagal (repo/akses deploy key?)\n' + r.output);
       jobStep(job, 'dry-run: git ls-remote', 'ok', r.output.slice(0, 300));
+      if (p.framework === 'wordpress') {
+        jobStep(job, 'dry-run: wp-cli', 'running', '');
+        r = await runCmd('/usr/local/bin/wp --version 2>&1', { timeout: 15000 });
+        if (!r.ok) throw new Error('wp-cli tidak tersedia\n' + r.output);
+        jobStep(job, 'dry-run: wp-cli', 'ok', r.output.trim());
+      }
       jobStep(job, 'dry-run: mysql', 'running', '');
       r = await mysql('SELECT 1;');
       if (!r.ok) throw new Error('mysql root socket gagal\n' + r.output);
@@ -1356,13 +1362,47 @@ async function runDeployJob(job, p) {
     await ago('git', ['-C', dest, 'config', 'core.sharedRepository', 'group']);
     jobStep(job, 'git clone', 'ok', r.output.slice(-2000));
 
-    // 4. composer
-    jobStep(job, 'composer install', 'running', '');
-    r = await ago('composer', ['install', `--working-dir=${dest}`, '--no-interaction', '--prefer-dist', '--optimize-autoloader', '--no-dev'], { timeout: 600000 });
-    if (!r.ok) throw new Error('composer install gagal\n' + r.output.slice(-3000));
-    jobStep(job, 'composer install', 'ok', r.output.slice(-1500));
+    // 4. composer (wajib Laravel; WP hanya bila repo bawa composer.json)
+    if (p.framework === 'wordpress' && !fs.existsSync(path.join(dest, 'composer.json'))) {
+      jobStep(job, 'composer install', 'skip', 'tidak ada composer.json');
+    } else {
+      if (!fs.existsSync(path.join(dest, 'composer.json'))) throw new Error('composer.json tidak ada (bukan project yang didukung?)');
+      jobStep(job, 'composer install', 'running', '');
+      r = await ago('composer', ['install', `--working-dir=${dest}`, '--no-interaction', '--prefer-dist', '--optimize-autoloader', '--no-dev'], { timeout: 600000 });
+      if (!r.ok) throw new Error('composer install gagal\n' + r.output.slice(-3000));
+      jobStep(job, 'composer install', 'ok', r.output.slice(-1500));
+    }
 
-    // 5. .env
+    // 5. config app: .env (Laravel) / wp-config.php (WordPress)
+    if (p.framework === 'wordpress') {
+      jobStep(job, 'wp-config.php', 'running', '');
+      const samplePath = path.join(dest, 'wp-config-sample.php');
+      if (!fs.existsSync(samplePath)) throw new Error('wp-config-sample.php tidak ada (bukan WordPress?)');
+      let wp = fs.readFileSync(samplePath, 'utf8');
+      const wset = (k, v) => {
+        const re = new RegExp(`define\\(\\s*'${k}'\\s*,\\s*'.*?'\\s*\\)`);
+        wp = re.test(wp) ? wp.replace(re, `define( '${k}', '${v.replace(/'/g, `\\'`)}' )`) : wp + `\ndefine( '${k}', '${v.replace(/'/g, `\\'`)}' );\n`;
+      };
+      wset('DB_NAME', p.dbName);
+      wset('DB_USER', p.dbUser);
+      wset('DB_PASSWORD', p.dbPass);
+      wp = wp.replace(/(\$table_prefix\s*=\s*')[^']*(')/, `$1${p.tablePrefix}$2`);
+      // salts: coba API wordpress.org, fallback random lokal
+      let salts = '';
+      r = await runCmd(`curl -s -m 15 https://api.wordpress.org/secret-key/1.1/salt/ 2>&1`, { timeout: 20000 });
+      if (r.ok && /AUTH_KEY/.test(r.output)) salts = r.output;
+      else {
+        const { randomBytes } = require('crypto');
+        salts = ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT']
+          .map((k) => `define( '${k}', '${randomBytes(48).toString('hex')}' );`).join('\n');
+      }
+      wp = wp.replace(/define\(\s*'AUTH_KEY'[\s\S]*?NONCE_SALT'\s*,\s*'[^']*'\s*\)/, salts);
+      if (!/AUTH_KEY/.test(wp)) wp += '\n' + salts + '\n';
+      wp += `\ndefine( 'WP_HOME', 'https://${p.domain}' );\ndefine( 'WP_SITEURL', 'https://${p.domain}' );\ndefine( 'DISABLE_WP_CRON', true );\ndefine( 'FS_METHOD', 'direct' );\n`;
+      fs.writeFileSync(path.join(dest, 'wp-config.php'), wp);
+      await runCmd(`chown ${p.deployer}:www-data ${shq(path.join(dest, 'wp-config.php'))} && chmod 640 ${shq(path.join(dest, 'wp-config.php'))}`);
+      jobStep(job, 'wp-config.php', 'ok', `prefix=${p.tablePrefix} salts=${/api.wordpress.org/.test(salts) ? 'wordpress.org' : 'lokal'}`);
+    } else {
     jobStep(job, '.env', 'running', '');
     const exPath = path.join(dest, '.env.example');
     if (!fs.existsSync(exPath)) throw new Error('.env.example tidak ada (bukan Laravel?)');
@@ -1403,9 +1443,15 @@ async function runDeployJob(job, p) {
       if (!r.ok) throw new Error('key:generate gagal\n' + r.output);
     }
     jobStep(job, '.env', 'ok', p.appKey ? 'APP_KEY reuse dari project lama' : 'APP_KEY baru di-generate');
+    } // end Laravel .env
 
-    // 6. DB: migrate atau import
-    if (p.projectType === 'new') {
+    // 6. DB: migrate/seed/import (Laravel) atau wp install/import (WordPress)
+    if (p.framework === 'wordpress' && p.projectType === 'new') {
+      jobStep(job, 'wp core install', 'running', '');
+      r = await ago('/usr/local/bin/wp', ['core', 'install', `--path=${dest}`, `--url=https://${p.domain}`, `--title=${p.wpTitle}`, `--admin_user=${p.wpAdminUser}`, `--admin_password=${p.wpAdminPass}`, `--admin_email=${p.wpAdminEmail}`, '--skip-email'], { timeout: 120000, env: { WP_CLI_CACHE_DIR: '/tmp/wp-cli-cache' } });
+      if (!r.ok) throw new Error('wp core install gagal\n' + r.output.slice(-3000));
+      jobStep(job, 'wp core install', 'ok', r.output.slice(-1500));
+    } else if (p.projectType === 'new') {
       jobStep(job, 'migrate --force', 'running', '');
       r = await ago(phpBin(), [path.join(dest, 'artisan'), 'migrate', '--force'], { timeout: 300000 });
       if (!r.ok) throw new Error('migrate gagal\n' + r.output.slice(-3000));
@@ -1438,20 +1484,26 @@ async function runDeployJob(job, p) {
       jobStep(job, 'import sql', 'ok', `import ${p.sqlPath} OK (kredensial DB terverifikasi)`);
     }
 
-    // 7-8. storage:link + optimize + fix perms + gate
+    // 7-8. storage:link + optimize + fix perms + gate (Laravel). WP: langsung perms.
+    if (p.framework === 'wordpress') {
+      jobStep(job, 'storage:link + optimize', 'skip', 'bukan Laravel');
+    } else {
     jobStep(job, 'storage:link + optimize', 'running', '');
     r = await ago(phpBin(), [path.join(dest, 'artisan'), 'storage:link'], { timeout: 60000 });
     r = await ago(phpBin(), [path.join(dest, 'artisan'), 'optimize:clear'], { timeout: 120000 });
     jobStep(job, 'storage:link + optimize', 'ok', r.output.slice(-1000));
+    }
     jobStep(job, 'fix-permissions + gate www-data', 'running', '');
     r = await runCmd(`bash /var/www/fix-permissions.sh ${shq(dest)} --user ${shq(p.deployer)} 2>&1`, { timeout: 120000 });
     if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
-    for (const sub of ['storage', 'bootstrap/cache']) {
+    await runCmd(`chmod 640 ${shq(path.join(dest, p.framework === 'wordpress' ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
+    for (const sub of (p.framework === 'wordpress' ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
+      await runCmd(`mkdir -p ${shq(path.join(dest, sub))} && chown ${p.deployer}:www-data ${shq(path.join(dest, sub))} && chmod 2755 ${shq(path.join(dest, sub))}`);
       const t = path.join(dest, sub, '.writetest-www-data');
       const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
       if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
     }
-    jobStep(job, 'fix-permissions + gate www-data', 'ok', 'www-data bisa tulis storage/ + bootstrap/cache');
+    jobStep(job, 'fix-permissions + gate www-data', 'ok', p.framework === 'wordpress' ? 'www-data bisa tulis wp-content/uploads' : 'www-data bisa tulis storage/ + bootstrap/cache');
 
     // 9. DNS
     jobStep(job, 'dns check', 'running', p.domain);
@@ -1461,7 +1513,7 @@ async function runDeployJob(job, p) {
 
     // 10-11. nginx
     jobStep(job, 'nginx vhost', 'running', '');
-    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}/public;\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`;
+    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}${p.framework === 'wordpress' ? '' : '/public'};\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`;
     fs.writeFileSync(`/etc/nginx/sites-available/${p.domain}`, vhost);
     job.createdVhost = p.domain;
     await runCmd(`ln -sf /etc/nginx/sites-available/${shq(p.domain)} /etc/nginx/sites-enabled/${shq(p.domain)}`);
@@ -1478,8 +1530,10 @@ async function runDeployJob(job, p) {
     jobStep(job, 'certbot ssl', r.ok ? 'ok' : 'warn', r.output.slice(-2000) || '(tidak ada output)');
     if (!r.ok) job.warn = 'SSL gagal — site jalan di HTTP, ulangi certbot manual setelah DNS propagasi penuh';
 
-    // 13. supervisor (opsional)
-    if (p.useQueue) {
+    // 13. supervisor worker (Laravel + queue saja; WP tidak butuh)
+    if (p.framework === 'wordpress') {
+      jobStep(job, 'supervisor worker', 'skip', 'WordPress tidak pakai queue worker');
+    } else if (p.useQueue) {
       jobStep(job, 'supervisor worker', 'running', '');
       const conf = `[program:${p.domain}-worker]\nprocess_name=%(program_name)s_%(process_num)02d\ncommand=php ${dest}/artisan queue:work --sleep=3 --tries=3\nautostart=true\nautorestart=true\nuser=www-data\nnumprocs=1\nredirect_stderr=true\nstdout_logfile=${dest}/storage/logs/worker.log\n`;
       fs.writeFileSync(`/etc/supervisor/conf.d/${p.domain}-worker.conf`, conf);
@@ -1499,10 +1553,12 @@ async function runDeployJob(job, p) {
       jobStep(job, 'supervisor worker', 'ok', stOut.trim());
     } else jobStep(job, 'supervisor worker', 'skip', 'nonaktif (opsi)');
 
-    // 14. cron scheduler (opsional, idempoten)
+    // 14. cron scheduler (opsional, idempoten). WP: wp-cron tiap 5 mnt (DISABLE_WP_CRON sudah true di wp-config).
     if (p.useScheduler) {
       jobStep(job, 'cron scheduler', 'running', '');
-      const line = `* * * * * cd ${dest} && php artisan schedule:run >> /dev/null 2>&1`;
+      const line = p.framework === 'wordpress'
+        ? `*/5 * * * * cd ${dest} && php wp-cron.php >> /dev/null 2>&1`
+        : `* * * * * cd ${dest} && php artisan schedule:run >> /dev/null 2>&1`;
       r = await runCmd(`crontab -u www-data -l 2>/dev/null | grep -F ${shq(dest)} || true`, { timeout: 15000 });
       if (r.output.includes(dest)) {
         jobStep(job, 'cron scheduler', 'skip', 'cron sudah ada (tidak diduplikasi)');
@@ -1517,7 +1573,8 @@ async function runDeployJob(job, p) {
     jobStep(job, 'verify', 'running', '');
     r = await runCmd(`curl -sk -m 15 -o /dev/null -w "%{http_code}" https://${p.domain}/ 2>&1`, { timeout: 30000 });
     const httpsCode = r.output.trim();
-    r = await runCmd(`find ${shq(path.join(dest, 'storage'))} ${shq(path.join(dest, 'bootstrap/cache'))} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
+    const permDirs = p.framework === 'wordpress' ? [path.join(dest, 'wp-content')] : [path.join(dest, 'storage'), path.join(dest, 'bootstrap/cache')];
+    r = await runCmd(`find ${permDirs.map(shq).join(' ')} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
     if (r.output.trim()) throw new Error('Masih ada dir o+writable di storage/bootstrap (harusnya kosong)\n' + r.output);
     jobStep(job, 'verify', 'ok', `https=${httpsCode}, tidak ada dir o+writable`);
     job.status = 'done';
@@ -1983,6 +2040,23 @@ const server = http.createServer(async (req, res) => {
     };
     if (mail.port && !/^\d{1,5}$/.test(mail.port)) return send(res, 400, JSON.stringify({ error: 'SMTP port harus angka' }));
     if (mail.host && !/^[A-Za-z0-9.-]+$/.test(mail.host)) return send(res, 400, JSON.stringify({ error: 'SMTP host tidak valid' }));
+    const framework = body.framework === 'wordpress' ? 'wordpress' : 'laravel';
+    let tablePrefix = 'wp_', wpTitle = null, wpAdminUser = null, wpAdminEmail = null, wpAdminPass = null;
+    if (framework === 'wordpress') {
+      tablePrefix = String(body.tablePrefix || 'wp_').trim() || 'wp_';
+      if (!/^[A-Za-z0-9_]+$/.test(tablePrefix) || tablePrefix.length > 20) return send(res, 400, JSON.stringify({ error: 'Table prefix hanya huruf/angka/_ (maks 20)' }));
+      if (!tablePrefix.endsWith('_')) tablePrefix += '_';
+      if (projectType === 'new') {
+        wpTitle = String(body.wpTitle || '').trim().slice(0, 100);
+        wpAdminUser = String(body.wpAdminUser || '').trim();
+        wpAdminEmail = String(body.wpAdminEmail || '').trim();
+        wpAdminPass = String(body.wpAdminPass || '');
+        if (!wpTitle) return send(res, 400, JSON.stringify({ error: 'Site title wajib (WordPress baru)' }));
+        if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(wpAdminUser)) return send(res, 400, JSON.stringify({ error: 'WP admin user 3-32 karakter' }));
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(wpAdminEmail)) return send(res, 400, JSON.stringify({ error: 'WP admin email tidak valid' }));
+        if (wpAdminPass.length < 8) return send(res, 400, JSON.stringify({ error: 'WP admin password minimal 8 karakter' }));
+      }
+    }
     const params = {
       dir: checks[0][1].value, domain: checks[1][1].value, repo: checks[2][1].value, branch: checks[3][1].value,
       deployer: checks[4][1].value, dbName: checks[5][1].value, dbUser: checks[6][1].value, dbPass: body.dbPass,
@@ -1990,8 +2064,9 @@ const server = http.createServer(async (req, res) => {
       appKey: String(body.appKey || '').trim() || null,
       useQueue: body.useQueue !== false, useScheduler: body.useScheduler !== false,
       dryRun: body.dryRun === true, envExtra, mail,
+      framework, tablePrefix, wpTitle, wpAdminUser, wpAdminEmail, wpAdminPass,
     };
-    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password]);
+    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password, params.wpAdminPass].filter(Boolean));
     audit(session.user, 'deploy.start', params.dir, `${params.domain} dryRun=${params.dryRun}`);
     runDeployJob(job, params).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
