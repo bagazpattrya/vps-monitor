@@ -3051,7 +3051,9 @@ async function deployJobsRefresh(silent) {
 }
 async function depSubmit(dryRun) {
   const body = { ...depForm(), dryRun };
-  if (!body.dir || !body.repo || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
+  const isThemeForm = body.framework === 'wordpress-theme';
+  // repo site tidak dipakai di mode theme (core fresh), jadi tidak wajib diisi
+  if (!body.dir || (!isThemeForm && !body.repo) || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
   if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
   const isWpForm = body.framework === 'wordpress' || body.framework === 'wordpress-theme';
   if (isWpForm && body.projectType === 'new' && (!body.wpTitle || !body.wpAdminUser || !body.wpAdminEmail || !body.wpAdminPass)) return alert('WordPress baru wajib isi site title + admin user/email/password');
