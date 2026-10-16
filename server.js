@@ -1268,7 +1268,8 @@ function vLinuxUser(v) {
 }
 function vDbIdent(v, what, max) {
   v = String(v || '').trim();
-  if (!/^[A-Za-z0-9_$]+$/.test(v) || v.length > max) return vErr(`${what} hanya boleh huruf/angka/_/$ (maks ${max})`);
+  // Dash diizinkan (SOP WP pakai demo-lapila_user); identifier selalu di-quote/backtick saat dipakai.
+  if (!/^[A-Za-z0-9_$-]+$/.test(v) || v.length > max) return vErr(`${what} hanya boleh huruf/angka/_/-/$ (maks ${max})`);
   return { ok: true, value: v };
 }
 function vAbsPath(v, what) {
@@ -1308,22 +1309,36 @@ function jobPublic(job) {
 
 async function runDeployJob(job, p) {
   const dest = path.join('/var/www', p.dir);
+  const isWP = p.framework === 'wordpress' || p.framework === 'wordpress-theme';
   const mysql = (sql) => runFile('mysql', ['-BNe', sql], { timeout: 15000 });
   const ago = async (prog, args, opts) => runCmd(asUser(p.deployer, prog, args), opts);
   try {
+    let r;
     // 1. validasi sudah lolos di handler; cek folder belum ada
     jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} db=${p.dbName}/${p.dbUser} fw=${p.framework} type=${p.projectType} queue=${p.useQueue} scheduler=${p.useScheduler}`);
     if (fs.existsSync(dest)) throw new Error(`Folder ${dest} sudah ada`);
     jobStep(job, 'validate', 'ok', 'semua input valid');
 
     if (p.dryRun) {
-      jobStep(job, 'dry-run: git ls-remote', 'running', '');
-      let r = await ago('git', ['ls-remote', p.repo, 'HEAD'], { timeout: 30000 });
-      if (!r.ok) throw new Error('git ls-remote gagal (repo/akses deploy key?)\n' + r.output);
-      jobStep(job, 'dry-run: git ls-remote', 'ok', r.output.slice(0, 300));
-      if (p.framework === 'wordpress') {
+      const checkRepos = p.framework === 'wordpress-theme'
+        ? [{ label: 'theme', repo: p.themeRepo }]
+        : [{ label: 'site', repo: p.repo }];
+      for (const cr of checkRepos) {
+        jobStep(job, `dry-run: git ls-remote (${cr.label})`, 'running', '');
+        let r = await ago('git', ['ls-remote', cr.repo, 'HEAD'], { timeout: 30000 });
+        if (!r.ok) throw new Error(`git ls-remote ${cr.label} gagal (repo/akses deploy key?)\n` + r.output);
+        jobStep(job, `dry-run: git ls-remote (${cr.label})`, 'ok', r.output.slice(0, 300));
+      }
+      if (p.framework === 'wordpress-theme') {
+        jobStep(job, 'dry-run: wordpress.org', 'running', '');
+        let r = await runCmd('curl -sIL -m 20 -o /dev/null -w "%{http_code}" https://wordpress.org/latest.tar.gz 2>&1', { timeout: 30000 });
+        if (r.output.trim() !== '200') throw new Error('wordpress.org/latest.tar.gz tidak reachable\n' + r.output);
+        jobStep(job, 'dry-run: wordpress.org', 'ok', 'HTTP 200');
+      }
+      if (isWP) {
         jobStep(job, 'dry-run: wp-cli', 'running', '');
-        r = await runCmd('/usr/local/bin/wp --version 2>&1', { timeout: 15000 });
+        // --allow-root hanya untuk cek versi; eksekusi asli selalu sebagai deployer via sudo.
+        r = await runCmd('/usr/local/bin/wp --version --allow-root 2>&1', { timeout: 15000 });
         if (!r.ok) throw new Error('wp-cli tidak tersedia\n' + r.output);
         jobStep(job, 'dry-run: wp-cli', 'ok', r.output.trim());
       }
@@ -1345,25 +1360,33 @@ async function runDeployJob(job, p) {
     // 2. MySQL
     jobStep(job, 'mysql: create db+user', 'running', '');
     // CREATE IF NOT EXISTS saja tidak cukup: retry dengan password baru harus update password user lama.
-    let r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
+    r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${p.dbPass.replace(/'/g, `\\'`)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
     if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
     jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
 
     // 3. Clone sebagai deployer. Pre-create dir sebagai root dulu karena grup
     // www-data hanya r-x di /var/www (ACL) sehingga deployer tidak bisa mkdir langsung.
-    jobStep(job, 'git clone', 'running', '');
+    // Mode wordpress-theme: bukan clone site, tapi download WordPress core fresh.
+    jobStep(job, p.framework === 'wordpress-theme' ? 'wp core download' : 'git clone', 'running', '');
     r = await runCmd(`mkdir -p ${shq(dest)} && chown ${p.deployer}:www-data ${shq(dest)} && chmod 2755 ${shq(dest)}`);
     if (!r.ok) throw new Error('mkdir project gagal\n' + r.output);
     job.createdDir = dest; // penanda untuk rollback: folder ini milik job ini (validate menjamin belum ada sebelumnya)
+    if (p.framework === 'wordpress-theme') {
+      r = await runCmd(`curl -s -m 120 -o /tmp/wp-core-${job.id}.tar.gz https://wordpress.org/latest.tar.gz 2>&1 && tar -xzf /tmp/wp-core-${job.id}.tar.gz -C /tmp 2>&1 && cp -a /tmp/wordpress/. ${shq(dest)}/ 2>&1 && rm -rf /tmp/wordpress /tmp/wp-core-${job.id}.tar.gz`, { timeout: 300000 });
+      if (!r.ok) throw new Error('download/extract WordPress core gagal\n' + r.output);
+      await runCmd(`chown -R ${p.deployer}:www-data ${shq(dest)}`);
+      jobStep(job, 'wp core download', 'ok', 'WordPress core fresh terpasang');
+    } else {
     r = await ago('git', ['clone', '--branch', p.branch, p.repo, dest], { timeout: 300000 });
     if (!r.ok) throw new Error('git clone gagal\n' + r.output);
     await runCmd(`chown -R ${p.deployer}:www-data ${shq(dest)}`);
     await ago('git', ['-C', dest, 'config', 'core.filemode', 'false']);
     await ago('git', ['-C', dest, 'config', 'core.sharedRepository', 'group']);
     jobStep(job, 'git clone', 'ok', r.output.slice(-2000));
+    }
 
     // 4. composer (wajib Laravel; WP hanya bila repo bawa composer.json)
-    if (p.framework === 'wordpress' && !fs.existsSync(path.join(dest, 'composer.json'))) {
+    if (isWP && !fs.existsSync(path.join(dest, 'composer.json'))) {
       jobStep(job, 'composer install', 'skip', 'tidak ada composer.json');
     } else {
       if (!fs.existsSync(path.join(dest, 'composer.json'))) throw new Error('composer.json tidak ada (bukan project yang didukung?)');
@@ -1374,7 +1397,7 @@ async function runDeployJob(job, p) {
     }
 
     // 5. config app: .env (Laravel) / wp-config.php (WordPress)
-    if (p.framework === 'wordpress') {
+    if (isWP) {
       jobStep(job, 'wp-config.php', 'running', '');
       const samplePath = path.join(dest, 'wp-config-sample.php');
       if (!fs.existsSync(samplePath)) throw new Error('wp-config-sample.php tidak ada (bukan WordPress?)');
@@ -1446,7 +1469,7 @@ async function runDeployJob(job, p) {
     } // end Laravel .env
 
     // 6. DB: migrate/seed/import (Laravel) atau wp install/import (WordPress)
-    if (p.framework === 'wordpress' && p.projectType === 'new') {
+    if (isWP && p.projectType === 'new') {
       jobStep(job, 'wp core install', 'running', '');
       r = await ago('/usr/local/bin/wp', ['core', 'install', `--path=${dest}`, `--url=https://${p.domain}`, `--title=${p.wpTitle}`, `--admin_user=${p.wpAdminUser}`, `--admin_password=${p.wpAdminPass}`, `--admin_email=${p.wpAdminEmail}`, '--skip-email'], { timeout: 120000, env: { WP_CLI_CACHE_DIR: '/tmp/wp-cli-cache' } });
       if (!r.ok) throw new Error('wp core install gagal\n' + r.output.slice(-3000));
@@ -1484,8 +1507,21 @@ async function runDeployJob(job, p) {
       jobStep(job, 'import sql', 'ok', `import ${p.sqlPath} OK (kredensial DB terverifikasi)`);
     }
 
+    // 6b. Theme dari GitHub (mode wordpress-theme saja, new maupun existing).
+    if (p.framework === 'wordpress-theme') {
+      jobStep(job, 'theme clone', 'running', `${p.themeRepo} -> wp-content/themes/${p.themeFolder}`);
+      const themeDest = path.join(dest, 'wp-content', 'themes', p.themeFolder);
+      if (fs.existsSync(themeDest)) throw new Error(`Folder theme sudah ada: ${themeDest}`);
+      r = await ago('git', ['clone', '--branch', p.themeBranch, p.themeRepo, themeDest], { timeout: 300000 });
+      if (!r.ok) throw new Error('theme clone gagal\n' + r.output);
+      await runCmd(`chown -R ${p.deployer}:www-data ${shq(themeDest)}`);
+      await ago('git', ['-C', themeDest, 'config', 'core.filemode', 'false']);
+      await ago('git', ['-C', themeDest, 'config', 'core.sharedRepository', 'group']);
+      jobStep(job, 'theme clone', 'ok', r.output.slice(-1500));
+    }
+
     // 7-8. storage:link + optimize + fix perms + gate (Laravel). WP: langsung perms.
-    if (p.framework === 'wordpress') {
+    if (isWP) {
       jobStep(job, 'storage:link + optimize', 'skip', 'bukan Laravel');
     } else {
     jobStep(job, 'storage:link + optimize', 'running', '');
@@ -1496,14 +1532,14 @@ async function runDeployJob(job, p) {
     jobStep(job, 'fix-permissions + gate www-data', 'running', '');
     r = await runCmd(`bash /var/www/fix-permissions.sh ${shq(dest)} --user ${shq(p.deployer)} 2>&1`, { timeout: 120000 });
     if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
-    await runCmd(`chmod 640 ${shq(path.join(dest, p.framework === 'wordpress' ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
-    for (const sub of (p.framework === 'wordpress' ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
+    await runCmd(`chmod 640 ${shq(path.join(dest, isWP ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
+    for (const sub of (isWP ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
       await runCmd(`mkdir -p ${shq(path.join(dest, sub))} && chown ${p.deployer}:www-data ${shq(path.join(dest, sub))} && chmod 2755 ${shq(path.join(dest, sub))}`);
       const t = path.join(dest, sub, '.writetest-www-data');
       const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
       if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
     }
-    jobStep(job, 'fix-permissions + gate www-data', 'ok', p.framework === 'wordpress' ? 'www-data bisa tulis wp-content/uploads' : 'www-data bisa tulis storage/ + bootstrap/cache');
+    jobStep(job, 'fix-permissions + gate www-data', 'ok', isWP ? 'www-data bisa tulis wp-content/uploads' : 'www-data bisa tulis storage/ + bootstrap/cache');
 
     // 9. DNS
     jobStep(job, 'dns check', 'running', p.domain);
@@ -1513,7 +1549,7 @@ async function runDeployJob(job, p) {
 
     // 10-11. nginx
     jobStep(job, 'nginx vhost', 'running', '');
-    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}${p.framework === 'wordpress' ? '' : '/public'};\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`;
+    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}${isWP ? '' : '/public'};\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size ${isWP ? '200M' : '50M'};\n}\n`;
     fs.writeFileSync(`/etc/nginx/sites-available/${p.domain}`, vhost);
     job.createdVhost = p.domain;
     await runCmd(`ln -sf /etc/nginx/sites-available/${shq(p.domain)} /etc/nginx/sites-enabled/${shq(p.domain)}`);
@@ -1531,7 +1567,7 @@ async function runDeployJob(job, p) {
     if (!r.ok) job.warn = 'SSL gagal — site jalan di HTTP, ulangi certbot manual setelah DNS propagasi penuh';
 
     // 13. supervisor worker (Laravel + queue saja; WP tidak butuh)
-    if (p.framework === 'wordpress') {
+    if (isWP) {
       jobStep(job, 'supervisor worker', 'skip', 'WordPress tidak pakai queue worker');
     } else if (p.useQueue) {
       jobStep(job, 'supervisor worker', 'running', '');
@@ -1556,7 +1592,7 @@ async function runDeployJob(job, p) {
     // 14. cron scheduler (opsional, idempoten). WP: wp-cron tiap 5 mnt (DISABLE_WP_CRON sudah true di wp-config).
     if (p.useScheduler) {
       jobStep(job, 'cron scheduler', 'running', '');
-      const line = p.framework === 'wordpress'
+      const line = isWP
         ? `*/5 * * * * cd ${dest} && php wp-cron.php >> /dev/null 2>&1`
         : `* * * * * cd ${dest} && php artisan schedule:run >> /dev/null 2>&1`;
       r = await runCmd(`crontab -u www-data -l 2>/dev/null | grep -F ${shq(dest)} || true`, { timeout: 15000 });
@@ -1573,7 +1609,7 @@ async function runDeployJob(job, p) {
     jobStep(job, 'verify', 'running', '');
     r = await runCmd(`curl -sk -m 15 -o /dev/null -w "%{http_code}" https://${p.domain}/ 2>&1`, { timeout: 30000 });
     const httpsCode = r.output.trim();
-    const permDirs = p.framework === 'wordpress' ? [path.join(dest, 'wp-content')] : [path.join(dest, 'storage'), path.join(dest, 'bootstrap/cache')];
+    const permDirs = isWP ? [path.join(dest, 'wp-content')] : [path.join(dest, 'storage'), path.join(dest, 'bootstrap/cache')];
     r = await runCmd(`find ${permDirs.map(shq).join(' ')} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
     if (r.output.trim()) throw new Error('Masih ada dir o+writable di storage/bootstrap (harusnya kosong)\n' + r.output);
     jobStep(job, 'verify', 'ok', `https=${httpsCode}, tidak ada dir o+writable`);
@@ -1748,10 +1784,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/workers') {
     const [sup, crn] = await Promise.all([getSupervisorStatus(), Promise.resolve(getCronJobs())]);
+    if (!hiddenKeywordsFor(session).length) {
+      return send(res, 200, JSON.stringify({ time: Date.now(), supervisor: sup, cron: crn, laravelLogs: laravelLogPaths() }));
+    }
+    // sup = {available, procs[]}, crn = {jobs[], schedProcs[]} — filter isi array-nya, bukan object-nya.
+    const supOut = sup && Array.isArray(sup.procs) ? { ...sup, procs: sup.procs.filter((x) => !isHidden(session, x)) } : sup;
+    const crnOut = crn && Array.isArray(crn.jobs) ? { ...crn, jobs: crn.jobs.filter((x) => !isHidden(session, [x.user, x.cmd])) } : crn;
     return send(res, 200, JSON.stringify({
       time: Date.now(),
-      supervisor: sup.filter((x) => !isHidden(session, x)),
-      cron: crn.filter((x) => !isHidden(session, x)),
+      supervisor: supOut,
+      cron: crnOut,
       laravelLogs: laravelLogPaths().filter((x) => !isHidden(session, x)),
     }));
   }
@@ -1986,11 +2028,14 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const fwEarly = body.framework === 'wordpress' ? 'wordpress' : (body.framework === 'wordpress-theme' ? 'wordpress-theme' : 'laravel');
     const checks = [
-      ['dir', vDir(body.dir)], ['domain', vDomain(body.domain)], ['repo', vRepo(body.repo)],
-      ['branch', vBranch(body.branch)], ['deployer', vLinuxUser(body.deployer)],
+      ['dir', vDir(body.dir)], ['domain', vDomain(body.domain)],
+      ['deployer', vLinuxUser(body.deployer)],
       ['dbName', vDbIdent(body.dbName, 'Nama database', 64)], ['dbUser', vDbIdent(body.dbUser, 'User database', 32)],
     ];
+    // Mode wordpress-theme tidak pakai repo site (core fresh dari wordpress.org).
+    if (fwEarly !== 'wordpress-theme') checks.splice(2, 0, ['repo', vRepo(body.repo)], ['branch', vBranch(body.branch)]);
     for (const [k, c] of checks) if (!c.ok) return send(res, 400, JSON.stringify({ error: `${k}: ${c.error}` }));
     if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
     // Samakan dengan policy MySQL validate_password MEDIUM + check_user_name (cek di awal agar gagal cepat, bukan di tengah deploy).
@@ -2040,9 +2085,11 @@ const server = http.createServer(async (req, res) => {
     };
     if (mail.port && !/^\d{1,5}$/.test(mail.port)) return send(res, 400, JSON.stringify({ error: 'SMTP port harus angka' }));
     if (mail.host && !/^[A-Za-z0-9.-]+$/.test(mail.host)) return send(res, 400, JSON.stringify({ error: 'SMTP host tidak valid' }));
-    const framework = body.framework === 'wordpress' ? 'wordpress' : 'laravel';
+    const framework = fwEarly;
     let tablePrefix = 'wp_', wpTitle = null, wpAdminUser = null, wpAdminEmail = null, wpAdminPass = null;
-    if (framework === 'wordpress') {
+    let themeRepo = null, themeFolder = null, themeBranch = 'main';
+    const isWP = framework === 'wordpress' || framework === 'wordpress-theme';
+    if (isWP) {
       tablePrefix = String(body.tablePrefix || 'wp_').trim() || 'wp_';
       if (!/^[A-Za-z0-9_]+$/.test(tablePrefix) || tablePrefix.length > 20) return send(res, 400, JSON.stringify({ error: 'Table prefix hanya huruf/angka/_ (maks 20)' }));
       if (!tablePrefix.endsWith('_')) tablePrefix += '_';
@@ -2057,14 +2104,27 @@ const server = http.createServer(async (req, res) => {
         if (wpAdminPass.length < 8) return send(res, 400, JSON.stringify({ error: 'WP admin password minimal 8 karakter' }));
       }
     }
+    if (framework === 'wordpress-theme') {
+      const tr = vRepo(body.themeRepo);
+      if (!tr.ok) return send(res, 400, JSON.stringify({ error: `themeRepo: ${tr.error}` }));
+      themeRepo = tr.value;
+      themeFolder = String(body.themeFolder || '').trim();
+      const tf = vDir(themeFolder);
+      if (!tf.ok) return send(res, 400, JSON.stringify({ error: `themeFolder: ${tf.error}` }));
+      themeFolder = tf.value;
+      themeBranch = String(body.themeBranch || 'main').trim() || 'main';
+      if (!/^[A-Za-z0-9._/-]+$/.test(themeBranch) || themeBranch.length > 100) return send(res, 400, JSON.stringify({ error: 'Theme branch tidak valid' }));
+    }
+    const cv = Object.fromEntries(checks.map(([k, c]) => [k, c.value]));
     const params = {
-      dir: checks[0][1].value, domain: checks[1][1].value, repo: checks[2][1].value, branch: checks[3][1].value,
-      deployer: checks[4][1].value, dbName: checks[5][1].value, dbUser: checks[6][1].value, dbPass: body.dbPass,
+      dir: cv.dir, domain: cv.domain, repo: cv.repo || null, branch: cv.branch || 'main',
+      deployer: cv.deployer, dbName: cv.dbName, dbUser: cv.dbUser, dbPass: body.dbPass,
       projectType, sqlPath, appName: String(body.appName || '').trim().slice(0, 100) || null,
       appKey: String(body.appKey || '').trim() || null,
       useQueue: body.useQueue !== false, useScheduler: body.useScheduler !== false,
       dryRun: body.dryRun === true, envExtra, mail,
       framework, tablePrefix, wpTitle, wpAdminUser, wpAdminEmail, wpAdminPass,
+      themeRepo, themeFolder, themeBranch,
     };
     const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password, params.wpAdminPass].filter(Boolean));
     audit(session.user, 'deploy.start', params.dir, `${params.domain} dryRun=${params.dryRun}`);

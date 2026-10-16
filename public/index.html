@@ -1423,10 +1423,10 @@ select.input { appearance: auto; max-width: 100%; }
       Deploy project Laravel baru ke <code>/var/www/&lt;folder&gt;</code> + domain produksi + SSL otomatis (SOP Git-based). Semua yang tidak bisa di-detect wajib diisi. Password DB tidak disimpan &amp; tidak tampil di log. Step sensitif permission (storage/bootstrap) otomatis di-fix + diuji tulis sebagai <code>www-data</code> sebelum go-live.
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-      <label style="font-size:12px;color:var(--mut)">Framework*<br><select id="depFramework" class="input" style="width:100%"><option value="laravel">Laravel</option><option value="wordpress">WordPress</option></select></label>
-      <label style="font-size:12px;color:var(--mut)">Repo (org internal)*<br><input id="depRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/repo.git" /></label>
+      <label style="font-size:12px;color:var(--mut)">Framework*<br><select id="depFramework" class="input" style="width:100%"><option value="laravel">Laravel</option><option value="wordpress">WordPress (full site repo)</option><option value="wordpress-theme">WordPress (core fresh + theme repo)</option></select></label>
+      <label id="depRepoWrap" style="font-size:12px;color:var(--mut)">Repo (org internal)*<br><input id="depRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/repo.git" /></label>
       <label style="font-size:12px;color:var(--mut)">Folder di /var/www*<br><input id="depDir" class="input" style="width:100%" placeholder="myclient-app" /></label>
-      <label style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" value="main" /></label>
+      <label id="depBranchWrap" style="font-size:12px;color:var(--mut)">Branch<br><input id="depBranch" class="input" style="width:100%" value="main" /></label>
       <label style="font-size:12px;color:var(--mut)">Domain produksi*<br><input id="depDomain" class="input" style="width:100%" placeholder="myclient.com" /></label>
       <label style="font-size:12px;color:var(--mut)">Deployer (user Linux, anggota www-data)*<br><input id="depDeployer" class="input" style="width:100%" value="bagaz" /></label>
       <label style="font-size:12px;color:var(--mut)">Tipe project<br><select id="depType" class="input" style="width:100%"><option value="new">Baru (migrate --force)</option><option value="existing">Existing (import SQL dari path server)</option></select></label>
@@ -1438,6 +1438,15 @@ select.input { appearance: auto; max-width: 100%; }
       <label style="font-size:12px;color:var(--mut)" id="depAppKeyWrap">APP_KEY lama (existing, reuse agar data terenkripsi tetap kebaca)<br><input id="depAppKey" class="input" style="width:100%" placeholder="base64:... (kosongkan = generate baru)" /></label>
     </div>
     <div id="depWpOnly" style="display:none">
+    <div style="font-size:13px;font-weight:600;margin:12px 0 8px">WordPress</div>
+    <div id="depThemeOnly" style="display:none">
+    <div style="font-size:13px;font-weight:600;margin:12px 0 8px">Theme (mode core fresh)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--mut)">Theme repo (org internal)*<br><input id="depThemeRepo" class="input" style="width:100%" placeholder="https://github.com/bagazpattrya/lapila-theme.git" /></label>
+      <label style="font-size:12px;color:var(--mut)">Theme folder*<br><input id="depThemeFolder" class="input" style="width:100%" placeholder="lapila-theme" /></label>
+      <label style="font-size:12px;color:var(--mut)">Theme branch<br><input id="depThemeBranch" class="input" style="width:100%" value="main" /></label>
+    </div>
+    </div>
     <div style="font-size:13px;font-weight:600;margin:12px 0 8px">WordPress</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--mut)">Site title*<br><input id="depWpTitle" class="input" style="width:100%" placeholder="My Client Site" /></label>
@@ -2831,11 +2840,17 @@ $('cronList').addEventListener('click', (e) => {
   if (b) openEditCron(b.dataset.user, b.dataset.sched, b.dataset.cmd, b.dataset.source);
 });
 function depFrameworkToggle() {
-  const wp = $('depFramework').value === 'wordpress';
+  const fw = $('depFramework').value;
+  const wp = fw === 'wordpress' || fw === 'wordpress-theme';
   $('depWpOnly').style.display = wp ? '' : 'none';
-  for (const id of ['depAppNameWrap', 'depAppKeyWrap', 'depEnvExtraWrap', 'depMailWrap', 'depQueueWrap']) {
+  $('depThemeOnly').style.display = fw === 'wordpress-theme' ? '' : 'none';
+  // Field Laravel-only disembunyikan untuk kedua mode WordPress
+  for (const id of ['depAppNameWrap', 'depAppKeyWrap', 'depEnvExtraWrap', 'depMailWrap', 'depQueueWrap', 'depRepoWrap', 'depBranchWrap']) {
     const el = $(id);
-    if (el) el.style.display = wp ? 'none' : '';
+    if (!el) continue;
+    // repo+branch site tidak dipakai di mode theme (core fresh + theme repo)
+    if (id === 'depRepoWrap' || id === 'depBranchWrap') { el.style.display = fw === 'wordpress-theme' ? 'none' : ''; continue; }
+    el.style.display = wp ? 'none' : '';
   }
   const sched = $('depSched');
   if (sched) sched.nextSibling.textContent = wp ? ' WP-Cron (cron www-data tiap 5 mnt)' : ' Scheduler (cron www-data)';
@@ -2864,6 +2879,12 @@ function depRepoName() {
 $('depRepo').addEventListener('input', () => {
   const name = depRepoName();
   if (name && depAuto.folder && !$('depDir').value) { $('depDir').value = name; depCascadeFolder(); }
+});
+let depThemeAuto = true;
+$('depThemeFolder').addEventListener('input', () => { depThemeAuto = false; });
+$('depThemeRepo').addEventListener('input', () => {
+  const m = $('depThemeRepo').value.trim().match(/[:/]([^/:]+?)(\.git)?$/);
+  if (m && m[1] && depThemeAuto && !$('depThemeFolder').value) $('depThemeFolder').value = m[1];
 });
 function depCascadeFolder() {
   const f = $('depDir').value.trim();
@@ -2984,6 +3005,8 @@ function depForm() {
     dir: $('depDir').value.trim(), repo: $('depRepo').value.trim(), branch: $('depBranch').value.trim() || 'main',
     domain: $('depDomain').value.trim(), deployer: $('depDeployer').value.trim(),
     framework: $('depFramework').value,
+    themeRepo: $('depThemeRepo').value.trim(), themeFolder: $('depThemeFolder').value.trim(),
+    themeBranch: $('depThemeBranch').value.trim() || 'main',
     projectType: $('depType').value, dbName: $('depDbName').value.trim(), dbUser: $('depDbUser').value.trim(),
     dbPass: $('depDbPass').value, sqlPath: $('depSqlPath').value.trim(),
     appName: $('depAppName').value.trim(), appKey: $('depAppKey').value.trim(),
@@ -3030,7 +3053,9 @@ async function depSubmit(dryRun) {
   const body = { ...depForm(), dryRun };
   if (!body.dir || !body.repo || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
   if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
-  if (body.framework === 'wordpress' && body.projectType === 'new' && (!body.wpTitle || !body.wpAdminUser || !body.wpAdminEmail || !body.wpAdminPass)) return alert('WordPress baru wajib isi site title + admin user/email/password');
+  const isWpForm = body.framework === 'wordpress' || body.framework === 'wordpress-theme';
+  if (isWpForm && body.projectType === 'new' && (!body.wpTitle || !body.wpAdminUser || !body.wpAdminEmail || !body.wpAdminPass)) return alert('WordPress baru wajib isi site title + admin user/email/password');
+  if (body.framework === 'wordpress-theme' && (!body.themeRepo || !body.themeFolder)) return alert('Mode theme wajib isi theme repo + folder');
   if (!confirm(dryRun ? 'Jalankan dry-run check (tanpa perubahan)?' : `Mulai deploy ${body.dir} (${body.domain})? Proses makan waktu beberapa menit.`)) return;
   try {
     const r = await api('POST', '/api/deploy', body);
