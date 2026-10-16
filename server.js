@@ -1531,6 +1531,13 @@ async function runDeployJob(job, p) {
       await ago('git', ['-C', themeDest, 'config', 'core.filemode', 'false']);
       await ago('git', ['-C', themeDest, 'config', 'core.sharedRepository', 'group']);
       jobStep(job, 'theme clone', 'ok', r.output.slice(-1500));
+
+      // Aktivasi theme — WAJIB sukses: tujuan mode ini = site jalan memakai theme dari repo.
+      // (Tanpa step ini theme hanya ada di folder; WP tetap pakai theme default.)
+      jobStep(job, 'theme activate', 'running', p.themeFolder);
+      r = await ago('/usr/local/bin/wp', ['theme', 'activate', p.themeFolder, `--path=${dest}`], { timeout: 60000 });
+      if (!r.ok) throw new Error(`aktivasi theme gagal — pastikan style.css punya header "Theme Name" dan nama folder = stylesheet\n` + r.output.slice(-2000));
+      jobStep(job, 'theme activate', 'ok', r.output.slice(-800));
     }
 
     // 6c. Plugin wajib WP baru: Advanced Custom Fields (free) install+activate.
