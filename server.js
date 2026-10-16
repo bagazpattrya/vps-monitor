@@ -1410,10 +1410,12 @@ async function runDeployJob(job, p) {
       wset('DB_USER', p.dbUser);
       wset('DB_PASSWORD', p.dbPass);
       wp = wp.replace(/(\$table_prefix\s*=\s*')[^']*(')/, `$1${p.tablePrefix}$2`);
-      // salts: coba API wordpress.org, fallback random lokal
+      // salts: coba API wordpress.org, fallback random lokal.
+      // Validasi KELENGKAPAN (8 define utuh): fetch terpotong = wp-config rusak = parse error misterius di eval wp-cli.
       let salts = '';
       r = await runCmd(`curl -s -m 15 https://api.wordpress.org/secret-key/1.1/salt/ 2>&1`, { timeout: 20000 });
-      if (r.ok && /AUTH_KEY/.test(r.output)) salts = r.output;
+      const saltKeys = ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT'];
+      if (r.ok && saltKeys.every((k) => new RegExp(`define\\(\\s*'${k}'\\s*,\\s*'[^']+'\\s*\\);`).test(r.output))) salts = r.output;
       else {
         const { randomBytes } = require('crypto');
         salts = ['AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT']
@@ -1424,6 +1426,9 @@ async function runDeployJob(job, p) {
       wp += `\ndefine( 'WP_HOME', 'https://${p.domain}' );\ndefine( 'WP_SITEURL', 'https://${p.domain}' );\ndefine( 'DISABLE_WP_CRON', true );\ndefine( 'FS_METHOD', 'direct' );\n`;
       fs.writeFileSync(path.join(dest, 'wp-config.php'), wp);
       await runCmd(`chown ${p.deployer}:www-data ${shq(path.join(dest, 'wp-config.php'))} && chmod 640 ${shq(path.join(dest, 'wp-config.php'))}`);
+      // Gate: wp-cli men-EVAL wp-config.php — file rusak = error misterius. Gagal cepat di sini dengan pesan jelas.
+      r = await runCmd(`php -l ${shq(path.join(dest, 'wp-config.php'))} 2>&1`, { timeout: 30000 });
+      if (!r.ok || !/No syntax errors/.test(r.output)) throw new Error('wp-config.php hasil generate rusak (php -l gagal)\n' + r.output.slice(-1500));
       jobStep(job, 'wp-config.php', 'ok', `prefix=${p.tablePrefix} salts=${/api.wordpress.org/.test(salts) ? 'wordpress.org' : 'lokal'}`);
     } else {
     jobStep(job, '.env', 'running', '');
@@ -2050,6 +2055,7 @@ const server = http.createServer(async (req, res) => {
     if (fwEarly !== 'wordpress-theme') checks.splice(2, 0, ['repo', vRepo(body.repo)], ['branch', vBranch(body.branch)]);
     for (const [k, c] of checks) if (!c.ok) return send(res, 400, JSON.stringify({ error: `${k}: ${c.error}` }));
     if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
+    if (/[\r\n\0]/.test(body.dbPass)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh ada baris baru' }));
     // Samakan dengan policy MySQL validate_password MEDIUM + check_user_name (cek di awal agar gagal cepat, bukan di tengah deploy).
     {
       const pw = body.dbPass;
