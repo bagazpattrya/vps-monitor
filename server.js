@@ -827,6 +827,30 @@ async function runSeeders(rel, classes) {
   return { ok: allOk, output: output.trim() };
 }
 
+// Jalankan perintah shell di folder project sebagai owner folder (sama seperti git pull / artisan).
+function runInProject(pr, script, timeout) {
+  const env = { COMPOSER_ALLOW_SUPERUSER: '1', COMPOSER_NO_INTERACTION: '1', TERM: 'dumb', NO_COLOR: '1' };
+  return (pr.uid !== null && pr.uid !== pr.me)
+    ? runFile('sudo', ['-H', '-u', `#${pr.uid}`, 'bash', '-c', script], { cwd: pr.full, timeout, env })
+    : runFile('bash', ['-c', script], { cwd: pr.full, timeout, env });
+}
+
+async function runComposerUpdate(rel) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  if (!fs.existsSync(path.join(pr.full, 'composer.json'))) return { ok: false, error: 'composer.json tidak ditemukan' };
+  const r = await runInProject(pr, 'composer update --no-interaction --no-progress 2>&1', 300_000);
+  return { ok: r.ok, output: `$ composer update\n${r.output || r.error || ''}`.trim(), error: r.ok ? undefined : (r.error || 'composer update gagal') };
+}
+
+async function runTerminalCommand(rel, command) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  if (typeof command !== 'string' || !command.trim() || command.length > 2000) return { ok: false, error: 'Perintah tidak valid' };
+  const r = await runInProject(pr, `${command} 2>&1`, 60_000);
+  return { ok: r.ok, output: r.output || r.error || '', error: r.ok ? undefined : r.error };
+}
+
 function readProjectEnv(rel) {
   const pr = resolveGitProject(rel);
   if (pr.error) return { ok: false, error: pr.error };
@@ -2261,6 +2285,24 @@ const server = http.createServer(async (req, res) => {
     if (isHidden(session, body && body.relPath)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
     audit(session.user, 'git.seed', body && body.relPath, Array.isArray(body && body.classes) ? body.classes.join(',') : '');
     const r = await runSeeders(body && body.relPath, body && body.classes);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/git/composer' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    if (isHidden(session, body && body.relPath)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    audit(session.user, 'git.composer', body && body.relPath, 'composer update');
+    const r = await runComposerUpdate(body && body.relPath);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/git/terminal' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    if (isHidden(session, body && body.relPath)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    audit(session.user, 'git.terminal', body && body.relPath, String((body && body.command) || '').slice(0, 200));
+    const r = await runTerminalCommand(body && body.relPath, body && body.command);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/git/pull' && req.method === 'POST') {

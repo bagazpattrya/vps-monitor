@@ -1601,6 +1601,23 @@ select.input { appearance: auto; max-width: 100%; }
   </div>
 </div>
 
+<div class="modal-backdrop" id="termModal">
+  <div class="modal" style="max-width:860px;width:calc(100% - 32px)">
+    <div class="modal-head">
+      <span id="termModalTitle">Terminal</span>
+      <button class="btn" id="termModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto">
+      <div style="font-size:12px;color:var(--mut);margin-bottom:8px">Menjalankan satu perintah per eksekusi di folder project, sebagai owner folder. Tanpa input interaktif, timeout 60 detik. Semua perintah dicatat di activity log.</div>
+      <pre id="termOut" class="modal-body" style="margin:0 0 10px;padding:10px;background:var(--bg-elev);border-radius:8px;height:300px;overflow:auto"></pre>
+      <form id="termForm" style="display:flex;gap:8px">
+        <input type="text" id="termInput" class="input" style="flex:1;font-family:monospace" placeholder="php artisan route:list" autocomplete="off" spellcheck="false" />
+        <button class="btn-pull" id="termRun" type="submit">Run</button>
+      </form>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="envModal">
   <div class="modal">
     <div class="modal-head">
@@ -2132,6 +2149,8 @@ const ACTIVITY_LABELS = {
   'auth.logout': ['logout', ''],
   'git.pull': ['git pull', 'warn'],
   'git.seed': ['git seed', 'warn'],
+  'git.composer': ['composer update', 'warn'],
+  'git.terminal': ['terminal cmd', 'warn'],
   'backup.run': ['backup run', 'warn'],
   'backup.download': ['backup download', ''],
   'deploy.start': ['deploy', 'warn'],
@@ -2648,6 +2667,8 @@ function renderGitProjects() {
                 <div class="pull-menu">
                   <button class="act-seed" data-rel="${r.relPath}">Run Seeder…</button>
                   <button class="act-env" data-rel="${r.relPath}">Edit .env…</button>
+                  <button class="act-composer" data-rel="${r.relPath}">Composer Update</button>
+                  <button class="act-term" data-rel="${r.relPath}">Terminal…</button>
                 </div>
               </div>
             </div>
@@ -3439,7 +3460,59 @@ const closeEnvModal = () => $('envModal').classList.remove('open');
 $('envModalClose').addEventListener('click', closeEnvModal);
 $('envCancel').addEventListener('click', closeEnvModal);
 
+let termRel = null;
+function openTermModal(rel) {
+  termRel = rel;
+  $('termModalTitle').textContent = `Terminal: ${rel}`;
+  $('termOut').textContent = '';
+  $('termModal').classList.add('open');
+  $('termInput').focus();
+}
+$('termForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const cmd = $('termInput').value.trim();
+  if (!cmd) return;
+  const out = $('termOut');
+  const btn = $('termRun');
+  btn.disabled = true; $('termInput').disabled = true;
+  out.textContent += `$ ${cmd}\n`;
+  try {
+    const d = await api('POST', '/api/git/terminal', { relPath: termRel, command: cmd });
+    out.textContent += (d.output || '') + '\n';
+  } catch (err) {
+    out.textContent += `[error] ${err.message}\n`;
+  }
+  $('termInput').value = '';
+  btn.disabled = false; $('termInput').disabled = false;
+  $('termInput').focus();
+  out.scrollTop = out.scrollHeight;
+});
+const closeTermModal = () => $('termModal').classList.remove('open');
+$('termModalClose').addEventListener('click', closeTermModal);
+$('termModal').addEventListener('click', (e) => { if (e.target === $('termModal')) closeTermModal(); });
+
+async function doComposerUpdate(rel) {
+  if (!confirm(`Jalankan "composer update" di ${rel}?\n\nIni memperbarui dependency & composer.lock, bisa memakan beberapa menit.`)) return;
+  $('gitModalTitle').textContent = `Composer Update: ${rel}`;
+  $('gitModalBody').className = 'modal-body';
+  $('gitModalBody').textContent = 'Menjalankan composer update… (bisa beberapa menit)';
+  $('gitModal').classList.add('open');
+  try {
+    const d = await api('POST', '/api/git/composer', { relPath: rel });
+    $('gitModalBody').textContent = d.output || 'Done';
+    $('gitModalBody').className = 'modal-body ok';
+  } catch (err) {
+    $('gitModalBody').textContent = err.message;
+    $('gitModalBody').className = 'modal-body err';
+  }
+  gitProjects();
+}
+
 $('gitList').addEventListener('click', async (e) => {
+  const termBtn = e.target.closest('.act-term');
+  if (termBtn) { closePullMenus(); openTermModal(termBtn.dataset.rel); return; }
+  const compBtn = e.target.closest('.act-composer');
+  if (compBtn) { closePullMenus(); doComposerUpdate(compBtn.dataset.rel); return; }
   const envBtn = e.target.closest('.act-env');
   if (envBtn) { closePullMenus(); openEnvModal(envBtn.dataset.rel); return; }
   const more =e.target.closest('.btn-pull-more');
