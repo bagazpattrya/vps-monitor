@@ -946,12 +946,24 @@ function pullGitProject(targetPath) {
       if (!err) return resolve(runFix(out));
       // Jika gagal karena local changes (umumnya sisa mode/permission, bukan edit beneran),
       // amankan dulu via stash lalu coba pull sekali lagi. Tidak pakai reset --hard agar tidak hapus kerjaan.
-      if (/would be overwritten|local changes|Your local changes|stash your changes/i.test(out)) {
-        const stashCmd = (uid !== null && uid !== me)
-          ? `sudo -H -u "#${uid}" git -C "${targetPath}" stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`
-          : `git -C "${targetPath}" stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`;
+      // Repo nyangkut di state conflict (unmerged files / merge atau rebase belum selesai, mis. sisa pull/stash pop gagal).
+      // Recovery non-destruktif: abort merge/rebase, `git reset` (mixed) hanya membersihkan index — isi file working tree
+      // (termasuk conflict marker) tetap ada dan ikut di-stash di bawah, jadi tidak ada kerjaan yang hilang.
+      const stuck = /unmerged files|unresolved conflict|not concluded your merge|rebase in progress|You are in the middle of/i.test(out);
+      if (stuck || /would be overwritten|local changes|Your local changes|stash your changes/i.test(out)) {
+        const asOwner = (a) => (uid !== null && uid !== me)
+          ? `sudo -H -u "#${uid}" git -C "${targetPath}" ${a}`
+          : `git -C "${targetPath}" ${a}`;
+        const stashCmd = asOwner(`stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`);
+        let prep = '';
+        if (stuck) {
+          for (const a of ['merge --abort', 'rebase --abort', 'cherry-pick --abort', 'reset']) {
+            try { prep += `$ git ${a}\n` + execSync(`${asOwner(a)} 2>&1`, { timeout: 15_000 }).toString() + '\n'; }
+            catch (e) { prep += `$ git ${a} [skip]\n`; }
+          }
+        }
         exec(stashCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (serr, sstdout, sstderr) => {
-          const sout = (sstdout || '') + (sstderr || '');
+          const sout = prep + (sstdout || '') + (sstderr || '');
           exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err2, stdout2, stderr2) => {
             gitCache.time = 0;
             const out2 = out + '\n--- autostash ---\n' + sout + '\n--- retry pull ---\n' + ((stdout2 || '') + (stderr2 || ''));
