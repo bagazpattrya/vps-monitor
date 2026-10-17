@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const zlib = require('zlib');
 const { execSync, exec, execFile, spawn } = require('child_process');
 const auth = require('./auth');
 
@@ -1227,6 +1228,21 @@ function getBackupInfo() {
   };
 }
 
+// Daftar database live (selain DB sistem), disaring hidden keywords untuk non-superadmin.
+const SYSTEM_DBS = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
+async function listDatabases(session) {
+  const r = await runFile('mysql', ['-BNe', 'SELECT table_schema, ROUND(SUM(data_length+index_length)) FROM information_schema.tables GROUP BY table_schema UNION SELECT schema_name, 0 FROM information_schema.schemata ORDER BY 1'], { timeout: 15000 });
+  if (!r.ok) return { ok: false, error: 'Gagal membaca daftar database: ' + r.output.trim().slice(0, 300) };
+  const map = new Map();
+  for (const line of r.output.split('\n')) {
+    const [name, size] = line.split('\t');
+    if (!name || !/^[A-Za-z0-9_$.-]+$/.test(name) || SYSTEM_DBS.has(name.toLowerCase())) continue;
+    map.set(name, Math.max(map.get(name) || 0, Number(size) || 0));
+  }
+  const databases = [...map].filter(([n]) => !isHidden(session, n)).map(([name, size]) => ({ name, size })).sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, databases };
+}
+
 // Terapkan hidden keywords ke daftar backup: file disaring, total dihitung ulang,
 // dan baris log yang menyebut keyword dibuang.
 function filterBackupInfo(session, info) {
@@ -2082,6 +2098,44 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/backups/status' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     return send(res, 200, JSON.stringify(backupStatus()));
+  }
+  if (p === '/api/backups/databases' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const r = await listDatabases(session);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/backups/dump' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const db = url.searchParams.get('db') || '';
+    // Harus ada di daftar yang boleh dilihat user ini (sudah memfilter hidden keywords + DB sistem).
+    const list = await listDatabases(session);
+    if (!list.ok || !list.databases.some((d) => d.name === db)) return send(res, 404, 'Database not found', 'text/plain');
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const filename = `${db}_dump_${stamp}.sql.gz`;
+    audit(session.user, 'database.dump', db);
+    const dump = spawn('mysqldump', ['--single-transaction', '--routines', '--triggers', '--events', '--no-tablespaces', db], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const gz = zlib.createGzip();
+    let started = false;
+    let errText = '';
+    const head = () => { if (!started) { started = true; res.writeHead(200, { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${filename}"` }); } };
+    dump.stderr.on('data', (d) => { errText = (errText + d).slice(-2000); });
+    dump.on('error', (e) => { if (!started) send(res, 500, 'mysqldump gagal: ' + e.message, 'text/plain'); else res.destroy(); });
+    gz.on('data', (chunk) => { head(); res.write(chunk); });
+    // Akhiri response hanya bila mysqldump sukses; bila gagal, putus koneksi supaya tidak tampak sebagai dump utuh.
+    const gzDone = new Promise((r) => gz.on('end', r));
+    dump.on('close', async (code) => {
+      if (code !== 0) {
+        console.log(`[DUMP] ${db} exit=${code} ${errText}`);
+        gz.destroy();
+        return started ? res.destroy() : send(res, 500, 'mysqldump gagal: ' + errText.trim(), 'text/plain');
+      }
+      await gzDone;
+      head();
+      res.end();
+    });
+    req.on('close', () => { try { dump.kill(); } catch {} });
+    dump.stdout.pipe(gz);
+    return;
   }
   if (p === '/api/backups/download') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));

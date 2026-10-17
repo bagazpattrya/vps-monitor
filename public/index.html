@@ -1289,6 +1289,7 @@ select.input { appearance: auto; max-width: 100%; }
             <button class="tab" data-cat="other">Manual / Lainnya</button>
           </div>
           <button class="btn" id="backupRefreshBtn">↻ Refresh</button>
+          <button class="btn" id="dbDumpBtn">🗄 Download Database</button>
           <button class="btn ok" id="backupRunBtn" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">▶ Jalankan Backup Sekarang</button>
         </div>
       </div>
@@ -1566,6 +1567,19 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="dbDumpModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span>Download Database (live dump .sql.gz)</span>
+      <button class="btn" id="dbDumpClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto">
+      <input type="search" id="dbDumpSearch" class="input" placeholder="Filter database..." style="width:100%;margin-bottom:8px" />
+      <div id="dbDumpList" style="font-size:13px">Loading…</div>
+    </div>
   </div>
 </div>
 
@@ -3543,6 +3557,29 @@ $('backupRunBtn').addEventListener('click', async () => {
     btn.textContent = '▶ Jalankan Backup Sekarang';
   }
 });
+
+// Download Database (dump live)
+let dbDumpItems = [];
+function renderDbDump() {
+  const q = $('dbDumpSearch').value.trim().toLowerCase();
+  const items = dbDumpItems.filter((d) => d.name.toLowerCase().includes(q));
+  $('dbDumpList').innerHTML = items.length ? items.map((d) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd, rgba(255,255,255,.08))">
+      <div><strong>${escHtml(d.name)}</strong> <span style="color:var(--mut);font-size:12px">${fmtBytes(d.size)}</span></div>
+      <a href="/api/backups/dump?db=${encodeURIComponent(d.name)}" class="btn-sm ok" style="text-decoration:none" download>⬇ Download</a>
+    </div>`).join('') : '<div style="color:var(--mut)">Tidak ada database.</div>';
+}
+$('dbDumpBtn').addEventListener('click', async () => {
+  $('dbDumpModal').classList.add('open');
+  $('dbDumpSearch').value = '';
+  $('dbDumpList').textContent = 'Loading…';
+  try {
+    dbDumpItems = (await api('GET', '/api/backups/databases')).databases || [];
+    renderDbDump();
+  } catch (err) { $('dbDumpList').textContent = err.message || 'Gagal memuat database'; }
+});
+$('dbDumpSearch').addEventListener('input', renderDbDump);
+$('dbDumpClose').addEventListener('click', () => $('dbDumpModal').classList.remove('open'));
 
 // File Explorer Events
 $('fsBtnRefresh').addEventListener('click', () => loadFs(fsCurrentPath));
