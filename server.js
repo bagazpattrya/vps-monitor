@@ -1914,6 +1914,82 @@ function transferStatus(job) {
   return { running, name: job.transfer.name, dest: job.transfer.dest, exitCode, logTail: log.split('\n').slice(-40).join('\n') };
 }
 
+// ---- hosted sites (nginx sites-enabled + conf.d) ----
+const NGINX_SITE_DIRS = (process.env.NGINX_SITE_DIRS || '/etc/nginx/sites-enabled,/etc/nginx/conf.d')
+  .split(',').map((x) => x.trim()).filter(Boolean);
+
+// Parser nginx minimal: ambil server{} beserta server_name, listen, ssl, root, dan proxy_pass/fastcgi_pass di location.
+function parseNginxServers(text) {
+  const servers = [];
+  const stack = [];
+  let cur = null, curDepth = 0;
+  const src = String(text).replace(/#.*$/gm, '');
+  const re = /([^;{}]*)([;{}])/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const stmt = m[1].trim(), d = m[2];
+    if (d === '{') {
+      stack.push(stmt);
+      if (!cur && stmt === 'server') {
+        cur = { names: [], listens: [], ssl: false, root: '', upstream: '', type: '', redirect: false, defaultServer: false };
+        curDepth = stack.length;
+      }
+    } else if (d === '}') {
+      stack.pop();
+      if (cur && stack.length < curDepth) { servers.push(cur); cur = null; }
+    } else if (cur && stmt) {
+      const [name, ...args] = stmt.split(/\s+/);
+      const atServer = stack.length === curDepth;
+      if (atServer && name === 'server_name') cur.names.push(...args);
+      else if (atServer && name === 'listen') {
+        cur.listens.push(args.join(' '));
+        if (args.includes('ssl')) cur.ssl = true;
+        if (args.includes('default_server')) cur.defaultServer = true;
+      }
+      else if (name === 'ssl_certificate') cur.ssl = true;
+      else if (name === 'root' && !cur.root) cur.root = args[0] || '';
+      else if (atServer && name === 'return' && /^30[1278]$/.test(args[0] || '')) cur.redirect = true;
+      else if (name === 'proxy_pass' && !cur.upstream) { cur.upstream = args[0] || ''; cur.type = 'proxy'; }
+      else if (name === 'fastcgi_pass' && !cur.upstream) { cur.upstream = args[0] || ''; cur.type = 'php'; }
+    }
+  }
+  return servers;
+}
+
+// Satu baris per file config (certbot memecah satu situs jadi blok 443 + blok redirect 80, digabung di sini).
+function getHostedSites() {
+  const sites = [];
+  for (const dir of NGINX_SITE_DIRS) {
+    let files;
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files.sort()) {
+      if (f.startsWith('.') || f.endsWith('.bak') || f.endsWith('~')) continue;
+      const full = path.join(dir, f);
+      let text;
+      try { text = fs.readFileSync(full, 'utf8'); } catch { sites.push({ file: f, dir, domains: [], broken: true, error: 'Config tidak bisa dibaca (symlink putus / permission)' }); continue; }
+      const servers = parseNginxServers(text);
+      if (!servers.length) continue; // bukan file vhost (mis. conf.d/*.conf berisi upstream saja)
+      const domains = [...new Set(servers.flatMap((s) => s.names).filter((n) => n && n !== '_'))];
+      const withContent = servers.find((s) => s.type) || servers.find((s) => s.root) || servers[0];
+      const root = (servers.find((s) => s.root) || {}).root || '';
+      const ports = [...new Set(servers.flatMap((s) => s.listens).map((l) => (l.match(/(\d{2,5})(?:\s|$)/) || [])[1]).filter(Boolean))];
+      sites.push({
+        file: f,
+        dir,
+        domains,
+        ssl: servers.some((s) => s.ssl),
+        ports,
+        type: withContent.type || (root ? 'static' : (servers.every((s) => s.redirect) ? 'redirect' : 'other')),
+        root,
+        rootExists: root ? fs.existsSync(root) : null,
+        upstream: withContent.upstream || '',
+        defaultServer: servers.some((s) => s.defaultServer),
+      });
+    }
+  }
+  return sites;
+}
+
 const server = http.createServer(async (req, res) => {
 
 
@@ -2247,6 +2323,13 @@ const server = http.createServer(async (req, res) => {
     });
     fs.createReadStream(target).pipe(res);
     return;
+  }
+  if (p === '/api/sites' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const all = getHostedSites();
+    // Site disembunyikan bila nama file, domain, atau root-nya mengandung hidden keyword user ini.
+    const sites = all.filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
+    return send(res, 200, JSON.stringify({ time: Date.now(), sites }));
   }
   if (p === '/api/git/projects') {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));

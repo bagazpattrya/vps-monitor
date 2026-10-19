@@ -876,6 +876,7 @@ select.input { appearance: auto; max-width: 100%; }
   <a href="#/git" class="nav-link" data-view="git"><span class="dot"></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes"><span class="dot"></span>Processes</a>
   <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none"><span class="dot"></span>Backups</a>
+  <a href="#/sites" class="nav-link" id="navLinkSites" data-view="sites" style="display:none"><span class="dot"></span>Hosted Sites</a>
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none"><span class="dot"></span>File Explorer</a>
   <a href="#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none"><span class="dot"></span>User Management</a>
   <a href="#/activity" class="nav-link" id="navLinkActivity" data-view="activity" style="display:none"><span class="dot"></span>Activity Log</a>
@@ -1413,6 +1414,38 @@ select.input { appearance: auto; max-width: 100%; }
     </div>
   </div><!-- /view-users -->
 
+  <!-- VIEW: HOSTED SITES -->
+  <div class="view-pane" id="view-sites">
+    <div class="card c12">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>Hosted Sites (nginx enabled)</span>
+          <span class="badge" id="sitesCount">0</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="sitesSearch" class="input" placeholder="Filter domain / root / file..." style="min-width:200px" />
+          <button class="btn" id="sitesRefresh">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th style="width:90px">Type</th>
+              <th style="width:70px">SSL</th>
+              <th>Root / Upstream</th>
+              <th>Config file</th>
+            </tr>
+          </thead>
+          <tbody id="sitesList">
+            <tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">Memuat sites...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-sites -->
+
   <!-- VIEW: ACTIVITY LOG -->
   <div class="view-pane" id="view-activity">
     <div class="card c12" id="activityCard">
@@ -1837,11 +1870,12 @@ j('/api/me').then(m => {
     if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
+    if ($('navLinkSites')) $('navLinkSites').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
     if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
@@ -2135,6 +2169,46 @@ function renderUsers() {
       </td>
     </tr>
   `).join('');
+}
+
+// ---- Hosted Sites ----
+let rawSites = [];
+async function sites() {
+  if (!isAdmin) return;
+  try {
+    const d = await j('/api/sites');
+    rawSites = d.sites || [];
+    renderSites();
+  } catch {
+    $('sitesList').innerHTML = '<tr><td colspan="5" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat sites</td></tr>';
+  }
+}
+function renderSites() {
+  const q = ($('sitesSearch').value || '').trim().toLowerCase();
+  const list = rawSites.filter(s => !q || [s.file, s.root, s.upstream, ...(s.domains || [])].join(' ').toLowerCase().includes(q));
+  $('sitesCount').textContent = list.length === rawSites.length ? rawSites.length : `${list.length}/${rawSites.length}`;
+  if (!list.length) {
+    $('sitesList').innerHTML = `<tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">${rawSites.length ? 'Tidak ada site yang cocok dengan filter' : 'Tidak ada site nginx yang enabled'}</td></tr>`;
+    return;
+  }
+  $('sitesList').innerHTML = list.map(s => {
+    const domains = (s.domains || []).length
+      ? s.domains.map(dm => `<div><strong>${escHtml(dm)}</strong></div>`).join('')
+      : `<span style="color:var(--mut)">${s.defaultServer ? '(default server)' : '—'}</span>`;
+    const target = s.broken
+      ? `<span style="color:var(--bad)">${escHtml(s.error || 'rusak')}</span>`
+      : s.type === 'proxy' || s.type === 'php' ? `<span style="font-family:var(--font-mono)">${escHtml(s.upstream)}</span>`
+      : s.root ? `<span style="font-family:var(--font-mono)">${escHtml(s.root)}</span>${s.rootExists === false ? ' <span class="pill down">root tidak ada</span>' : ''}`
+      : '<span style="color:var(--mut)">—</span>';
+    return `
+    <tr>
+      <td>${domains}</td>
+      <td>${s.broken ? '<span class="pill down">broken</span>' : `<span class="pill">${escHtml(s.type)}</span>`}</td>
+      <td>${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'}</td>
+      <td>${target}</td>
+      <td style="color:var(--mut);font-family:var(--font-mono)" title="${escHtml(s.dir)}">${escHtml(s.file)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ---- Activity Log ----
@@ -3200,7 +3274,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -3234,6 +3308,7 @@ function navigateView(name, refresh = true) {
     if (view === 'users') users();
     if (view === 'activity') { activity(); activityAutoToggle(); }
     if (view === 'deploy') deployJobsRefresh();
+    if (view === 'sites') sites();
   }
 }
 
@@ -3557,6 +3632,8 @@ $('gitModal').addEventListener('click', (e) => {
 
 // Backup Events
 $('backupRefreshBtn').addEventListener('click', backups);
+$('sitesRefresh').addEventListener('click', sites);
+$('sitesSearch').addEventListener('input', renderSites);
 $('backupSearch').addEventListener('input', renderBackups);
 $('backupFilterTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
