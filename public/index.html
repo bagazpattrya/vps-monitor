@@ -2192,8 +2192,12 @@ function renderSites() {
     return;
   }
   $('sitesList').innerHTML = list.map(s => {
+    const scheme = s.ssl ? 'https' : 'http';
+    // Wildcard / regex server_name (*.x.com, ~^..) tidak bisa dikunjungi langsung.
+    const visit = dm => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm)
+      ? ` <a class="btn-sm ok" style="text-decoration:none;margin-left:6px" href="${scheme}://${escHtml(dm)}" target="_blank" rel="noopener noreferrer">Visit ↗</a>` : '';
     const domains = (s.domains || []).length
-      ? s.domains.map(dm => `<div><strong>${escHtml(dm)}</strong></div>`).join('')
+      ? s.domains.map(dm => `<div><strong>${escHtml(dm)}</strong>${visit(dm)}</div>`).join('')
       : `<span style="color:var(--mut)">${s.defaultServer ? '(default server)' : '—'}</span>`;
     const target = s.broken
       ? `<span style="color:var(--bad)">${escHtml(s.error || 'rusak')}</span>`
@@ -3317,6 +3321,22 @@ window.addEventListener('hashchange', () => navigateView(currentView()));
 $('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
 $('sidebarClose').addEventListener('click', () => toggleSidebar(false));
 $('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
+
+// Ctrl/Cmd+F -> fokus ke kolom filter di halaman aktif (atau di modal yang sedang terbuka).
+// Bila kolom filter sudah fokus, tekan lagi akan membuka pencarian bawaan browser.
+// Halaman tanpa kolom filter (Overview, Storage, Users) langsung memakai pencarian browser.
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return;
+  const visible = (el) => el.getClientRects().length > 0;
+  const inputs = [...document.querySelectorAll('input[type="search"]')].filter(visible);
+  const modal = inputs.find(el => el.closest('.modal, .modal-backdrop, [role="dialog"], dialog'));
+  const pane = document.querySelector('.view-pane.active');
+  const target = modal || (pane && inputs.find(el => pane.contains(el)));
+  if (!target || document.activeElement === target) return;
+  e.preventDefault();
+  target.focus();
+  target.select();
+});
 
 document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   link.addEventListener('click', () => {
