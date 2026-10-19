@@ -719,6 +719,27 @@ function ensureFilemodeFalse(dir) {
   try { execSync(gitCmdFor(dir, 'config core.filemode false 2>/dev/null'), { timeout: 2000 }); } catch {}
 }
 
+function parseEnvText(txt) {
+  const out = {};
+  for (const line of String(txt || '').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (!m) continue;
+    let v = m[2];
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    out[m[1]] = v;
+  }
+  return out;
+}
+function projectDbInfo(full) {
+  let env = {};
+  try { env = parseEnvText(fs.readFileSync(path.join(full, '.env'), 'utf8')); } catch {}
+  return { db: env.DB_DATABASE || '', user: env.DB_USERNAME || '', connection: env.DB_CONNECTION || '', appEnv: env.APP_ENV || '' };
+}
+function isDevProjectName(name) {
+  return /(^|[-_.])(dev|development)($|[-_.])/i.test(String(name || '')) || /(dev|development)$/i.test(String(name || ''));
+}
+function sqlEsc(v) { return String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
 // Superadmin melihat semuanya; user lain: keyword global + keyword miliknya sendiri.
 function hiddenKeywordsFor(session) {
   if (!session || session.superadmin) return [];
@@ -741,7 +762,10 @@ function getGitProjects(force = false) {
     const name = path.basename(d);
     const parts = rel.split(path.sep);
     const group = parts.length > 1 ? parts[0] : 'Projects';
-    const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null };
+    const isLaravel = fs.existsSync(path.join(d, 'artisan'));
+    const db = isLaravel ? projectDbInfo(d) : null;
+    const isDev = isDevProjectName(name) || !!(db && /^(local|development|dev)$/i.test(db.appEnv));
+    const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null, isLaravel, isDev };
     try {
       ensureFilemodeFalse(d);
     } catch {}
@@ -881,6 +905,91 @@ async function saveProjectEnv(rel, content) {
     : await runFile('php', args, { cwd: pr.full, timeout: 60000 });
   output += `\n--- php artisan optimize:clear ${r.ok ? '' : '[FAILED] '}---\n${r.output || r.error || ''}`;
   return { ok: r.ok, output: output.trim() };
+}
+
+function findBestSourceMatch(targetName, sources) {
+  const cleanTokens = targetName
+    .toLowerCase()
+    .replace(/(^|[-_.])(dev|development)($|[-_.])/g, ' ')
+    .split(/[-_.\s]+/)
+    .filter((t) => t.length > 1);
+  if (!cleanTokens.length) return null;
+  let best = null;
+  let bestScore = -1;
+  for (const s of sources) {
+    if (isDevProjectName(s.name)) continue;
+    const sName = s.name.toLowerCase();
+    const sTokens = sName.split(/[-_.\s]+/).filter((t) => t.length > 1);
+    let score = 0;
+    const exactClean = targetName.toLowerCase().replace(/[-_.]?dev[-_.]?/g, '');
+    if (sName === exactClean) score += 20;
+    let matched = 0;
+    for (const token of cleanTokens) {
+      if (sTokens.includes(token)) { matched++; score += 5; }
+      else if (sName.includes(token)) { matched++; score += 2; }
+    }
+    score -= Math.abs(sTokens.length - cleanTokens.length);
+    if (matched > 0 && score > bestScore) { bestScore = score; best = s.relPath; }
+  }
+  return best;
+}
+
+// Info untuk modal "Sync DB": target (harus dev) + daftar project sumber + saran default.
+function getSyncDbInfo(rel) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  const targetName = path.basename(pr.full);
+  const target = projectDbInfo(pr.full);
+  const targetDev = isDevProjectName(targetName) || /^(local|development|dev)$/i.test(target.appEnv);
+  const sources = getGitProjects()
+    .filter((x) => x.path !== pr.full && x.isLaravel)
+    .map((x) => {
+      const info = projectDbInfo(x.path);
+      return { relPath: x.relPath, name: x.name, db: info.db };
+    })
+    .filter((x) => x.db)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const def = findBestSourceMatch(targetName, sources);
+  return { ok: true, target: { relPath: rel, name: targetName, db: target.db, isDev: targetDev }, sources, defaultSource: def };
+}
+
+// Copy DB source -> DB target (target dev). Source hanya dibaca via single-transaction dump.
+async function syncProjectDb(pr, sp, targetDb, sourceDb, targetUser) {
+  const mysql = (sql, timeout) => runFile('mysql', ['-BNe', sql], { timeout: timeout || 15000 });
+  const bdir = fs.existsSync('/var/backups/mysql') ? '/var/backups/mysql' : DATA_DIR;
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const backup = path.join(bdir, `dev-db-sync-${targetDb}-${stamp}.sql.gz`);
+
+  let r = await mysql(`SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${sqlEsc(sourceDb)}';`);
+  if (!r.ok) return { ok: false, error: 'Cek DB source gagal\n' + r.output };
+  if (!r.output.trim()) return { ok: false, error: `DB source ${sourceDb} tidak ditemukan` };
+
+  r = await mysql(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${sqlEsc(targetDb)}';`);
+  const hasTarget = r.ok && parseInt(r.output.trim(), 10) > 0;
+  if (hasTarget) {
+    r = await runFile('bash', ['-o', 'pipefail', '-c', `mysqldump --single-transaction --quick --routines --triggers --events --no-tablespaces ${shq(targetDb)} | gzip > ${shq(backup)}`], { timeout: 600000 });
+    if (!r.ok) return { ok: false, error: 'Backup DB target gagal, sync dibatalkan\n' + r.output };
+  }
+
+  r = await mysql(`DROP DATABASE IF EXISTS \`${targetDb}\`; CREATE DATABASE \`${targetDb}\`;`);
+  if (!r.ok) return { ok: false, error: 'Recreate DB target gagal\n' + r.output };
+  if (targetUser) {
+    const u = vDbIdent(targetUser, 'DB_USERNAME target', 32);
+    if (u.ok) await mysql(`GRANT ALL PRIVILEGES ON \`${targetDb}\`.* TO '${u.value}'@'localhost'; FLUSH PRIVILEGES;`);
+  }
+
+  r = await runFile('bash', ['-o', 'pipefail', '-c', `mysqldump --single-transaction --quick --routines --triggers --events --no-tablespaces ${shq(sourceDb)} | mysql ${shq(targetDb)}`], { timeout: 600000 });
+  if (!r.ok) return { ok: false, error: 'Import DB gagal. Backup target: ' + backup + '\n' + r.output };
+
+  let output = `Source: ${sourceDb}\nTarget: ${targetDb}\n` + (hasTarget ? `Backup target: ${backup}\n` : 'Target kosong (tidak perlu backup)\n');
+  const runArtisan = (args) => (pr.uid !== null && pr.uid !== pr.me)
+    ? runFile('sudo', ['-H', '-u', `#${pr.uid}`, 'php', path.join(pr.full, 'artisan'), ...args], { cwd: pr.full, timeout: 120000 })
+    : runFile('php', [path.join(pr.full, 'artisan'), ...args], { cwd: pr.full, timeout: 120000 });
+  for (const [label, args] of [['migrate --force', ['migrate', '--force']], ['optimize:clear', ['optimize:clear']]]) {
+    const q = await runArtisan(args);
+    output += `\n--- php artisan ${label} ${q.ok ? '' : '[FAILED] '}---\n${q.output || q.error || ''}`;
+  }
+  return { ok: true, output: output.trim(), backup: hasTarget ? backup : null };
 }
 
 function pullGitProject(targetPath) {
@@ -2495,6 +2604,50 @@ const server = http.createServer(async (req, res) => {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));
     const safe = projects.map(({ path: _p, ...rest }) => rest); // hide absolute path
     return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
+  }
+  if (p === '/api/git/db/sources' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const rel = url.searchParams.get('relPath');
+    if (isHidden(session, rel)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    const r = getSyncDbInfo(rel);
+    if (!r.ok) return send(res, 400, JSON.stringify({ error: r.error }));
+    r.sources = r.sources.filter((x) => !isHidden(session, [x.name, x.relPath, x.db]));
+    if (r.defaultSource && !r.sources.some((x) => x.relPath === r.defaultSource)) r.defaultSource = null;
+    return send(res, 200, JSON.stringify(r));
+  }
+  if (p === '/api/git/db/sync' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const rel = body && body.relPath;
+    const srcRel = body && body.sourceRelPath;
+    if (isHidden(session, rel) || isHidden(session, srcRel)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    const pr = resolveGitProject(rel);
+    if (pr.error) return send(res, 400, JSON.stringify({ error: pr.error }));
+    const sp = resolveGitProject(srcRel);
+    if (sp.error) return send(res, 400, JSON.stringify({ error: 'Source: ' + sp.error }));
+    if (pr.full === sp.full) return send(res, 400, JSON.stringify({ error: 'Source dan target tidak boleh sama' }));
+    const t = projectDbInfo(pr.full);
+    const s = projectDbInfo(sp.full);
+    const targetName = path.basename(pr.full);
+    if (!isDevProjectName(targetName) && !/^(local|development|dev)$/i.test(t.appEnv)) {
+      return send(res, 400, JSON.stringify({ error: 'Target bukan project dev (nama folder harus mengandung "dev" atau APP_ENV=local)' }));
+    }
+    const td = vDbIdent(t.db, 'DB_DATABASE target', 64);
+    if (!td.ok) return send(res, 400, JSON.stringify({ error: td.error + ' (cek .env target)' }));
+    const sd = vDbIdent(s.db, 'DB_DATABASE source', 64);
+    if (!sd.ok) return send(res, 400, JSON.stringify({ error: sd.error + ' (cek .env source)' }));
+    if (td.value === sd.value) return send(res, 400, JSON.stringify({ error: 'DB source dan target sama — dibatalkan' }));
+    if (SYSTEM_DBS.has(td.value.toLowerCase())) return send(res, 400, JSON.stringify({ error: 'Target DB sistem tidak boleh ditimpa' }));
+    const pw = await auth.confirmPassword(session, body && body.password);
+    if (!pw.ok) {
+      audit(session.user, 'git.db.sync.denied', rel, pw.error);
+      return send(res, pw.status, JSON.stringify({ error: pw.error }));
+    }
+    audit(session.user, 'git.db.sync', rel, `from=${sp.full} srcDb=${sd.value} dstDb=${td.value}`);
+    const r = await syncProjectDb(pr, sp, td.value, sd.value, t.user);
+    if (!r.ok) audit(session.user, 'git.db.sync.fail', rel, String(r.error || '').slice(0, 200));
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/git/seeders') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
