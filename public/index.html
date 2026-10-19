@@ -1424,7 +1424,11 @@ select.input { appearance: auto; max-width: 100%; }
         </h3>
         <div class="proc-controls">
           <input type="search" id="sitesSearch" class="input" placeholder="Filter domain / root / file..." style="min-width:200px" />
-          <button class="btn" id="sitesRefresh">Refresh</button>
+          <select id="sitesFilter" class="input">
+            <option value="all">Semua site</option>
+            <option value="inactive">Tidak aktif saja</option>
+          </select>
+          <button class="btn" id="sitesRefresh">Refresh &amp; cek status</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -1432,14 +1436,16 @@ select.input { appearance: auto; max-width: 100%; }
           <thead>
             <tr>
               <th>Domain</th>
+              <th style="width:170px">Status</th>
               <th style="width:90px">Type</th>
               <th style="width:70px">SSL</th>
               <th>Root / Upstream</th>
               <th>Config file</th>
+              <th style="width:80px"></th>
             </tr>
           </thead>
           <tbody id="sitesList">
-            <tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">Memuat sites...</td></tr>
+            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">Memuat sites...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1467,6 +1473,7 @@ select.input { appearance: auto; max-width: 100%; }
             <option value="deploy.">Deploy</option>
             <option value="user.">User mgmt</option>
             <option value="worker.">Worker</option>
+            <option value="site.">Sites</option>
             <option value="fs.">Files</option>
           </select>
           <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:4px"><input type="checkbox" id="activityAuto" checked /> Auto</label>
@@ -1600,6 +1607,29 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="siteDelModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span>Hapus site dari nginx</span>
+      <button class="btn" id="siteDelClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto;font-size:13px;line-height:1.6">
+      <div id="siteDelInfo" style="margin-bottom:10px"></div>
+      <div style="color:var(--mut);margin-bottom:12px">
+        Yang dihapus hanya config nginx (symlink di sites-enabled + file di sites-available), lalu nginx di-reload.
+        Folder website, database, dan sertifikat SSL <strong>tidak</strong> disentuh. Salinan config disimpan di <code>data/removed-sites/</code>.
+      </div>
+      <label style="display:block;margin-bottom:6px">Masukkan password akun kamu untuk konfirmasi</label>
+      <input type="password" id="siteDelPassword" class="input" style="width:100%" autocomplete="current-password" />
+      <div id="siteDelErr" style="color:var(--bad);margin-top:8px;display:none;white-space:pre-wrap"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn" id="siteDelCancel">Batal</button>
+        <button class="btn-sm danger" id="siteDelConfirm" style="padding:6px 14px">Hapus site</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2173,25 +2203,59 @@ function renderUsers() {
 
 // ---- Hosted Sites ----
 let rawSites = [];
+let siteStatus = {};      // id -> hasil probe dari /api/sites/check
+let siteChecking = false;
+let siteDelTarget = null;
 async function sites() {
   if (!isAdmin) return;
   try {
     const d = await j('/api/sites');
     rawSites = d.sites || [];
     renderSites();
+    checkSites();
   } catch {
-    $('sitesList').innerHTML = '<tr><td colspan="5" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat sites</td></tr>';
+    $('sitesList').innerHTML = '<tr><td colspan="7" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat sites</td></tr>';
   }
+}
+async function checkSites() {
+  if (siteChecking) return;
+  siteChecking = true;
+  siteStatus = {};
+  renderSites();
+  try {
+    const d = await j('/api/sites/check');
+    siteStatus = Object.fromEntries((d.results || []).map(r => [r.id, r]));
+  } catch {}
+  siteChecking = false;
+  renderSites();
+}
+function siteStatusHtml(s) {
+  const st = siteStatus[s.id];
+  if (!st) return siteChecking ? '<span style="color:var(--mut)">memeriksa…</span>' : '<span style="color:var(--mut)">—</span>';
+  let main;
+  if (st.state === 'up') main = `<span class="pill ok">UP ${st.http.status}</span> <span style="color:var(--mut);font-size:11px">${st.http.ms}ms</span>`;
+  else if (st.state === 'warn') main = `<span class="pill warn">HTTP ${st.http.status}</span>`;
+  else if (st.state === 'down') main = `<span class="pill down">DOWN${st.http && st.http.status ? ' ' + st.http.status : ''}</span>`;
+  else main = '<span class="pill">tidak dicek</span>';
+  const why = (st.reasons || []).length ? `<div style="color:var(--bad);font-size:11px;margin-top:3px">${st.reasons.map(escHtml).join('<br>')}</div>` : '';
+  return main + why;
 }
 function renderSites() {
   const q = ($('sitesSearch').value || '').trim().toLowerCase();
-  const list = rawSites.filter(s => !q || [s.file, s.root, s.upstream, ...(s.domains || [])].join(' ').toLowerCase().includes(q));
-  $('sitesCount').textContent = list.length === rawSites.length ? rawSites.length : `${list.length}/${rawSites.length}`;
+  const onlyInactive = $('sitesFilter').value === 'inactive';
+  const list = rawSites.filter(s =>
+    (!q || [s.file, s.root, s.upstream, ...(s.domains || [])].join(' ').toLowerCase().includes(q)) &&
+    (!onlyInactive || (siteStatus[s.id] && siteStatus[s.id].inactive)));
+  const inactiveCount = rawSites.filter(s => siteStatus[s.id] && siteStatus[s.id].inactive).length;
+  $('sitesCount').textContent = (list.length === rawSites.length ? rawSites.length : `${list.length}/${rawSites.length}`) + (inactiveCount ? ` · ${inactiveCount} tidak aktif` : '');
   if (!list.length) {
-    $('sitesList').innerHTML = `<tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">${rawSites.length ? 'Tidak ada site yang cocok dengan filter' : 'Tidak ada site nginx yang enabled'}</td></tr>`;
+    const msg = !rawSites.length ? 'Tidak ada site nginx yang enabled'
+      : onlyInactive ? (siteChecking ? 'Memeriksa status site…' : 'Tidak ada site yang tidak aktif')
+      : 'Tidak ada site yang cocok dengan filter';
+    $('sitesList').innerHTML = `<tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">${msg}</td></tr>`;
     return;
   }
-  $('sitesList').innerHTML = list.map(s => {
+  $('sitesList').innerHTML = list.map((s, i) => {
     const scheme = s.ssl ? 'https' : 'http';
     // Wildcard / regex server_name (*.x.com, ~^..) tidak bisa dikunjungi langsung.
     const visit = dm => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm)
@@ -2207,12 +2271,50 @@ function renderSites() {
     return `
     <tr>
       <td>${domains}</td>
+      <td>${siteStatusHtml(s)}</td>
       <td>${s.broken ? '<span class="pill down">broken</span>' : `<span class="pill">${escHtml(s.type)}</span>`}</td>
       <td>${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'}</td>
       <td>${target}</td>
       <td style="color:var(--mut);font-family:var(--font-mono)" title="${escHtml(s.dir)}">${escHtml(s.file)}</td>
+      <td style="text-align:right"><button class="btn-sm danger" data-del-site="${escHtml(s.id)}">Hapus</button></td>
     </tr>`;
   }).join('');
+}
+function openSiteDelete(id) {
+  const s = rawSites.find(x => x.id === id);
+  if (!s) return;
+  siteDelTarget = s;
+  const st = siteStatus[id];
+  $('siteDelInfo').innerHTML = `<div><strong>${escHtml((s.domains || []).join(', ') || s.file)}</strong></div>
+    <div style="color:var(--mut);font-family:var(--font-mono);font-size:12px">${escHtml(s.id)}</div>` +
+    (st && st.reasons && st.reasons.length ? `<div style="color:var(--bad);margin-top:4px">${st.reasons.map(escHtml).join(' · ')}</div>`
+      : st && !st.inactive ? '<div style="color:var(--warn);margin-top:4px">⚠ Site ini terdeteksi masih aktif.</div>' : '');
+  $('siteDelPassword').value = '';
+  $('siteDelErr').style.display = 'none';
+  $('siteDelConfirm').disabled = false;
+  $('siteDelModal').classList.add('open');
+  setTimeout(() => $('siteDelPassword').focus(), 50);
+}
+function closeSiteDelete() { $('siteDelModal').classList.remove('open'); siteDelTarget = null; }
+async function confirmSiteDelete() {
+  if (!siteDelTarget) return;
+  const btn = $('siteDelConfirm');
+  const showErr = (m) => { $('siteDelErr').textContent = m; $('siteDelErr').style.display = ''; };
+  if (!$('siteDelPassword').value) return showErr('Password wajib diisi');
+  btn.disabled = true;
+  try {
+    const d = await api('POST', '/api/sites/delete', { id: siteDelTarget.id, password: $('siteDelPassword').value });
+    closeSiteDelete();
+    $('gitModalTitle').textContent = 'Site dihapus';
+    $('gitModalBody').textContent = [d.output, d.warning, d.backup && ('Backup config: ' + d.backup)].filter(Boolean).join('\n');
+    $('gitModalBody').className = 'modal-body ' + (d.warning ? 'err' : 'ok');
+    $('gitModal').classList.add('open');
+    sites();
+  } catch (e) {
+    showErr(e.message);
+    btn.disabled = false;
+    $('siteDelPassword').select();
+  }
 }
 
 // ---- Activity Log ----
@@ -2237,6 +2339,9 @@ const ACTIVITY_LABELS = {
   'user.create': ['user create', 'warn'],
   'user.update': ['user update', 'warn'],
   'user.delete': ['user delete', 'down'],
+  'site.delete': ['site delete', 'down'],
+  'site.delete.denied': ['site delete DENIED', 'down'],
+  'site.delete.fail': ['site delete FAILED', 'down'],
   'worker.supervisor': ['worker', ''],
   'worker.service': ['service', ''],
   'worker.cron': ['cron', ''],
@@ -3654,6 +3759,15 @@ $('gitModal').addEventListener('click', (e) => {
 $('backupRefreshBtn').addEventListener('click', backups);
 $('sitesRefresh').addEventListener('click', sites);
 $('sitesSearch').addEventListener('input', renderSites);
+$('sitesFilter').addEventListener('change', renderSites);
+$('sitesList').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-del-site]');
+  if (b) openSiteDelete(b.dataset.delSite);
+});
+$('siteDelClose').addEventListener('click', closeSiteDelete);
+$('siteDelCancel').addEventListener('click', closeSiteDelete);
+$('siteDelConfirm').addEventListener('click', confirmSiteDelete);
+$('siteDelPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmSiteDelete(); if (e.key === 'Escape') closeSiteDelete(); });
 $('backupSearch').addEventListener('input', renderBackups);
 $('backupFilterTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');

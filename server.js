@@ -1966,7 +1966,7 @@ function getHostedSites() {
       if (f.startsWith('.') || f.endsWith('.bak') || f.endsWith('~')) continue;
       const full = path.join(dir, f);
       let text;
-      try { text = fs.readFileSync(full, 'utf8'); } catch { sites.push({ file: f, dir, domains: [], broken: true, error: 'Config tidak bisa dibaca (symlink putus / permission)' }); continue; }
+      try { text = fs.readFileSync(full, 'utf8'); } catch { sites.push({ id: full, file: f, dir, domains: [], broken: true, error: 'Config tidak bisa dibaca (symlink putus / permission)' }); continue; }
       const servers = parseNginxServers(text);
       if (!servers.length) continue; // bukan file vhost (mis. conf.d/*.conf berisi upstream saja)
       const domains = [...new Set(servers.flatMap((s) => s.names).filter((n) => n && n !== '_'))];
@@ -1974,6 +1974,7 @@ function getHostedSites() {
       const root = (servers.find((s) => s.root) || {}).root || '';
       const ports = [...new Set(servers.flatMap((s) => s.listens).map((l) => (l.match(/(\d{2,5})(?:\s|$)/) || [])[1]).filter(Boolean))];
       sites.push({
+        id: full,
         file: f,
         dir,
         domains,
@@ -1988,6 +1989,116 @@ function getHostedSites() {
     }
   }
   return sites;
+}
+
+// ---- site status probe ----
+// HTTP dicek langsung ke nginx lokal (127.0.0.1) dengan header Host = domain, jadi hasilnya
+// menggambarkan nginx + aplikasi di VPS ini, bukan DNS/CDN. DNS dicek terpisah.
+const SITE_DOMAIN_RE = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i;
+const visitableDomains = (site) => (site.domains || []).filter((d) => SITE_DOMAIN_RE.test(d));
+
+function probeLocalHttp(site, domain) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const ports = site.ports || [];
+    const useTls = !!site.ssl && (ports.includes('443') || !ports.length);
+    const port = useTls ? 443 : parseInt(ports.includes('80') ? '80' : (ports[0] || '80'), 10);
+    const mod = useTls ? require('https') : http;
+    const r = mod.request({ host: '127.0.0.1', port, path: '/', method: 'GET', timeout: 5000, headers: { Host: domain, 'User-Agent': 'vps-monitor-probe', Connection: 'close' }, ...(useTls ? { servername: domain, rejectUnauthorized: false } : {}) }, (resp) => {
+      resp.destroy();
+      resolve({ status: resp.statusCode, ms: Date.now() - started });
+    });
+    r.on('timeout', () => { r.destroy(); resolve({ error: 'timeout', ms: Date.now() - started }); });
+    r.on('error', (e) => resolve({ error: (e && e.code) || 'error', ms: Date.now() - started }));
+    r.end();
+  });
+}
+
+async function resolvesDomain(domain) {
+  try {
+    const r = await Promise.race([
+      require('dns').promises.lookup(domain, { all: true }),
+      new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), 3000)),
+    ]);
+    return { ok: r.length > 0, ips: r.map((x) => x.address) };
+  } catch (e) {
+    return { ok: false, ips: [], unknown: !(e && (e.code === 'ENOTFOUND' || e.code === 'ENODATA')) };
+  }
+}
+
+async function probeSite(site) {
+  const out = { id: site.id, reasons: [] };
+  if (site.broken) { out.state = 'down'; out.reasons.push('config rusak'); out.inactive = true; return out; }
+  const domains = visitableDomains(site);
+  if (!domains.length) { out.state = 'unknown'; out.inactive = false; return out; }
+  const [http1, dnsRes] = await Promise.all([probeLocalHttp(site, domains[0]), Promise.all(domains.map(resolvesDomain))]);
+  out.http = http1;
+  out.ips = [...new Set(dnsRes.flatMap((d) => d.ips))];
+  out.dns = dnsRes.some((d) => d.ok) ? 'ok' : (dnsRes.every((d) => d.unknown) ? 'unknown' : 'none');
+  if (http1.error) { out.state = 'down'; out.reasons.push('nginx tidak merespons (' + http1.error + ')'); }
+  else if (http1.status >= 500) { out.state = 'down'; out.reasons.push('HTTP ' + http1.status + ' (backend bermasalah)'); }
+  else if (http1.status >= 400) out.state = 'warn';
+  else out.state = 'up';
+  if (out.dns === 'none') out.reasons.push('domain tidak resolve di DNS');
+  if (site.rootExists === false) out.reasons.push('folder root tidak ada');
+  out.inactive = out.state === 'down' || out.dns === 'none' || site.rootExists === false;
+  return out;
+}
+
+async function probeSites(sites) {
+  const results = [];
+  for (let i = 0; i < sites.length; i += 6) results.push(...await Promise.all(sites.slice(i, i + 6).map(probeSite)));
+  return results;
+}
+
+// ---- site delete (backup config -> hapus -> nginx -t -> reload; rollback bila nginx -t gagal) ----
+const REMOVED_SITES_DIR = path.join(DATA_DIR, 'removed-sites');
+const NGINX_AVAILABLE_DIR = process.env.NGINX_AVAILABLE_DIR || '/etc/nginx/sites-available';
+
+async function deleteHostedSite(site) {
+  if ((site.upstream || '').match(new RegExp(`(127\\.0\\.0\\.1|localhost|\\[::1\\]):${PORT}(\\D|$)`))) {
+    return { ok: false, status: 400, error: 'Ini vhost panel monitor ini sendiri, tidak boleh dihapus dari sini' };
+  }
+  const full = site.id;
+  let isLink = false, linkTarget = null, realTarget = null, text = null;
+  try { isLink = fs.lstatSync(full).isSymbolicLink(); } catch (e) { return { ok: false, error: 'File config tidak ditemukan' }; }
+  if (isLink) {
+    try { linkTarget = fs.readlinkSync(full); } catch {}
+    try { realTarget = fs.realpathSync(full); } catch {}
+  }
+  try { text = fs.readFileSync(full, 'utf8'); } catch {}
+
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  let backup = null;
+  try {
+    fs.mkdirSync(REMOVED_SITES_DIR, { recursive: true, mode: 0o700 });
+    backup = path.join(REMOVED_SITES_DIR, `${stamp}-${site.file}`);
+    fs.writeFileSync(backup, `# removed by vps-monitor from ${full}${linkTarget ? ' (symlink -> ' + linkTarget + ')' : ''}\n${text == null ? '# (config tidak terbaca / symlink putus)\n' : text}`, { mode: 0o600 });
+  } catch (e) { return { ok: false, error: 'Gagal membuat backup config, penghapusan dibatalkan: ' + e.message }; }
+
+  // File asli di sites-available ikut dihapus hanya bila memang di sana (backup sudah tersimpan).
+  const removeTarget = realTarget && realTarget !== full && realTarget.startsWith(NGINX_AVAILABLE_DIR + path.sep);
+  try {
+    fs.unlinkSync(full);
+    if (removeTarget) fs.unlinkSync(realTarget);
+  } catch (e) {
+    return { ok: false, error: 'Gagal menghapus file: ' + e.message };
+  }
+
+  const rollback = () => {
+    try {
+      if (isLink) {
+        if (removeTarget && text != null) fs.writeFileSync(realTarget, text);
+        fs.symlinkSync(linkTarget, full);
+      } else if (text != null) fs.writeFileSync(full, text);
+    } catch {}
+  };
+  const t = await runCmd('nginx -t 2>&1', { timeout: 15000 });
+  if (!t.ok) { rollback(); try { fs.unlinkSync(backup); } catch {} return { ok: false, error: 'nginx -t gagal setelah penghapusan, config dikembalikan.\n' + t.output.trim() }; }
+  const r = await runCmd('systemctl reload nginx 2>&1', { timeout: 30000 });
+  const what = removeTarget ? 'symlink + file sites-available' : 'file config';
+  if (!r.ok) return { ok: true, backup, warning: 'Config terhapus tapi reload nginx gagal: ' + r.output.trim(), output: `${what} dihapus` };
+  return { ok: true, backup, output: `${what} dihapus, nginx di-reload` };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -2330,6 +2441,28 @@ const server = http.createServer(async (req, res) => {
     // Site disembunyikan bila nama file, domain, atau root-nya mengandung hidden keyword user ini.
     const sites = all.filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
     return send(res, 200, JSON.stringify({ time: Date.now(), sites }));
+  }
+  if (p === '/api/sites/check' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const sites = getHostedSites().filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
+    return send(res, 200, JSON.stringify({ time: Date.now(), results: await probeSites(sites) }));
+  }
+  if (p === '/api/sites/delete' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    // Hanya site yang ada di daftar (dan tidak tersembunyi untuk user ini) yang boleh dihapus.
+    const site = getHostedSites().find((x) => x.id === (body && body.id));
+    if (!site || isHidden(session, [site.file, site.domains, site.root, site.upstream])) return send(res, 404, JSON.stringify({ error: 'Site tidak ditemukan' }));
+    const pw = await auth.confirmPassword(session, body && body.password);
+    if (!pw.ok) {
+      audit(session.user, 'site.delete.denied', site.file, pw.error);
+      return send(res, pw.status, JSON.stringify({ error: pw.error }));
+    }
+    audit(session.user, 'site.delete', site.file, site.domains.join(','));
+    const r = await deleteHostedSite(site);
+    if (!r.ok) audit(session.user, 'site.delete.fail', site.file, String(r.error || '').slice(0, 200));
+    return send(res, r.ok ? 200 : (r.status || 500), JSON.stringify(r));
   }
   if (p === '/api/git/projects') {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));
