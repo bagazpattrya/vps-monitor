@@ -119,9 +119,34 @@ function getSession(req) {
     const u = loadAppUsers().find((x) => x.username.toLowerCase() === String(s.user).toLowerCase());
     if (!u || u.disabled) { sessions.delete(tok); return null; }
     const role = roleOf(u);
-    return { user: u.username, role, admin: role !== 'viewer', superadmin: role === 'superadmin', hiddenKeywords: role === 'superadmin' ? [] : normKeywords(u.hiddenKeywords) };
+    return { user: u.username, source: 'app', role, admin: role !== 'viewer', superadmin: role === 'superadmin', hiddenKeywords: role === 'superadmin' ? [] : normKeywords(u.hiddenKeywords) };
   }
-  return { user: s.user, role: s.role, admin: s.role !== 'viewer', superadmin: s.role === 'superadmin', hiddenKeywords: [] };
+  return { user: s.user, source: 'linux', role: s.role, admin: s.role !== 'viewer', superadmin: s.role === 'superadmin', hiddenKeywords: [] };
+}
+
+// Konfirmasi ulang password untuk aksi destruktif. Dicek terhadap akun milik session sendiri
+// (user app atau akun Linux). Gagal berulang dikunci supaya session curian tidak bisa brute-force.
+async function confirmPassword(session, password) {
+  const key = 'confirm:' + String(session.user).toLowerCase();
+  const f = fails.get(key);
+  if (f && f.until > Date.now()) return { ok: false, status: 429, error: 'Terlalu banyak percobaan password, coba lagi nanti' };
+  let valid = false;
+  if (typeof password === 'string' && password && password.length <= 256 && !password.includes('\0')) {
+    if (session.source === 'app') {
+      const u = loadAppUsers().find((x) => x.username.toLowerCase() === String(session.user).toLowerCase());
+      valid = !!u && await verifyPassword(password, u.salt, u.hash);
+    } else {
+      valid = !!lookupUser(session.user) && await checkPassword(session.user, password);
+    }
+  }
+  if (!valid) {
+    const cur = fails.get(key);
+    const n = (cur && cur.until === 0 ? cur.n : 0) + 1;
+    fails.set(key, { n, until: n >= MAX_FAILS ? Date.now() + LOCK_MS : 0 });
+    return { ok: false, status: 403, error: 'Password salah' };
+  }
+  fails.delete(key);
+  return { ok: true };
 }
 
 function clientIp(req) {
@@ -385,6 +410,7 @@ module.exports = {
   login,
   logout,
   getSession,
+  confirmPassword,
   ALLOW_LINUX_LOGIN,
   listAppUsers,
   createAppUser,
