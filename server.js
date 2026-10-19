@@ -1264,6 +1264,28 @@ function getBackupInfo() {
   };
 }
 
+// Resolve + validasi path file backup relatif terhadap root. Dipakai download & delete.
+// Menolak traversal, symlink keluar root, dan file yang disembunyikan untuk user ini.
+function resolveBackupFile(session, rel) {
+  if (!rel || typeof rel !== 'string' || rel.includes('..') || rel.includes('\0')) {
+    return { error: 'Invalid backup file path', code: 400 };
+  }
+  if (isHidden(session, rel)) return { error: 'Backup file not found', code: 404 };
+  const root = getBackupRootDir();
+  if (!root) return { error: 'Backup storage not configured', code: 404 };
+  const full = path.normalize(path.join(root, rel));
+  if (!full.startsWith(root + path.sep) && full !== root) return { error: 'Invalid backup file path', code: 400 };
+  let real;
+  try { real = fs.realpathSync(full); } catch { return { error: 'Backup file not found', code: 404 }; }
+  let realRoot = root;
+  try { realRoot = fs.realpathSync(root); } catch {}
+  if (!real.startsWith(realRoot + path.sep) && real !== realRoot) return { error: 'Invalid backup file path', code: 400 };
+  let stat;
+  try { stat = fs.statSync(real); } catch { return { error: 'Backup file not found', code: 404 }; }
+  if (stat.isDirectory()) return { error: 'Backup file not found', code: 404 };
+  return { real, stat, filename: path.basename(real) };
+}
+
 // Daftar database live (selain DB sistem), disaring hidden keywords untuk non-superadmin.
 const SYSTEM_DBS = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 async function listDatabases(session) {
@@ -2363,37 +2385,27 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/backups/download') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const rel = url.searchParams.get('file');
-    if (!rel || typeof rel !== 'string' || rel.includes('..') || rel.includes('\0')) {
-      return send(res, 400, 'Invalid backup file path', 'text/plain');
-    }
-    if (isHidden(session, rel)) return send(res, 404, 'Backup file not found', 'text/plain');
-    const root = getBackupRootDir();
-    if (!root) return send(res, 404, 'Backup storage not configured', 'text/plain');
-    const full = path.normalize(path.join(root, rel));
-    if (!full.startsWith(root + path.sep) && full !== root) {
-      return send(res, 400, 'Invalid backup file path', 'text/plain');
-    }
-    // Tolak symlink yang keluar dari root (path.join + startsWith tidak resolve symlink).
-    let real = null;
-    try { real = fs.realpathSync(full); } catch { return send(res, 404, 'Backup file not found', 'text/plain'); }
-    let realRoot = root;
-    try { realRoot = fs.realpathSync(root); } catch {}
-    if (!real.startsWith(realRoot + path.sep) && real !== realRoot) {
-      return send(res, 400, 'Invalid backup file path', 'text/plain');
-    }
-    if (!fs.existsSync(real) || fs.statSync(real).isDirectory()) {
-      return send(res, 404, 'Backup file not found', 'text/plain');
-    }
-    const stat = fs.statSync(real);
-    const filename = path.basename(real);
-    audit(session.user, 'backup.download', rel, `size=${stat.size}`);
+    const r = resolveBackupFile(session, rel);
+    if (r.error) return send(res, r.code, r.error, 'text/plain');
+    audit(session.user, 'backup.download', rel, `size=${r.stat.size}`);
     res.writeHead(200, {
       'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`,
-      'Content-Length': stat.size,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(r.filename)}"`,
+      'Content-Length': r.stat.size,
     });
-    fs.createReadStream(real).pipe(res);
+    fs.createReadStream(r.real).pipe(res);
     return;
+  }
+  if (p === '/api/backups/delete' && req.method === 'DELETE') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const rel = String((body && body.file) || '');
+    const r = resolveBackupFile(session, rel);
+    if (r.error) return send(res, r.code, JSON.stringify({ error: r.error }));
+    try { fs.unlinkSync(r.real); } catch (e) { return send(res, 500, JSON.stringify({ error: 'Gagal menghapus: ' + e.message })); }
+    audit(session.user, 'backup.delete', rel, `size=${r.stat.size}`);
+    return send(res, 200, JSON.stringify({ ok: true }));
   }
   if (p === '/api/fs/list') {
     if (!session.superadmin) return needSuper();

@@ -1345,7 +1345,7 @@ select.input { appearance: auto; max-width: 100%; }
               <th style="width:110px">Kategori</th>
               <th style="width:110px">Ukuran</th>
               <th style="width:170px">Waktu Backup</th>
-              <th style="width:120px;text-align:right">Aksi</th>
+              <th style="width:190px;text-align:right">Aksi</th>
             </tr>
           </thead>
           <tbody id="backupList">
@@ -2081,8 +2081,9 @@ function renderBackups() {
         <td><span class="pill ${catColor(b.category)}">${escHtml(b.category.toUpperCase())}</span></td>
         <td style="color:var(--mut);font-family:var(--font-mono)">${fmtBytes(b.size)}</td>
         <td style="color:var(--mut)">${fullDate}</td>
-        <td style="text-align:right">
+        <td style="text-align:right;white-space:nowrap">
           <a href="/api/backups/download?file=${encodeURIComponent(b.relPath)}" class="btn-sm ok" style="text-decoration:none" download>⬇ Download</a>
+          <button class="btn-sm danger" data-del-backup="${escHtml(b.relPath)}" style="margin-left:6px">Hapus</button>
         </td>
       </tr>
     `;
@@ -3843,6 +3844,20 @@ $('siteDelCancel').addEventListener('click', closeSiteDelete);
 $('siteDelConfirm').addEventListener('click', confirmSiteDelete);
 $('siteDelPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmSiteDelete(); if (e.key === 'Escape') closeSiteDelete(); });
 $('backupSearch').addEventListener('input', renderBackups);
+$('backupList').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-del-backup]');
+  if (!btn) return;
+  const rel = btn.dataset.delBackup;
+  if (!confirm(`Hapus file backup?\n\n${rel}\n\nTindakan ini tidak bisa dibatalkan.`)) return;
+  btn.disabled = true;
+  try {
+    await api('DELETE', '/api/backups/delete', { file: rel });
+    await backups();
+  } catch (err) {
+    btn.disabled = false;
+    alert('Gagal menghapus: ' + (err.message || err));
+  }
+});
 $('backupFilterTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
   if (!btn) return;
