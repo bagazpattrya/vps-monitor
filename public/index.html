@@ -1748,12 +1748,12 @@ select.input { appearance: auto; max-width: 100%; }
 <div class="modal-backdrop" id="dbSyncModal">
   <div class="modal">
     <div class="modal-head">
-      <span id="dbSyncModalTitle">Sync DB ke Dev</span>
+      <span id="dbSyncModalTitle">Sync Data ke Dev</span>
       <button class="btn" id="dbSyncModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
       <div style="font-size:12px;color:var(--mut);line-height:1.5">
-        Salin database project lain (misal production/main) ke dev ini. Sumber <strong>hanya dibaca</strong> via <code>mysqldump</code> tanpa lock (production aman). DB dev dibackup otomatis sebelum ditimpa.
+        Salin database (dan opsional storage) project lain ke dev ini. Sumber <strong>hanya dibaca</strong> via <code>mysqldump</code> tanpa lock (production aman). DB dev dibackup otomatis sebelum ditimpa.
       </div>
       <div>
         <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Target (Dev)</label>
@@ -1766,6 +1766,12 @@ select.input { appearance: auto; max-width: 100%; }
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
         <div><span style="color:var(--mut)">Source DB:</span> <strong id="dbSyncSrcDb" style="color:var(--ok)">—</strong></div>
         <div><span style="color:var(--mut)">Target DB:</span> <strong id="dbSyncDstDb" style="color:var(--warn)">—</strong></div>
+      </div>
+      <div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="dbSyncStorage" checked />
+          <span>Sync <code>storage/app/public</code> (bersihkan dev lama &amp; copy dari sumber)</span>
+        </label>
       </div>
       <div>
         <label style="font-size:12px;color:var(--mut);display:block;margin-bottom:4px">Konfirmasi Password Akun Anda*</label>
@@ -3854,7 +3860,9 @@ $('dbSyncRun').addEventListener('click', async () => {
   const s = dbSyncSources.find(x => x.relPath === sourceRel);
   const srcDb = s ? s.db : sourceRel;
   const dstDb = $('dbSyncDstDb').textContent;
-  if (!confirm(`Konfirmasi overwrite database:\n\nSumber: ${srcDb} (read-only, aman)\nTarget: ${dstDb} (akan ditimpa data terbaru)\n\nDatabase target akan dibackup otomatis sebelum ditimpa. Lanjutkan?`)) return;
+  const syncStorage = $('dbSyncStorage').checked;
+  const storageNote = syncStorage ? '\n+ Storage dev akan dibersihkan & disalin dari source' : '';
+  if (!confirm(`Konfirmasi overwrite database:\n\nSumber: ${srcDb} (read-only, aman)\nTarget: ${dstDb} (akan ditimpa data terbaru)${storageNote}\n\nDatabase target akan dibackup otomatis sebelum ditimpa. Lanjutkan?`)) return;
 
   const btn = $('dbSyncRun');
   btn.disabled = true;
@@ -3865,7 +3873,8 @@ $('dbSyncRun').addEventListener('click', async () => {
     const d = await api('POST', '/api/git/db/sync', {
       relPath: dbSyncTarget,
       sourceRelPath: sourceRel,
-      password
+      password,
+      syncStorage
     });
     closeDbSyncModal();
     $('gitModalTitle').textContent = `Sync DB Selesai: ${dstDb}`;

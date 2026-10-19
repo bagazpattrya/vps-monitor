@@ -952,8 +952,26 @@ function getSyncDbInfo(rel) {
   return { ok: true, target: { relPath: rel, name: targetName, db: target.db, isDev: targetDev }, sources, defaultSource: def };
 }
 
+// Salin storage/app/public source -> target. Target dibersihkan dulu (kecuali .gitignore),
+// supaya file lama tidak menumpuk jadi duplikat.
+async function syncProjectStorage(pr, sp) {
+  const src = path.join(sp.full, 'storage', 'app', 'public');
+  const dst = path.join(pr.full, 'storage', 'app', 'public');
+  if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return { ok: true, output: 'Storage source tidak ada — dilewati' };
+  await runCmd(`mkdir -p ${shq(dst)}`);
+  let r = await runCmd(`find ${shq(dst)} -mindepth 1 -depth ! -name .gitignore -delete 2>&1`, { timeout: 120000 });
+  if (!r.ok) return { ok: false, error: 'Clean storage target gagal\n' + r.output };
+  r = await runCmd(`rsync -a --delete --exclude=.gitignore ${shq(src + '/')} ${shq(dst + '/')} 2>&1`, { timeout: 600000 });
+  if (!r.ok) return { ok: false, error: 'Rsync storage gagal\n' + r.output };
+  try {
+    const st = fs.statSync(pr.full);
+    await runCmd(`chown -R ${st.uid}:${st.gid} ${shq(dst)} 2>&1`);
+  } catch {}
+  return { ok: true, output: 'storage/app/public disalin (target dibersihkan dulu)' };
+}
+
 // Copy DB source -> DB target (target dev). Source hanya dibaca via single-transaction dump.
-async function syncProjectDb(pr, sp, targetDb, sourceDb, targetUser) {
+async function syncProjectDb(pr, sp, targetDb, sourceDb, targetUser, opts = {}) {
   const mysql = (sql, timeout) => runFile('mysql', ['-BNe', sql], { timeout: timeout || 15000 });
   const bdir = fs.existsSync('/var/backups/mysql') ? '/var/backups/mysql' : DATA_DIR;
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
@@ -981,6 +999,11 @@ async function syncProjectDb(pr, sp, targetDb, sourceDb, targetUser) {
   if (!r.ok) return { ok: false, error: 'Import DB gagal. Backup target: ' + backup + '\n' + r.output };
 
   let output = `Source: ${sourceDb}\nTarget: ${targetDb}\n` + (hasTarget ? `Backup target: ${backup}\n` : 'Target kosong (tidak perlu backup)\n');
+  if (opts.syncStorage) {
+    const st = await syncProjectStorage(pr, sp);
+    if (!st.ok) return { ok: false, error: 'Storage sync gagal (DB sudah terlanjur disalin). ' + st.error };
+    output += `\nStorage: ${st.output}`;
+  }
   const runArtisan = (args) => (pr.uid !== null && pr.uid !== pr.me)
     ? runFile('sudo', ['-H', '-u', `#${pr.uid}`, 'php', path.join(pr.full, 'artisan'), ...args], { cwd: pr.full, timeout: 120000 })
     : runFile('php', [path.join(pr.full, 'artisan'), ...args], { cwd: pr.full, timeout: 120000 });
@@ -2643,8 +2666,9 @@ const server = http.createServer(async (req, res) => {
       audit(session.user, 'git.db.sync.denied', rel, pw.error);
       return send(res, pw.status, JSON.stringify({ error: pw.error }));
     }
-    audit(session.user, 'git.db.sync', rel, `from=${sp.full} srcDb=${sd.value} dstDb=${td.value}`);
-    const r = await syncProjectDb(pr, sp, td.value, sd.value, t.user);
+    const syncStorage = !!(body && body.syncStorage);
+    audit(session.user, 'git.db.sync', rel, `from=${sp.full} srcDb=${sd.value} dstDb=${td.value} storage=${syncStorage}`);
+    const r = await syncProjectDb(pr, sp, td.value, sd.value, t.user, { syncStorage });
     if (!r.ok) audit(session.user, 'git.db.sync.fail', rel, String(r.error || '').slice(0, 200));
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
