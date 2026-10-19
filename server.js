@@ -733,7 +733,7 @@ function parseEnvText(txt) {
 function projectDbInfo(full) {
   let env = {};
   try { env = parseEnvText(fs.readFileSync(path.join(full, '.env'), 'utf8')); } catch {}
-  return { db: env.DB_DATABASE || '', user: env.DB_USERNAME || '', connection: env.DB_CONNECTION || '', appEnv: env.APP_ENV || '' };
+  return { db: env.DB_DATABASE || '', user: env.DB_USERNAME || '', connection: env.DB_CONNECTION || '' };
 }
 function isDevProjectName(name) {
   return /(^|[-_.])(dev|development)($|[-_.])/i.test(String(name || '')) || /(dev|development)$/i.test(String(name || ''));
@@ -763,8 +763,7 @@ function getGitProjects(force = false) {
     const parts = rel.split(path.sep);
     const group = parts.length > 1 ? parts[0] : 'Projects';
     const isLaravel = fs.existsSync(path.join(d, 'artisan'));
-    const db = isLaravel ? projectDbInfo(d) : null;
-    const isDev = isDevProjectName(name) || !!(db && /^(local|development|dev)$/i.test(db.appEnv));
+    const isDev = isDevProjectName(name);
     const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null, isLaravel, isDev };
     try {
       ensureFilemodeFalse(d);
@@ -940,7 +939,7 @@ function getSyncDbInfo(rel) {
   if (pr.error) return { ok: false, error: pr.error };
   const targetName = path.basename(pr.full);
   const target = projectDbInfo(pr.full);
-  const targetDev = isDevProjectName(targetName) || /^(local|development|dev)$/i.test(target.appEnv);
+  const targetDev = isDevProjectName(targetName);
   const sources = getGitProjects()
     .filter((x) => x.path !== pr.full && x.isLaravel)
     .map((x) => {
@@ -2630,8 +2629,8 @@ const server = http.createServer(async (req, res) => {
     const t = projectDbInfo(pr.full);
     const s = projectDbInfo(sp.full);
     const targetName = path.basename(pr.full);
-    if (!isDevProjectName(targetName) && !/^(local|development|dev)$/i.test(t.appEnv)) {
-      return send(res, 400, JSON.stringify({ error: 'Target bukan project dev (nama folder harus mengandung "dev" atau APP_ENV=local)' }));
+    if (!isDevProjectName(targetName)) {
+      return send(res, 400, JSON.stringify({ error: 'Target bukan project dev (nama folder harus mengandung "dev")' }));
     }
     const td = vDbIdent(t.db, 'DB_DATABASE target', 64);
     if (!td.ok) return send(res, 400, JSON.stringify({ error: td.error + ' (cek .env target)' }));
