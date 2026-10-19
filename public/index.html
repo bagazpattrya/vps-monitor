@@ -1471,7 +1471,7 @@ select.input { appearance: auto; max-width: 100%; }
               <th style="width:70px">SSL</th>
               <th>Root / Upstream</th>
               <th>Config file</th>
-              <th style="width:80px"></th>
+              <th style="width:130px"></th>
             </tr>
           </thead>
           <tbody id="sitesList">
@@ -1637,6 +1637,22 @@ select.input { appearance: auto; max-width: 100%; }
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="siteCfgModal">
+  <div class="modal" style="max-width:920px;max-height:85vh">
+    <div class="modal-head">
+      <span id="siteCfgTitle">Config nginx</span>
+      <span style="display:flex;gap:8px">
+        <button class="btn" id="siteCfgCopy" style="padding:2px 10px">Copy</button>
+        <button class="btn" id="siteCfgClose" style="padding:2px 8px">✕</button>
+      </span>
+    </div>
+    <div style="padding:14px 16px;overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:0">
+      <div id="siteCfgMeta" style="color:var(--mut);font-family:var(--font-mono);font-size:12px;word-break:break-all"></div>
+      <pre id="siteCfgContent" style="margin:0;padding:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:12px;line-height:1.5;overflow:auto;white-space:pre;color:var(--tx)"></pre>
+    </div>
   </div>
 </div>
 
@@ -2306,9 +2322,25 @@ function renderSites() {
       <td>${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'}</td>
       <td>${target}</td>
       <td style="color:var(--mut);font-family:var(--font-mono)" title="${escHtml(s.dir)}">${escHtml(s.file)}</td>
-      <td style="text-align:right"><button class="btn-sm danger" data-del-site="${escHtml(s.id)}">Hapus</button></td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn-sm" data-cfg-site="${escHtml(s.id)}" title="Lihat config nginx yang aktif">Config</button> <button class="btn-sm danger" data-del-site="${escHtml(s.id)}">Hapus</button></td>
     </tr>`;
   }).join('');
+}
+async function openSiteConfig(id) {
+  const s = rawSites.find(x => x.id === id);
+  if (!s) return;
+  $('siteCfgTitle').textContent = 'Config nginx — ' + s.file;
+  $('siteCfgMeta').textContent = s.id;
+  $('siteCfgContent').textContent = 'Memuat config...';
+  $('siteCfgModal').classList.add('open');
+  try {
+    const d = await j('/api/sites/config?id=' + encodeURIComponent(id));
+    $('siteCfgMeta').textContent = d.realPath !== d.file ? `${d.file} → ${d.realPath}` : d.file;
+    $('siteCfgMeta').textContent += `  ·  ${fmtBytes(d.size)}  ·  diubah ${new Date(d.mtime).toLocaleString()}`;
+    $('siteCfgContent').textContent = d.content || '(File kosong)';
+  } catch (e) {
+    $('siteCfgContent').textContent = 'Gagal membaca config: ' + e.message;
+  }
 }
 function openSiteDelete(id) {
   const s = rawSites.find(x => x.id === id);
@@ -3793,8 +3825,18 @@ $('sitesRefresh').addEventListener('click', sites);
 $('sitesSearch').addEventListener('input', renderSites);
 $('sitesFilter').addEventListener('change', renderSites);
 $('sitesList').addEventListener('click', (e) => {
+  const c = e.target.closest('[data-cfg-site]');
+  if (c) return openSiteConfig(c.dataset.cfgSite);
   const b = e.target.closest('[data-del-site]');
   if (b) openSiteDelete(b.dataset.delSite);
+});
+$('siteCfgClose').addEventListener('click', () => $('siteCfgModal').classList.remove('open'));
+$('siteCfgModal').addEventListener('click', (e) => { if (e.target === $('siteCfgModal')) $('siteCfgModal').classList.remove('open'); });
+$('siteCfgCopy').addEventListener('click', async () => {
+  const b = $('siteCfgCopy');
+  try { await navigator.clipboard.writeText($('siteCfgContent').textContent); b.textContent = 'Copied ✓'; }
+  catch { b.textContent = 'Gagal'; }
+  setTimeout(() => { b.textContent = 'Copy'; }, 1500);
 });
 $('siteDelClose').addEventListener('click', closeSiteDelete);
 $('siteDelCancel').addEventListener('click', closeSiteDelete);

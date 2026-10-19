@@ -2447,6 +2447,21 @@ const server = http.createServer(async (req, res) => {
     const sites = getHostedSites().filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
     return send(res, 200, JSON.stringify({ time: Date.now(), results: await probeSites(sites) }));
   }
+  if (p === '/api/sites/config' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    // Hanya file yang ada di daftar site (dan tidak tersembunyi untuk user ini) yang boleh dibaca.
+    const site = getHostedSites().find((x) => x.id === url.searchParams.get('id'));
+    if (!site || isHidden(session, [site.file, site.domains, site.root, site.upstream])) return send(res, 404, JSON.stringify({ error: 'Site tidak ditemukan' }));
+    try {
+      const real = fs.realpathSync(site.id);
+      const st = fs.statSync(real);
+      const content = fs.readFileSync(real, 'utf8').slice(0, 512 * 1024);
+      audit(session.user, 'site.config.view', site.file, '');
+      return send(res, 200, JSON.stringify({ file: site.id, realPath: real, size: st.size, mtime: st.mtimeMs, content }));
+    } catch (e) {
+      return send(res, 500, JSON.stringify({ error: 'Config tidak bisa dibaca: ' + e.message }));
+    }
+  }
   if (p === '/api/sites/delete' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
