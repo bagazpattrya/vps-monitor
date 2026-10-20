@@ -98,17 +98,13 @@ function memInfo() {
 
 function diskInfo() {
   try {
-    const out = execSync('df -k / | tail -1', { timeout: 3000 }).toString().trim().split(/\s+/);
-    // Filesystem 1K-blocks Used Available Use% Mounted
-    const total = parseInt(out[1], 10) * 1024;
-    const used = parseInt(out[2], 10) * 1024;
-    const avail = parseInt(out[3], 10) * 1024;
-    const pct = parseFloat(out[4].replace('%', '')) || (total ? (used / total) * 100 : 0);
-    let inodesPct = null;
-    try {
-      const io = execSync('df -i / | tail -1', { timeout: 3000 }).toString().trim().split(/\s+/);
-      inodesPct = parseFloat((io[4] || '').replace('%', '')) || null;
-    } catch {}
+    const s = fs.statfsSync('/');
+    const total = s.blocks * s.bsize;
+    const avail = s.bavail * s.bsize;
+    const free = s.bfree * s.bsize;
+    const used = total - free;
+    const pct = total ? (used / total) * 100 : 0;
+    const inodesPct = s.files ? ((s.files - s.ffree) / s.files) * 100 : null;
     return { total, used, avail, pct, inodesPct, mount: '/' };
   } catch {
     return { total: 0, used: 0, avail: 0, pct: 0, inodesPct: null, mount: '/' };
@@ -394,19 +390,23 @@ function getProcesses(onlyUser = null) {
 }
 
 const SERVICES = ['nginx', 'mysql', 'php8.4-fpm', 'mosquitto', 'redis-server', 'ssh', 'cron', 'supervisor'];
+let servicesCache = { time: 0, data: [] };
 function getServices() {
-  const out = SERVICES.map((s) => {
-    try {
-      // Jangan pakai 2>/dev/null saja: systemctl exit !=0 saat inactive sehingga execSync throw
-      // dan status jadi 'unknown'. Pakai || true agar output 'inactive' tetap terbaca.
-      const st = execSync(`systemctl is-active ${s} 2>&1 || true`, { timeout: 2000 }).toString().trim().split('\n')[0].trim();
-      if (!st) return { name: s, active: false, status: 'unknown' };
-      return { name: s, active: st === 'active', status: st };
-    } catch {
-      return { name: s, active: false, status: 'unknown' };
+  const now = Date.now();
+  if (servicesCache.data.length && now - servicesCache.time < 5000) return servicesCache.data;
+  try {
+    const lines = execSync(`systemctl is-active ${SERVICES.join(' ')} 2>&1 || true`, { timeout: 2000 }).toString().trim().split('\n');
+    servicesCache.data = SERVICES.map((s, i) => {
+      const st = (lines[i] || '').trim();
+      return { name: s, active: st === 'active', status: st || 'unknown' };
+    });
+    servicesCache.time = now;
+  } catch {
+    if (!servicesCache.data.length) {
+      servicesCache.data = SERVICES.map((s) => ({ name: s, active: false, status: 'unknown' }));
     }
-  });
-  return out;
+  }
+  return servicesCache.data;
 }
 
 // ---- workers (supervisor + cron + laravel logs) ----
@@ -1176,12 +1176,40 @@ function readBody(req, limit = 4096) {
   });
 }
 
-function serveFile(res, file) {
+const staticCache = new Map();
+
+function serveFile(req, res, file) {
   const fp = path.join(PUBLIC_DIR, file);
-  if (!fp.startsWith(PUBLIC_DIR) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) {
-    return send(res, 404, 'not found', 'text/plain');
+  if (!fp.startsWith(PUBLIC_DIR)) return send(res, 404, 'not found', 'text/plain');
+  let st;
+  try { st = fs.statSync(fp); } catch { return send(res, 404, 'not found', 'text/plain'); }
+  if (st.isDirectory()) return send(res, 404, 'not found', 'text/plain');
+
+  const type = MIME[path.extname(fp)] || 'application/octet-stream';
+  const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+    return res.end();
   }
-  send(res, 200, fs.readFileSync(fp), MIME[path.extname(fp)] || 'application/octet-stream');
+
+  let hit = staticCache.get(fp);
+  if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+    const raw = fs.readFileSync(fp);
+    const compress = /^(text\/|application\/(json|javascript))/.test(type) && raw.length > 1024;
+    hit = { mtimeMs: st.mtimeMs, size: st.size, etag, raw, gz: compress ? zlib.gzipSync(raw) : null };
+    staticCache.set(fp, hit);
+  }
+
+  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: etag };
+  let body = hit.raw;
+  if (hit.gz && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+    headers['Content-Encoding'] = 'gzip';
+    headers.Vary = 'Accept-Encoding';
+    body = hit.gz;
+  }
+  headers['Content-Length'] = body.length;
+  res.writeHead(200, headers);
+  res.end(body);
 }
 
 function audit(user, action, target, details = '') {
@@ -2280,7 +2308,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/login' || p === '/login.html') {
     if (auth.getSession(req)) { res.writeHead(302, { Location: '/' }); return res.end(); }
-    return serveFile(res, '/login.html');
+    return serveFile(req, res, '/login.html');
   }
 
   const session = auth.getSession(req);
@@ -2895,7 +2923,7 @@ const server = http.createServer(async (req, res) => {
 
   let file = p === '/' ? '/index.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
-  serveFile(res, file);
+  serveFile(req, res, file);
 });
 
 server.listen(PORT, HOST, () => console.log(`vps-monitor on http://${HOST}:${PORT}`));
