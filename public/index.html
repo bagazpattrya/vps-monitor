@@ -414,15 +414,22 @@
       <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
         Reads the tail of Laravel, project, nginx, PHP-FPM, MySQL, and supervisor logs. Paths are redacted.
       </div>
+      <div class="err-actions" id="errorSelectionBar" hidden>
+        <span class="err-actions-count"><strong id="errorSelectedCount">0</strong> dipilih</span>
+        <button class="btn-sm danger" id="errorDeleteSelected">Hapus terpilih</button>
+        <button class="btn-sm" id="errorClearSelection">Batal</button>
+        <span class="err-actions-note">Baris dihapus permanen dari file log asli.</span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th style="width:34px"><input type="checkbox" id="errorSelectAll" aria-label="Pilih semua baris error yang tampil" /></th>
               <th style="width:90px">Level</th>
               <th style="width:150px">Time</th>
               <th style="width:190px">Project / Source</th>
               <th>Message</th>
-              <th style="width:70px;text-align:right">Detail</th>
+              <th style="width:120px;text-align:right">Aksi</th>
             </tr>
           </thead>
           <tbody id="errorList"></tbody>

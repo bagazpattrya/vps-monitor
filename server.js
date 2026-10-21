@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const zlib = require('zlib');
 const { execSync, exec, execFile, spawn } = require('child_process');
+const crypto = require('crypto');
 const auth = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -975,7 +976,7 @@ function parseLogTime(value, fallback) {
   return Number.isNaN(t) ? fallback : t;
 }
 
-function makeLogEntry(level, timeStr, message, line, source, fallbackTime) {
+function makeLogEntry(level, timeStr, message, line, source, fallbackTime, lineIndex = 0) {
   const lvl = normalizeLogLevel(level);
   if (!lvl) return null;
   const t = parseLogTime(timeStr, fallbackTime);
@@ -990,7 +991,14 @@ function makeLogEntry(level, timeStr, message, line, source, fallbackTime) {
     critical: isCriticalLogLevel(lvl, msg),
     message: msg.slice(0, 800),
     detail: String(line || '').slice(0, 8000),
+    _start: lineIndex,
+    _end: lineIndex,
   };
+}
+
+function errorEntryId(entry) {
+  const raw = entry.raw || '';
+  return crypto.createHash('sha1').update(entry.sourceId + '\n' + raw).digest('hex').slice(0, 16);
 }
 
 function parseLogText(text, source) {
@@ -999,38 +1007,42 @@ function parseLogText(text, source) {
   let cur = null;
   const fallback = source.mtime || Date.now();
   const push = () => {
-    if (cur) out.push(cur);
+    if (cur) {
+      cur.raw = lines.slice(cur._start, cur._end + 1).join('\n');
+      out.push(cur);
+    }
     cur = null;
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!line.trim()) continue;
 
     let m = line.match(/^\[(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?[^\]]*)\]\s+(?:([a-zA-Z0-9_-]+)\.)?([A-Z]+):\s*(.*)/);
     if (m) {
       push();
-      cur = makeLogEntry(m[3], m[1], m[4], line, source, fallback);
+      cur = makeLogEntry(m[3], m[1], m[4], line, source, fallback, i);
       continue;
     }
 
     m = line.match(/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s+\[([a-z]+)\]\s*(.*)/i);
     if (m) {
       push();
-      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback, i);
       continue;
     }
 
     m = line.match(/^\[(\d{2}-[A-Za-z]{3}-\d{4} \d{2}:\d{2}:\d{2})\]\s+([A-Z]+):\s*(.*)/);
     if (m) {
       push();
-      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback, i);
       continue;
     }
 
     m = line.match(/^(\d{4}-\d{2}-\d{2}T\S+)\s+\d+\s+\[([A-Z]+)\]\s*(.*)/);
     if (m) {
       push();
-      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback, i);
       continue;
     }
 
@@ -1040,7 +1052,7 @@ function parseLogText(text, source) {
       if (obj && typeof obj === 'object') {
         push();
         const msg = [obj.message, obj.error].filter(Boolean).map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' — ');
-        cur = makeLogEntry(obj.level || obj.severity, obj.timestamp || obj.time, msg || line, line, source, fallback);
+        cur = makeLogEntry(obj.level || obj.severity, obj.timestamp || obj.time, msg || line, line, source, fallback, i);
         continue;
       }
     }
@@ -1048,18 +1060,20 @@ function parseLogText(text, source) {
     m = line.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+\[?([A-Za-z]+)\]?\s*[:-]?\s*(.*)/);
     if (m) {
       push();
-      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback, i);
       continue;
     }
 
     m = line.match(/^\[?(ERROR|WARN(?:ING)?|CRITICAL|ALERT|EMERGENCY|FATAL)\]?\b[:\s-]+(.*)/i);
     if (m) {
       push();
-      cur = makeLogEntry(m[1], '', m[2], line, source, fallback);
+      cur = makeLogEntry(m[1], '', m[2], line, source, fallback, i);
       continue;
     }
 
-    if (cur && cur.detail.length < 8000) cur.detail += '\n' + line;
+    if (!cur) continue;
+    cur._end = i;
+    if (cur.detail.length < 8000) cur.detail += '\n' + line;
   }
 
   push();
@@ -1140,6 +1154,8 @@ function buildErrorReport(hours, force = false, session = null) {
     summary,
     sources,
     entries: entries.slice(0, 500).map((e) => ({
+      id: errorEntryId(e),
+      sourceId: e.sourceId,
       t: e.t,
       level: e.level,
       critical: e.critical,
@@ -1149,6 +1165,51 @@ function buildErrorReport(hours, force = false, session = null) {
       detail: scrubLogText(e.detail),
     })),
   };
+}
+
+function deleteErrorEntries(ids, session) {
+  const wanted = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string').slice(0, 200));
+  const result = { ok: true, deleted: 0, failed: [] };
+  if (!wanted.size) return result;
+
+  const data = collectErrorLogs(true);
+  const byId = new Map(discoverLogSources().map((s) => [s.id, s]));
+  const targets = new Map();
+  for (const e of data.entries) {
+    const id = errorEntryId(e);
+    if (!wanted.has(id) || isHidden(session, [e.project, e.source, e.message, e.detail])) continue;
+    if (!byId.has(e.sourceId)) continue;
+    if (!targets.has(e.sourceId)) targets.set(e.sourceId, new Set());
+    targets.get(e.sourceId).add(id);
+  }
+
+  for (const [sourceId, targetIds] of targets) {
+    const src = byId.get(sourceId);
+    try {
+      const st = fs.statSync(src.path);
+      if (!st.isFile()) throw new Error('not a regular file');
+      if (st.size > 64 * 1024 * 1024) throw new Error('file too large to edit');
+      const text = fs.readFileSync(src.path, 'utf8');
+      const ranges = parseLogText(text, src)
+        .filter((e) => targetIds.has(errorEntryId(e)))
+        .map((e) => [e._start, e._end])
+        .sort((a, b) => b[0] - a[0]);
+      if (!ranges.length) throw new Error('log line not found (file changed)');
+      const st2 = fs.statSync(src.path);
+      if (st2.size !== st.size || st2.mtimeMs !== st.mtimeMs) throw new Error('log changed during delete, retry');
+      const lines = text.split(/\r?\n/);
+      for (const [start, end] of ranges) lines.splice(start, end - start + 1);
+      fs.writeFileSync(src.path, lines.join('\n'));
+      result.deleted += ranges.length;
+    } catch (e) {
+      result.failed.push({
+        source: src.source,
+        error: e.code === 'EACCES' || e.code === 'EPERM' ? 'permission denied' : (e.message || 'failed'),
+      });
+    }
+  }
+  errorLogsCache = { time: 0, data: null };
+  return result;
 }
 
 function restartServiceUnit(unit) {
@@ -2856,6 +2917,16 @@ const server = http.createServer(async (req, res) => {
     const hours = Math.max(0, Math.min(168, parseInt(url.searchParams.get('hours'), 10) || 24));
     const report = buildErrorReport(hours, url.searchParams.get('force') === '1', session);
     return send(res, 200, JSON.stringify(report));
+  }
+  if (p === '/api/logs/errors/delete' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const ids = Array.isArray(body && body.ids) ? body.ids : [];
+    const r = deleteErrorEntries(ids, session);
+    if (r.deleted) audit(session.user, 'logs.delete', `${r.deleted} entries`, ids.length > 1 ? 'bulk' : 'single');
+    errorLogsCache = { time: 0, data: null };
+    return send(res, 200, JSON.stringify(r));
   }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
   if (p === '/api/storage') {

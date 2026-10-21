@@ -38,6 +38,7 @@ let procMeta = { intervalMs: 5000, cores: 0, spikeThreshold: 70, sampledAt: 0 };
 let errorData = null;
 let errorViewEntries = [];
 let errorLevel = 'all';
+const errorSelected = new Set();
 
 async function j(u) {
   const r = await fetch(u);
@@ -841,26 +842,47 @@ function renderErrorKpis() {
   $('errorSourcesPill').textContent = `${errorData.scannedSources || 0} scanned`;
 }
 
+function errorProjectCounts() {
+  const counts = new Map();
+  for (const s of (errorData && errorData.sources) || []) {
+    if (!s.project) continue;
+    counts.set(s.project, (counts.get(s.project) || 0) + ((s.counts && s.counts.total) || 0));
+  }
+  return counts;
+}
+
 function renderErrorProjects() {
   const sel = $('errorProject');
   if (!sel || !errorData) return;
   const cur = sel.value;
-  const counts = new Map();
-  for (const s of (errorData.sources || [])) {
-    if (!s.project) continue;
-    counts.set(s.project, (counts.get(s.project) || 0) + ((s.counts && s.counts.total) || 0));
-  }
-  const projects = [...counts.keys()].sort();
-  sel.innerHTML = '<option value="">All projects</option>' + projects.map(p =>
+  const counts = errorProjectCounts();
+  const projects = [...counts.keys()].sort((a, b) => (counts.get(b) - counts.get(a)) || a.localeCompare(b));
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  sel.innerHTML = `<option value="">All projects (${total})</option>` + projects.map(p =>
     `<option value="${escHtml(p)}">${escHtml(p)} (${counts.get(p)})</option>`
   ).join('');
   if (cur && projects.includes(cur)) sel.value = cur;
+}
+
+function syncErrorSelection() {
+  const bar = $('errorSelectionBar');
+  if (!bar) return;
+  const count = $('errorSelectedCount');
+  if (count) count.textContent = errorSelected.size;
+  bar.hidden = errorSelected.size === 0;
+  const all = $('errorSelectAll');
+  if (!all) return;
+  const boxes = [...$('errorList').querySelectorAll('input[data-error-id]')];
+  const checked = boxes.filter(b => b.checked).length;
+  all.checked = boxes.length > 0 && checked === boxes.length;
+  all.indeterminate = checked > 0 && checked < boxes.length;
 }
 
 function renderErrors() {
   if (!errorData) return;
   const q = ($('errorSearch').value || '').trim().toLowerCase();
   const project = $('errorProject').value;
+  const counts = errorProjectCounts();
   const entries = (errorData.entries || []).filter(e => {
     if (project && e.project !== project) return false;
     if (errorLevel === 'critical' && !e.critical) return false;
@@ -868,25 +890,54 @@ function renderErrors() {
     if (errorLevel === 'warning' && e.level !== 'WARNING') return false;
     if (q && ![e.message, e.project, e.source, e.level].some(v => String(v || '').toLowerCase().includes(q))) return false;
     return true;
-  });
+  }).sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
   errorViewEntries = entries;
   $('errorBadge').textContent = `${entries.length} / ${(errorData.entries || []).length}`;
 
   if (!entries.length) {
-    $('errorList').innerHTML = '<tr><td colspan="5" style="color:var(--mut)">No errors match the current filter.</td></tr>';
+    $('errorList').innerHTML = '<tr><td colspan="6" style="color:var(--mut)">No errors match the current filter.</td></tr>';
+    syncErrorSelection();
     return;
   }
   $('errorList').innerHTML = entries.map((e, i) => {
     const lvl = e.level === 'WARNING' ? 'warn' : e.critical ? 'down' : 'warn';
     const when = e.t ? new Date(e.t).toLocaleString([]) : '—';
     return `<tr class="${e.critical ? 'err-row-crit' : ''}">
+      <td><input type="checkbox" data-error-id="${escHtml(e.id)}" aria-label="Pilih error ${escHtml(e.project)}" ${errorSelected.has(e.id) ? 'checked' : ''} /></td>
       <td><span class="pill ${lvl}">${escHtml(e.level)}</span></td>
       <td style="color:var(--mut);white-space:nowrap">${escHtml(when)}</td>
       <td><span class="err-project-pill">${escHtml(e.project)}</span><div style="font-size:10px;color:var(--mut);margin-top:3px;font-family:var(--font-mono)">${escHtml(e.source)}</div></td>
       <td class="err-msg-cell">${escHtml(e.message || '(empty)')}</td>
-      <td style="text-align:right"><button class="btn-sm" data-error-index="${i}">Detail</button></td>
+      <td style="text-align:right"><span class="err-row-actions">
+        <button class="btn-sm" data-error-index="${i}">Detail</button>
+        <button class="btn-sm danger" data-error-delete="${escHtml(e.id)}" title="Hapus baris log ini" aria-label="Hapus baris log ini">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+        </button>
+      </span></td>
     </tr>`;
   }).join('');
+  syncErrorSelection();
+}
+
+async function deleteErrorRows(ids) {
+  ids = [...new Set(ids.filter(Boolean))];
+  if (!ids.length) return;
+  const label = ids.length === 1 ? 'baris log ini' : `${ids.length} baris log terpilih`;
+  if (!confirm(`Hapus ${label}?\n\nBaris akan dihapus permanen dari file log asli di server dan tidak bisa dikembalikan.`)) return;
+  try {
+    const d = await api('POST', '/api/logs/errors/delete', { ids });
+    errorSelected.clear();
+    await errors(true);
+    if (d.failed && d.failed.length) {
+      openModalText(
+        `Hapus log: ${d.deleted || 0} terhapus, ${d.failed.length} gagal`,
+        d.failed.map(f => `${f.source}: ${f.error}`).join('\n'),
+        false
+      );
+    }
+  } catch (e) {
+    openModalText('Hapus log gagal', e.message || 'Request gagal', false);
+  }
 }
 
 async function errors(force = false) {
@@ -895,11 +946,12 @@ async function errors(force = false) {
     const hours = $('errorWindow') ? ($('errorWindow').value || '24') : '24';
     const d = await j(`/api/logs/errors?hours=${encodeURIComponent(hours)}${force ? '&force=1' : ''}`);
     errorData = d;
+    errorSelected.clear();
     renderErrorKpis();
     renderErrorProjects();
     renderErrors();
   } catch (e) {
-    if ($('errorList')) $('errorList').innerHTML = `<tr><td colspan="5" style="color:var(--bad)">${escHtml(e.message || 'Failed loading logs')}</td></tr>`;
+    if ($('errorList')) $('errorList').innerHTML = `<tr><td colspan="6" style="color:var(--bad)">${escHtml(e.message || 'Failed loading logs')}</td></tr>`;
   }
 }
 
@@ -1172,8 +1224,35 @@ if ($('errorLevelTabs')) {
 }
 if ($('errorList')) {
   $('errorList').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-error-delete]');
+    if (del) { deleteErrorRows([del.dataset.errorDelete]); return; }
     const btn = e.target.closest('[data-error-index]');
     if (btn) showErrorDetail(parseInt(btn.dataset.errorIndex, 10));
+  });
+  $('errorList').addEventListener('change', (e) => {
+    const box = e.target.closest('input[data-error-id]');
+    if (!box) return;
+    if (box.checked) errorSelected.add(box.dataset.errorId);
+    else errorSelected.delete(box.dataset.errorId);
+    syncErrorSelection();
+  });
+}
+if ($('errorSelectAll')) {
+  $('errorSelectAll').addEventListener('change', (e) => {
+    const check = e.target.checked;
+    $('errorList').querySelectorAll('input[data-error-id]').forEach(box => {
+      box.checked = check;
+      if (check) errorSelected.add(box.dataset.errorId);
+      else errorSelected.delete(box.dataset.errorId);
+    });
+    syncErrorSelection();
+  });
+}
+if ($('errorDeleteSelected')) $('errorDeleteSelected').addEventListener('click', () => deleteErrorRows([...errorSelected]));
+if ($('errorClearSelection')) {
+  $('errorClearSelection').addEventListener('click', () => {
+    errorSelected.clear();
+    renderErrors();
   });
 }
 
