@@ -881,3 +881,12 @@ select.input { appearance: auto; max-width: 100%; }
 }
 .modal-body.ok { color: var(--ok); }
 .modal-body.err { color: var(--bad); }
+
+/* Error logs & process spikes */
+tr.err-row-crit { background: rgba(239, 68, 68, 0.08); }
+tr.err-row-crit:hover { background: rgba(239, 68, 68, 0.14) !important; }
+tr.proc-row-spike { background: rgba(239, 68, 68, 0.08); }
+tr.proc-row-spike:hover { background: rgba(239, 68, 68, 0.14) !important; }
+.err-msg-cell { font-family: var(--font-mono); font-size: 12px; line-height: 1.4; word-break: break-word; }
+.err-project-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; background: var(--bg-elev); color: var(--tx); border: 1px solid var(--border); }
+.badge.crit { background: rgba(239, 68, 68, 0.18); color: var(--bad); border-color: rgba(239, 68, 68, 0.35); }

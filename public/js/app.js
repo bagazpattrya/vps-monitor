@@ -33,6 +33,11 @@ let histLimit = 720;
 let prevNet = null;
 let rawProcs = [];
 let procSort = 'cpu';
+let rawSpikes = [];
+let procMeta = { intervalMs: 5000, cores: 0, spikeThreshold: 70, sampledAt: 0 };
+let errorData = null;
+let errorViewEntries = [];
+let errorLevel = 'all';
 
 async function j(u) {
   const r = await fetch(u);
@@ -61,10 +66,14 @@ j('/api/me').then(m => {
     if ($('navLinkSites')) $('navLinkSites').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
     if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
+    if ($('navLinkErrors')) $('navLinkErrors').style.display = '';
+    if ($('procSpikeCard')) $('procSpikeCard').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites', 'errors'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
+  if (m.admin && currentView() === 'errors') errors();
+  if (m.admin && currentView() === 'processes') procs();
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
 
@@ -662,45 +671,247 @@ function updateStorageIO(io) {
   if (iEl) iEl.textContent = `${io.totalIops || 0} IOPS`;
 }
 
-function renderProcs() {
-  const q = $('procSearch').value.trim().toLowerCase();
-  const filtered = rawProcs
-    .filter(r => !q || r.cmd.toLowerCase().includes(q) || r.user.toLowerCase().includes(q) || String(r.pid).includes(q))
-    .sort((a, b) => (b[procSort] || 0) - (a[procSort] || 0));
+function fmtProcDuration(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  if (s >= 86400) return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${s}s`;
+}
 
-  $('procCount').textContent = filtered.length;
+function renderProcs() {
+  const q = ($('procSearch').value || '').trim().toLowerCase();
+  const minCpu = parseFloat($('procMinCpu').value) || 0;
+  const filtered = rawProcs
+    .filter(r => !q || String(r.cmd || '').toLowerCase().includes(q) || String(r.user || '').toLowerCase().includes(q) || String(r.pid).includes(q))
+    .filter(r => (Number(r.cpu) || 0) >= minCpu)
+    .sort((a, b) => (Number(b[procSort]) || 0) - (Number(a[procSort]) || 0));
+
+  $('procCount').textContent = `${filtered.length} / ${rawProcs.length}`;
+  if (!filtered.length) {
+    $('procs').innerHTML = '<tr><td colspan="8" style="color:var(--mut)">No processes match the current filter</td></tr>';
+    return;
+  }
   $('procs').innerHTML = filtered.map(r => {
     const rssBytes = (parseInt(r.rss, 10) || 0) * 1024;
-    const safeCmd = r.cmd.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return `<tr>
-      <td><code>${r.pid}</code></td>
-      <td><strong>${r.user}</strong></td>
-      <td style="color:var(--mut)">${r.stat || '—'}</td>
+    const hot = (Number(r.cpu) || 0) >= 50;
+    const safeCmd = escHtml(r.cmd);
+    return `<tr class="${hot ? 'proc-row-spike' : ''}">
+      <td><code>${escHtml(r.pid)}</code></td>
+      <td><strong>${escHtml(r.user)}</strong></td>
+      <td style="color:var(--mut)">${escHtml(r.stat || '—')}</td>
       <td>
         <div class="usage-cell">
-          <span style="width:38px">${r.cpu.toFixed(1)}%</span>
-          <div class="mini-bar"><i style="width:${Math.min(100, r.cpu)}%;background:${barColor(r.cpu)}"></i></div>
+          <span style="width:52px">${(Number(r.cpu) || 0).toFixed(1)}%</span>
+          <div class="mini-bar"><i style="width:${Math.min(100, Number(r.cpu) || 0)}%;background:${barColor(Number(r.cpu) || 0)}"></i></div>
         </div>
       </td>
       <td>
         <div class="usage-cell">
-          <span style="width:38px">${r.mem.toFixed(1)}%</span>
-          <div class="mini-bar"><i style="width:${Math.min(100, r.mem)}%;background:${barColor(r.mem)}"></i></div>
+          <span style="width:44px">${(Number(r.mem) || 0).toFixed(1)}%</span>
+          <div class="mini-bar"><i style="width:${Math.min(100, Number(r.mem) || 0)}%;background:${barColor(Number(r.mem) || 0)}"></i></div>
         </div>
       </td>
       <td style="color:var(--mut)">${fmtBytes(rssBytes)}</td>
-      <td style="color:var(--mut)">${r.start || '—'}</td>
+      <td style="color:var(--mut)">${escHtml(r.etime || '—')}</td>
       <td><code class="cmd-code" title="${safeCmd}">${safeCmd}</code></td>
     </tr>`;
   }).join('');
 }
 
+function renderProcSummary() {
+  const top = rawProcs.slice().sort((a, b) => (Number(b.cpu) || 0) - (Number(a.cpu) || 0))[0];
+  const systemCpu = Number(procMeta.systemCpu) || 0;
+  $('procCpuNow').textContent = `${systemCpu.toFixed(1)}%`;
+  $('procCpuSub').textContent = `${procMeta.cores || '—'} cores`;
+  $('procCpuPill').className = 'pill ' + (systemCpu >= 85 ? 'down' : systemCpu >= 70 ? 'warn' : 'ok');
+  $('procSampleInfo').textContent = procMeta.sampledAt
+    ? new Date(procMeta.sampledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : 'warming up';
+
+  $('procTopCpu').textContent = top ? `${(Number(top.cpu) || 0).toFixed(1)}%` : '—';
+  $('procTopUser').textContent = top ? `PID ${top.pid} · ${top.user}` : '—';
+  $('procTopCmd').textContent = top ? top.cmd : '—';
+  $('procTopCmd').title = top ? top.cmd : '';
+  $('procTopPill').className = 'pill ' + (top && Number(top.cpu) >= 80 ? 'down' : 'warn');
+
+  $('procSpikeCount').textContent = rawSpikes.length;
+  $('procSpikeBadge').textContent = rawSpikes.length;
+  $('procSpikeHistoryCount').textContent = rawSpikes.length;
+  $('procSpikeThreshold').textContent = `${procMeta.spikeThreshold || 70}%`;
+  $('procIntervalNote').textContent = `${(procMeta.intervalMs || 5000) / 1000}s`;
+
+  const last = rawSpikes[0];
+  if (last) {
+    $('procLastSpikeCpu').textContent = `${(Number(last.peakCpu) || 0).toFixed(1)}%`;
+    $('procLastSpikeTime').textContent = new Date(last.lastSeen || last.start).toLocaleString([]);
+    $('procLastSpikeProc').textContent = last.top ? `PID ${last.top.pid} · ${last.top.user} · ${last.top.cmd}` : 'aggregate load';
+    $('procLastSpikeProc').title = $('procLastSpikeProc').textContent;
+    $('procLastSpikePill').className = 'pill down';
+  } else {
+    $('procLastSpikeCpu').textContent = '—';
+    $('procLastSpikeTime').textContent = 'No spike recorded';
+    $('procLastSpikeProc').textContent = '—';
+    $('procLastSpikeProc').title = '';
+    $('procLastSpikePill').className = 'pill ok';
+  }
+}
+
+function renderProcessSpikes() {
+  if (!isAdmin || !$('procSpikeList')) return;
+  if (!rawSpikes.length) {
+    $('procSpikeList').innerHTML = '<tr><td colspan="6" style="color:var(--mut)">No CPU spikes recorded in the selected window.</td></tr>';
+    return;
+  }
+  $('procSpikeList').innerHTML = rawSpikes.map((s, i) => {
+    const top = s.top || {};
+    const safeCmd = escHtml(top.cmd || '—');
+    return `<tr>
+      <td>${escHtml(new Date(s.start).toLocaleString([]))}</td>
+      <td>${escHtml(fmtProcDuration(s.durationSec))}</td>
+      <td style="color:var(--bad);font-weight:600">${(Number(s.peakCpu) || 0).toFixed(1)}%</td>
+      <td>${top.pid ? `<code>${escHtml(top.pid)}</code> · ${escHtml(top.user || '—')}` : '—'}</td>
+      <td><code class="cmd-code" title="${safeCmd}">${safeCmd}</code></td>
+      <td style="text-align:right"><button class="btn-sm" data-spike-index="${i}">Detail</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function showSpikeDetail(index) {
+  const s = rawSpikes[index];
+  if (!s) return;
+  const lines = [
+    `Started: ${new Date(s.start).toLocaleString([])}`,
+    `Last seen: ${new Date(s.lastSeen || s.start).toLocaleString([])}`,
+    `Duration: ${fmtProcDuration(s.durationSec)}`,
+    `Peak system CPU: ${(Number(s.peakCpu) || 0).toFixed(1)}%`,
+    `Peak process CPU: ${(Number(s.peakProcCpu) || 0).toFixed(1)}%`,
+    `Samples: ${s.samples || 1}`,
+    '',
+    'Top processes:',
+  ];
+  for (const p of (s.top5 || [])) {
+    lines.push(`  ${String(p.cpu).padStart(6)}%  PID ${p.pid}  ${p.user}  ${p.cmd}`);
+  }
+  openModalText(`CPU spike · ${new Date(s.start).toLocaleString([])}`, lines.join('\n'));
+}
+
 async function procs() {
   try {
-    const d = await j('/api/processes');
+    const d = await j('/api/processes?limit=200&hours=24');
     rawProcs = d.rows || [];
+    rawSpikes = d.spikes || [];
+    procMeta = {
+      intervalMs: d.intervalMs || 5000,
+      cores: d.cores || 0,
+      spikeThreshold: d.spikeThreshold || 70,
+      sampledAt: d.sampledAt || 0,
+      systemCpu: d.systemCpu || 0,
+    };
     renderProcs();
+    renderProcSummary();
+    renderProcessSpikes();
   } catch (e) {}
+}
+
+// ---- Error logs ----
+function renderErrorKpis() {
+  if (!errorData) return;
+  const s = errorData.summary || {};
+  const h = Number(errorData.windowHours);
+  const windowLabel = h > 0 ? `last ${h}h` : 'all available';
+  $('errorCritical').textContent = s.critical || 0;
+  $('errorErrors').textContent = s.error || 0;
+  $('errorWarnings').textContent = s.warning || 0;
+  $('errorSources').textContent = s.activeSources || 0;
+  $('errorScanned').textContent = `${errorData.scannedSources || 0} files`;
+  $('errorCriticalSub').textContent = windowLabel;
+  $('errorErrorsSub').textContent = windowLabel;
+  $('errorWarningsSub').textContent = windowLabel;
+  $('errorSourcesSub').textContent = 'logs with errors';
+  $('errorCriticalFoot').textContent = `${s.critical || 0} critical`;
+  $('errorErrorsFoot').textContent = `${s.error || 0} errors`;
+  $('errorWarningsFoot').textContent = `${s.warning || 0} warnings`;
+  $('errorCriticalPill').className = 'pill ' + ((s.critical || 0) > 0 ? 'down' : 'ok');
+  $('errorCriticalPill').textContent = (s.critical || 0) > 0 ? 'ATTENTION' : 'CLEAR';
+  $('errorErrorsPill').className = 'pill ' + ((s.error || 0) > 0 ? 'warn' : 'ok');
+  $('errorErrorsPill').textContent = (s.error || 0) > 0 ? 'ACTIVE' : 'CLEAR';
+  $('errorWarningsPill').className = 'pill ok';
+  $('errorWarningsPill').textContent = 'INFO';
+  $('errorSourcesPill').textContent = `${errorData.scannedSources || 0} scanned`;
+}
+
+function renderErrorProjects() {
+  const sel = $('errorProject');
+  if (!sel || !errorData) return;
+  const cur = sel.value;
+  const projects = [...new Set((errorData.sources || []).map(s => s.project).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">All projects</option>' + projects.map(p =>
+    `<option value="${escHtml(p)}">${escHtml(p)}</option>`
+  ).join('');
+  if (cur && projects.includes(cur)) sel.value = cur;
+}
+
+function renderErrors() {
+  if (!errorData) return;
+  const q = ($('errorSearch').value || '').trim().toLowerCase();
+  const project = $('errorProject').value;
+  const entries = (errorData.entries || []).filter(e => {
+    if (project && e.project !== project) return false;
+    if (errorLevel === 'critical' && !e.critical) return false;
+    if (errorLevel === 'error' && e.level !== 'ERROR') return false;
+    if (errorLevel === 'warning' && e.level !== 'WARNING') return false;
+    if (q && ![e.message, e.project, e.source, e.level].some(v => String(v || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  errorViewEntries = entries;
+  $('errorBadge').textContent = `${entries.length} / ${(errorData.entries || []).length}`;
+
+  if (!entries.length) {
+    $('errorList').innerHTML = '<tr><td colspan="5" style="color:var(--mut)">No errors match the current filter.</td></tr>';
+    return;
+  }
+  $('errorList').innerHTML = entries.map((e, i) => {
+    const lvl = e.level === 'WARNING' ? 'warn' : e.critical ? 'down' : 'warn';
+    const when = e.t ? new Date(e.t).toLocaleString([]) : '—';
+    return `<tr class="${e.critical ? 'err-row-crit' : ''}">
+      <td><span class="pill ${lvl}">${escHtml(e.level)}</span></td>
+      <td style="color:var(--mut);white-space:nowrap">${escHtml(when)}</td>
+      <td><span class="err-project-pill">${escHtml(e.project)}</span><div style="font-size:10px;color:var(--mut);margin-top:3px;font-family:var(--font-mono)">${escHtml(e.source)}</div></td>
+      <td class="err-msg-cell">${escHtml(e.message || '(empty)')}</td>
+      <td style="text-align:right"><button class="btn-sm" data-error-index="${i}">Detail</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function errors(force = false) {
+  if (!isAdmin) return;
+  try {
+    const hours = $('errorWindow') ? ($('errorWindow').value || '24') : '24';
+    const d = await j(`/api/logs/errors?hours=${encodeURIComponent(hours)}${force ? '&force=1' : ''}`);
+    errorData = d;
+    renderErrorKpis();
+    renderErrorProjects();
+    renderErrors();
+  } catch (e) {
+    if ($('errorList')) $('errorList').innerHTML = `<tr><td colspan="5" style="color:var(--bad)">${escHtml(e.message || 'Failed loading logs')}</td></tr>`;
+  }
+}
+
+function showErrorDetail(index) {
+  const e = errorViewEntries[index];
+  if (!e) return;
+  const lines = [
+    `Project: ${e.project}`,
+    `Source: ${e.source}`,
+    `Level: ${e.level}${e.critical ? ' (critical)' : ''}`,
+    `Time: ${e.t ? new Date(e.t).toLocaleString([]) : '—'}`,
+    '',
+    e.message || '(empty)',
+    '',
+    e.detail || '',
+  ];
+  openModalText(`${e.level} · ${e.project}`, lines.join('\n'), e.critical ? false : undefined);
 }
 
 async function storage(force = false) {
@@ -931,6 +1142,35 @@ async function hist() {
 
 // UI Events
 $('procSearch').addEventListener('input', renderProcs);
+if ($('procMinCpu')) $('procMinCpu').addEventListener('input', renderProcs);
+if ($('procRefresh')) $('procRefresh').addEventListener('click', procs);
+if ($('procSpikeList')) {
+  $('procSpikeList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-spike-index]');
+    if (btn) showSpikeDetail(parseInt(btn.dataset.spikeIndex, 10));
+  });
+}
+
+if ($('errorSearch')) $('errorSearch').addEventListener('input', renderErrors);
+if ($('errorProject')) $('errorProject').addEventListener('change', renderErrors);
+if ($('errorWindow')) $('errorWindow').addEventListener('change', () => errors());
+if ($('errorRefresh')) $('errorRefresh').addEventListener('click', () => errors(true));
+if ($('errorLevelTabs')) {
+  $('errorLevelTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (!btn) return;
+    document.querySelectorAll('#errorLevelTabs .tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    errorLevel = btn.dataset.level || 'all';
+    renderErrors();
+  });
+}
+if ($('errorList')) {
+  $('errorList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-error-index]');
+    if (btn) showErrorDetail(parseInt(btn.dataset.errorIndex, 10));
+  });
+}
 
 $('sortTabs').addEventListener('click', (e) => {
   const btn = e.target.closest('.tab');
@@ -1565,7 +1805,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites', 'errors'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -1594,6 +1834,7 @@ function navigateView(name, refresh = true) {
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
     if (view === 'processes') procs();
+    if (view === 'errors') errors();
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
@@ -2373,6 +2614,7 @@ setInterval(() => {
   else if (v === 'git') { gitProjects(); }
   else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
+  else if (v === 'errors') { errors(); }
 }, 15000);
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif

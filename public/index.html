@@ -19,6 +19,7 @@
   <a href="#/overview" class="nav-link active" data-view="overview" style="--c:59,130,246"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></span>Overview</a>
   <a href="#/storage" class="nav-link" data-view="storage" style="--c:168,85,247"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg></span>Storage</a>
   <a href="#/workers" class="nav-link" data-view="workers" style="--c:245,158,11"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>Workers &amp; Cron</a>
+  <a href="#/errors" class="nav-link" id="navLinkErrors" data-view="errors" style="display:none;--c:239,68,68"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Error Logs</a>
   <a href="#/git" class="nav-link" data-view="git" style="--c:249,115,22"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes" style="--c:16,185,129"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg></span>Processes</a>
   <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none;--c:20,184,166"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>Backups</a>
@@ -353,22 +354,134 @@
   </div>
   </div><!-- /view-git -->
 
+  <!-- VIEW: ERROR LOGS -->
+  <div class="view-pane" id="view-errors">
+    <div class="card c3">
+      <div>
+        <div class="card-head"><span>Critical</span><span class="pill down" id="errorCriticalPill">—</span></div>
+        <div class="metric-row"><div class="big" id="errorCritical">0</div><div class="sub-val" id="errorCriticalSub">last 24h</div></div>
+      </div>
+      <div class="card-foot"><span>Emergency / fatal errors</span><strong id="errorCriticalFoot" style="color:var(--bad)">—</strong></div>
+    </div>
+    <div class="card c3">
+      <div>
+        <div class="card-head"><span>Errors</span><span class="pill warn" id="errorErrorsPill">—</span></div>
+        <div class="metric-row"><div class="big" id="errorErrors">0</div><div class="sub-val" id="errorErrorsSub">last 24h</div></div>
+      </div>
+      <div class="card-foot"><span>Error level entries</span><strong id="errorErrorsFoot" style="color:var(--warn)">—</strong></div>
+    </div>
+    <div class="card c3">
+      <div>
+        <div class="card-head"><span>Warnings</span><span class="pill ok" id="errorWarningsPill">—</span></div>
+        <div class="metric-row"><div class="big" id="errorWarnings">0</div><div class="sub-val" id="errorWarningsSub">last 24h</div></div>
+      </div>
+      <div class="card-foot"><span>Warning level entries</span><strong id="errorWarningsFoot">—</strong></div>
+    </div>
+    <div class="card c3">
+      <div>
+        <div class="card-head"><span>Sources</span><span class="badge accent" id="errorSourcesPill">—</span></div>
+        <div class="metric-row"><div class="big" id="errorSources">0</div><div class="sub-val" id="errorSourcesSub">logs with errors</div></div>
+      </div>
+      <div class="card-foot"><span>Scanned log files</span><strong id="errorScanned">—</strong></div>
+    </div>
+
+    <div class="card c12" id="errorLogs">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>Project &amp; System Error Logs</span>
+          <span class="badge" id="errorBadge">—</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="errorSearch" class="input" placeholder="Search message, project, source..." />
+          <select id="errorWindow" class="input" title="Time window">
+            <option value="1">Last 1h</option>
+            <option value="24" selected>Last 24h</option>
+            <option value="168">Last 7d</option>
+            <option value="0">All available</option>
+          </select>
+          <select id="errorProject" class="input" title="Filter project">
+            <option value="">All projects</option>
+          </select>
+          <button class="btn-sm" id="errorRefresh" title="Re-scan logs now">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="tabs" id="errorLevelTabs" style="margin-bottom:10px">
+        <button class="tab active" data-level="all">All</button>
+        <button class="tab" data-level="critical">Critical</button>
+        <button class="tab" data-level="error">Errors</button>
+        <button class="tab" data-level="warning">Warnings</button>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+        Reads the tail of Laravel, project, nginx, PHP-FPM, MySQL, and supervisor logs. Paths are redacted.
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:90px">Level</th>
+              <th style="width:150px">Time</th>
+              <th style="width:190px">Project / Source</th>
+              <th>Message</th>
+              <th style="width:70px;text-align:right">Detail</th>
+            </tr>
+          </thead>
+          <tbody id="errorList"></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-errors -->
+
   <!-- VIEW: PROCESSES -->
   <div class="view-pane" id="view-processes">
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>CPU Now</span><span class="pill" id="procCpuPill">—</span></div>
+      <div class="metric-row"><div class="big" id="procCpuNow">—</div><div class="sub-val" id="procCpuSub">—</div></div>
+    </div>
+    <div class="card-foot"><span>Sample interval</span><strong id="procSampleInfo">—</strong></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Top Process</span><span class="pill down" id="procTopPill">—</span></div>
+      <div class="metric-row"><div class="big" id="procTopCpu">—</div><div class="sub-val" id="procTopUser">—</div></div>
+    </div>
+    <div class="card-foot"><span id="procTopCmd" style="font-family:var(--font-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis">—</span></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Spike Episodes</span><span class="badge" id="procSpikeBadge">0</span></div>
+      <div class="metric-row"><div class="big" id="procSpikeCount">0</div><div class="sub-val">last 24h</div></div>
+    </div>
+    <div class="card-foot"><span>System CPU ≥ <strong id="procSpikeThreshold">70%</strong></span></div>
+  </div>
+  <div class="card c3">
+    <div>
+      <div class="card-head"><span>Last Spike</span><span class="pill warn" id="procLastSpikePill">—</span></div>
+      <div class="metric-row"><div class="big" id="procLastSpikeCpu">—</div><div class="sub-val" id="procLastSpikeTime">—</div></div>
+    </div>
+    <div class="card-foot"><span id="procLastSpikeProc" style="font-family:var(--font-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis">—</span></div>
+  </div>
+
   <!-- Top Processes -->
   <div class="card c12" id="processes">
     <div class="sec-head">
       <h3 class="sec-title">
-        <span>Top Processes</span>
+        <span>Running Processes</span>
         <span class="badge" id="procCount">0</span>
       </h3>
       <div class="proc-controls">
         <input type="search" id="procSearch" class="input" placeholder="Filter command, user, or PID..." />
+        <input type="number" id="procMinCpu" class="input" style="width:105px" min="0" max="1000" step="1" placeholder="Min CPU %" title="Show processes at or above this CPU %" />
         <div class="tabs" id="sortTabs">
-          <button class="tab active" data-sort="cpu">Sort: CPU%</button>
-          <button class="tab" data-sort="mem">Sort: MEM%</button>
+          <button class="tab active" data-sort="cpu">CPU%</button>
+          <button class="tab" data-sort="mem">MEM%</button>
+          <button class="tab" data-sort="elapsed">Runtime</button>
         </div>
+        <button class="btn-sm" id="procRefresh">↻ Refresh</button>
       </div>
+    </div>
+    <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+      Live CPU is measured from /proc deltas every <span id="procIntervalNote">5s</span>. CPU% is per core; 100% means one core is saturated.
     </div>
     <div class="table-wrap">
       <table>
@@ -380,11 +493,36 @@
             <th>CPU %</th>
             <th>MEM %</th>
             <th>RSS</th>
-            <th>Started</th>
+            <th>Elapsed</th>
             <th>Command</th>
           </tr>
         </thead>
         <tbody id="procs"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card c12" id="procSpikeCard" style="display:none">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>CPU Spike History</span>
+        <span class="badge" id="procSpikeHistoryCount">0</span>
+      </h3>
+      <span style="font-size:11px;color:var(--mut)">Episodes merged while the same process stays on top</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:165px">Started</th>
+            <th style="width:100px">Duration</th>
+            <th style="width:100px">Peak CPU</th>
+            <th style="width:180px">Top Process</th>
+            <th>Command</th>
+            <th style="width:70px;text-align:right">Detail</th>
+          </tr>
+        </thead>
+        <tbody id="procSpikeList"></tbody>
       </table>
     </div>
   </div>

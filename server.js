@@ -17,6 +17,11 @@ const ACTIVITY_FILE = path.join(DATA_DIR, 'activity.jsonl');
 const MAX_ACTIVITY = 5000;
 const SAMPLE_INTERVAL_MS = 10_000;
 const MAX_POINTS = 8640; // 24h @ 10s
+const PROC_INTERVAL_MS = 5_000;
+const PROC_MAX_SPIKES = 500;
+const PROC_SPIKE_SYSTEM = 70;
+const PROC_SPIKE_PROCESS = 80;
+const PROC_SPIKES_FILE = path.join(DATA_DIR, 'process-spikes.json');
 const SCAN_ROOT = process.env.SCAN_DIR || '/var/www';
 // Keyword global (dipisah koma) untuk menyembunyikan project dari non-superadmin.
 // Keyword per-user ditambahkan di atas ini (lihat hiddenKeywordsFor).
@@ -32,6 +37,14 @@ try {
     if (Array.isArray(raw)) history = raw.slice(-MAX_POINTS);
   }
 } catch { history = []; }
+
+let processSpikes = [];
+try {
+  if (fs.existsSync(PROC_SPIKES_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(PROC_SPIKES_FILE, 'utf8'));
+    if (Array.isArray(raw)) processSpikes = raw.slice(-PROC_MAX_SPIKES);
+  }
+} catch { processSpikes = []; }
 
 // ---- user activity log (append-only JSONL, ring in-memory) ----
 let activity = [];
@@ -369,25 +382,189 @@ function getStats() {
   };
 }
 
-function getProcesses(onlyUser = null) {
-  return new Promise((resolve) => {
-    exec('ps aux --sort=-%cpu', { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err || !stdout) return resolve([]);
-      const lines = stdout.trim().split('\n').slice(1);
-      const rows = lines.map((l) => {
-        const p = l.trim().split(/\s+/);
-        if (p.length < 11) return null;
-        return {
-          user: p[0], pid: p[1],
-          cpu: parseFloat(p[2]) || 0, mem: parseFloat(p[3]) || 0,
-          rss: p[5], stat: p[7], start: p[8],
-          cmd: p.slice(10).join(' ').slice(0, 120),
-        };
-      }).filter((r) => r && (!onlyUser || r.user === onlyUser));
-      resolve(rows.slice(0, 15));
-    });
-  });
+function getProcesses(onlyUser = null, limit = 200) {
+  let rows = lastProcSnapshot && lastProcSnapshot.rows.length ? lastProcSnapshot.rows : readProcSnapshot();
+  if (onlyUser) rows = rows.filter((r) => r.user === onlyUser);
+  return rows.slice(0, Math.max(15, Math.min(500, limit)));
 }
+
+// ---- live process sampler + CPU spike history ----
+let procClockTicks = 100;
+try {
+  const ticks = parseInt(execSync('getconf CLK_TCK 2>/dev/null', { timeout: 1000 }).toString().trim(), 10);
+  if (ticks > 0) procClockTicks = ticks;
+} catch {}
+
+let lastProcSnapshot = {
+  time: 0,
+  rows: [],
+  total: 0,
+  cores: os.cpus().length,
+  intervalMs: PROC_INTERVAL_MS,
+  spikeThreshold: PROC_SPIKE_SYSTEM,
+};
+let procPrev = new Map();
+let procSpikesDirty = false;
+let passwdCache = { time: 0, map: new Map() };
+
+function uidToName(uid) {
+  if (!passwdCache.map.size || Date.now() - passwdCache.time > 60_000) {
+    const map = new Map();
+    try {
+      for (const line of fs.readFileSync('/etc/passwd', 'utf8').split('\n')) {
+        const f = line.split(':');
+        if (f.length >= 3) map.set(parseInt(f[2], 10), f[0]);
+      }
+    } catch {}
+    passwdCache = { time: Date.now(), map };
+  }
+  return passwdCache.map.get(Number(uid)) || String(uid);
+}
+
+function formatProcDuration(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  if (s >= 86400) return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+function formatProcDate(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function readProcSnapshot() {
+  const now = Date.now();
+  let uptime = 0;
+  try { uptime = parseFloat(fs.readFileSync('/proc/uptime', 'utf8').split(/\s+/)[0]) || 0; } catch {}
+  const bootMs = now - uptime * 1000;
+  const totalMemKb = os.totalmem() / 1024;
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return []; }
+
+  const rows = [];
+  const nextPrev = new Map();
+
+  for (const pid of pids) {
+    let stat;
+    try { stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { continue; }
+    const open = stat.indexOf('(');
+    const close = stat.lastIndexOf(')');
+    if (open < 0 || close < 0) continue;
+    const comm = stat.slice(open + 1, close);
+    const f = stat.slice(close + 2).trim().split(/\s+/);
+    if (f.length < 20) continue;
+
+    const totalTicks = (parseInt(f[11], 10) || 0) + (parseInt(f[12], 10) || 0);
+    const startTicks = parseInt(f[19], 10) || 0;
+    const prev = procPrev.get(pid);
+    let cpu = 0;
+    if (prev && prev.startTicks === startTicks) {
+      const dt = (now - prev.t) / 1000;
+      if (dt > 0) cpu = Math.max(0, ((totalTicks - prev.totalTicks) / procClockTicks / dt) * 100);
+    }
+    nextPrev.set(pid, { t: now, totalTicks, startTicks });
+
+    let uid = 0;
+    try { uid = fs.statSync(`/proc/${pid}`).uid; } catch {}
+    let cmd = comm;
+    try {
+      const parts = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+      if (parts.length) cmd = parts.join(' ');
+    } catch {}
+    let rssKb = 0;
+    try {
+      const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+)/m);
+      if (m) rssKb = parseInt(m[1], 10) || 0;
+    } catch {}
+
+    const startedAt = bootMs + (startTicks / procClockTicks) * 1000;
+    const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
+    rows.push({
+      pid: String(pid),
+      ppid: String(f[1] || ''),
+      user: uidToName(uid),
+      cpu: Math.round(cpu * 10) / 10,
+      mem: Math.round((rssKb / totalMemKb) * 1000) / 10,
+      rss: String(rssKb),
+      stat: f[0] || '?',
+      start: formatProcDate(startedAt),
+      elapsed,
+      etime: formatProcDuration(elapsed),
+      cmd: (cmd || comm).slice(0, 300),
+    });
+  }
+
+  procPrev = nextPrev;
+  return rows;
+}
+
+function pickSpikeProc(row) {
+  return row ? { pid: row.pid, user: row.user, cpu: row.cpu, mem: row.mem, cmd: row.cmd } : null;
+}
+
+function recordProcessSpike(systemCpu, top) {
+  const topProc = top[0] || null;
+  const processCpu = topProc ? topProc.cpu : 0;
+  if (systemCpu < PROC_SPIKE_SYSTEM && processCpu < PROC_SPIKE_PROCESS) return;
+
+  const now = Date.now();
+  const last = processSpikes[processSpikes.length - 1];
+  const top5 = top.slice(0, 5).map(pickSpikeProc);
+
+  if (last && now - last.lastSeen < 60_000 && (last.top ? last.top.pid : null) === (topProc ? topProc.pid : null)) {
+    last.lastSeen = now;
+    last.durationSec = Math.round((now - last.start) / 1000);
+    last.peakCpu = Math.max(last.peakCpu || 0, systemCpu);
+    last.peakProcCpu = Math.max(last.peakProcCpu || 0, processCpu);
+    if (topProc && processCpu >= (last.top ? last.top.cpu : 0)) {
+      last.top = pickSpikeProc(topProc);
+      last.top5 = top5;
+    }
+    last.samples = (last.samples || 1) + 1;
+  } else {
+    processSpikes.push({
+      id: String(now),
+      start: now,
+      lastSeen: now,
+      durationSec: 0,
+      peakCpu: Math.round(systemCpu * 10) / 10,
+      peakProcCpu: Math.round(processCpu * 10) / 10,
+      top: pickSpikeProc(topProc),
+      top5,
+      samples: 1,
+    });
+    if (processSpikes.length > PROC_MAX_SPIKES) processSpikes = processSpikes.slice(-PROC_MAX_SPIKES);
+  }
+  procSpikesDirty = true;
+}
+
+function sampleProcesses() {
+  const rows = readProcSnapshot();
+  if (!rows.length) return;
+  const sorted = rows.slice().sort((a, b) => b.cpu - a.cpu);
+  const systemCpu = Number(lastStats && lastStats.cpu ? lastStats.cpu.pct : 0) || 0;
+  const hadBaseline = Boolean(lastProcSnapshot.time);
+  lastProcSnapshot = {
+    time: Date.now(),
+    rows: sorted,
+    total: rows.length,
+    cores: os.cpus().length,
+    intervalMs: PROC_INTERVAL_MS,
+    spikeThreshold: PROC_SPIKE_SYSTEM,
+  };
+  if (hadBaseline) recordProcessSpike(systemCpu, sorted);
+}
+
+setInterval(() => {
+  if (!procSpikesDirty) return;
+  try {
+    fs.writeFileSync(PROC_SPIKES_FILE, JSON.stringify(processSpikes.slice(-PROC_MAX_SPIKES)));
+    procSpikesDirty = false;
+  } catch {}
+}, 60_000).unref();
 
 const SERVICES = ['nginx', 'mysql', 'php8.4-fpm', 'mosquitto', 'redis-server', 'ssh', 'cron', 'supervisor'];
 let servicesCache = { time: 0, data: [] };
@@ -656,6 +833,322 @@ function laravelLogPaths() {
     if (fs.existsSync(f) && !paths.includes(f)) paths.push(f);
   }
   return paths.slice(0, 20);
+}
+
+// ---- aggregated project + system error logs ----
+const LOG_TAIL_BYTES = 256 * 1024;
+const LOG_MAX_SOURCES = 40;
+const LOG_MAX_ENTRIES = 2000;
+const LOG_MAX_ENTRIES_PER_SOURCE = 400;
+const LOG_CACHE_MS = 30_000;
+let errorLogsCache = { time: 0, data: null };
+
+const SYSTEM_LOG_FILES = [
+  ['/var/log/nginx/error.log', 'nginx/error.log'],
+  ['/var/log/mysql/error.log', 'mysql/error.log'],
+  ['/var/log/mysqld.log', 'mysqld.log'],
+  ['/var/log/supervisor/supervisord.log', 'supervisor/supervisord.log'],
+];
+
+function readLogTail(file, maxBytes = LOG_TAIL_BYTES) {
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size === 0) return '';
+    const len = Math.min(st.size, maxBytes);
+    const buf = Buffer.alloc(len);
+    const fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, buf, 0, len, st.size - len); } finally { fs.closeSync(fd); }
+    let text = buf.toString('utf8');
+    if (st.size > len) {
+      const nl = text.indexOf('\n');
+      if (nl >= 0) text = text.slice(nl + 1);
+    }
+    return text;
+  } catch { return ''; }
+}
+
+function discoverLogSources() {
+  const out = [];
+  const seen = new Set();
+
+  function add(file, meta) {
+    let st;
+    try { st = fs.statSync(file); } catch { return; }
+    if (!st.isFile() || st.size === 0) return;
+    const key = path.resolve(file);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ...meta, path: file, bytes: st.size, mtime: st.mtimeMs });
+  }
+
+  for (const p of getGitProjects()) {
+    for (const sub of ['storage/logs', 'logs']) {
+      const dir = path.join(p.path, sub);
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { continue; }
+      for (const name of names) {
+        if (!name.endsWith('.log')) continue;
+        const rel = path.posix.join(String(p.relPath || p.name).split(path.sep).join('/'), sub, name);
+        add(path.join(dir, name), {
+          id: 'project:' + rel,
+          project: p.name,
+          source: sub + '/' + name,
+          system: false,
+        });
+      }
+    }
+  }
+
+  // Beberapa instalasi menjalankan panel tanpa memuat .env; tetap cakup workspace utama.
+  const fallbackRoot = '/home/zae/Codingan';
+  if (SCAN_ROOT !== fallbackRoot && fs.existsSync(fallbackRoot)) {
+    for (const dir of scanGitDirs(fallbackRoot, 6)) {
+      const project = path.basename(dir);
+      for (const sub of ['storage/logs', 'logs']) {
+        const logDir = path.join(dir, sub);
+        let names = [];
+        try { names = fs.readdirSync(logDir); } catch { continue; }
+        for (const name of names) {
+          if (!name.endsWith('.log')) continue;
+          const rel = path.posix.join('Codingan', path.relative(fallbackRoot, dir).split(path.sep).join('/'), sub, name);
+          add(path.join(logDir, name), {
+            id: 'project:' + rel,
+            project,
+            source: sub + '/' + name,
+            system: false,
+          });
+        }
+      }
+    }
+  }
+
+  for (const f of LARAVEL_LOG_CANDIDATES) {
+    add(f, { id: 'laravel:' + path.basename(f), project: 'Laravel', source: path.basename(f), system: true });
+  }
+
+  for (const [file, label] of SYSTEM_LOG_FILES) {
+    add(file, { id: 'system:' + label, project: 'System', source: label, system: true });
+  }
+
+  for (const dir of ['/var/log/nginx', '/var/log/php', '/var/log']) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (!/\.log$/i.test(name)) continue;
+      if (dir === '/var/log/nginx' && !/^error.*\.log$/i.test(name) && !/^.*error\.log$/i.test(name)) continue;
+      if (dir === '/var/log' && !/^php.*(?:-fpm|error).*\.log$/i.test(name)) continue;
+      if (dir === '/var/log/php' && !/^.*\.log$/i.test(name)) continue;
+      const full = path.join(dir, name);
+      const label = (dir === '/var/log' ? '' : dir.replace('/var/log/', '') + '/') + name;
+      add(full, { id: 'system:' + label, project: 'System', source: label, system: true });
+    }
+  }
+
+  return out.sort((a, b) => b.mtime - a.mtime).slice(0, LOG_MAX_SOURCES);
+}
+
+function normalizeLogLevel(raw) {
+  const k = String(raw || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (k === 'WARN' || k === 'WARNING') return 'WARNING';
+  if (k === 'ERROR' || k === 'ERR') return 'ERROR';
+  if (k === 'CRIT' || k === 'CRITICAL') return 'CRITICAL';
+  if (k === 'ALERT') return 'ALERT';
+  if (k === 'EMERG' || k === 'EMERGENCY') return 'EMERGENCY';
+  if (k === 'FATAL') return 'CRITICAL';
+  return '';
+}
+
+const CRITICAL_ERROR_RE = /(SQLSTATE|Uncaught|Fatal(?:Error)?|OutOfMemory|Allowed memory size|Maximum execution time|Deadlock|ECONNREFUSED|Connection refused|No space left|BindingResolutionException|QueryException|ParseError|Segmentation fault|panic|OOMKilled|Could not resolve host)/i;
+
+function isCriticalLogLevel(level, message) {
+  if (['EMERGENCY', 'ALERT', 'CRITICAL'].includes(level)) return true;
+  return level === 'ERROR' && CRITICAL_ERROR_RE.test(String(message || ''));
+}
+
+function parseLogTime(value, fallback) {
+  let s = String(value || '').trim().replace(/^\[|\]$/g, '');
+  if (!s) return fallback;
+  if (/^\d{4}\/\d{2}\/\d{2}/.test(s)) s = s.replace(/\//g, '-');
+  s = s.replace(/(\.\d{3})\d+/, '$1');
+  let t = Date.parse(s);
+  if (Number.isNaN(t)) t = Date.parse(s.replace(' ', 'T'));
+  return Number.isNaN(t) ? fallback : t;
+}
+
+function makeLogEntry(level, timeStr, message, line, source, fallbackTime) {
+  const lvl = normalizeLogLevel(level);
+  if (!lvl) return null;
+  const t = parseLogTime(timeStr, fallbackTime);
+  const msg = String(message || '').trim();
+  return {
+    sourceId: source.id,
+    project: source.project,
+    source: source.source,
+    system: !!source.system,
+    t,
+    level: lvl,
+    critical: isCriticalLogLevel(lvl, msg),
+    message: msg.slice(0, 800),
+    detail: String(line || '').slice(0, 8000),
+  };
+}
+
+function parseLogText(text, source) {
+  const lines = String(text || '').split(/\r?\n/);
+  const out = [];
+  let cur = null;
+  const fallback = source.mtime || Date.now();
+  const push = () => {
+    if (cur) out.push(cur);
+    cur = null;
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    let m = line.match(/^\[(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?[^\]]*)\]\s+(?:([a-zA-Z0-9_-]+)\.)?([A-Z]+):\s*(.*)/);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[3], m[1], m[4], line, source, fallback);
+      continue;
+    }
+
+    m = line.match(/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s+\[([a-z]+)\]\s*(.*)/i);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      continue;
+    }
+
+    m = line.match(/^\[(\d{2}-[A-Za-z]{3}-\d{4} \d{2}:\d{2}:\d{2})\]\s+([A-Z]+):\s*(.*)/);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      continue;
+    }
+
+    m = line.match(/^(\d{4}-\d{2}-\d{2}T\S+)\s+\d+\s+\[([A-Z]+)\]\s*(.*)/);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      continue;
+    }
+
+    if (line.charAt(0) === '{') {
+      let obj = null;
+      try { obj = JSON.parse(line); } catch {}
+      if (obj && typeof obj === 'object') {
+        push();
+        const msg = [obj.message, obj.error].filter(Boolean).map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' — ');
+        cur = makeLogEntry(obj.level || obj.severity, obj.timestamp || obj.time, msg || line, line, source, fallback);
+        continue;
+      }
+    }
+
+    m = line.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+\[?([A-Za-z]+)\]?\s*[:-]?\s*(.*)/);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[2], m[1], m[3], line, source, fallback);
+      continue;
+    }
+
+    m = line.match(/^\[?(ERROR|WARN(?:ING)?|CRITICAL|ALERT|EMERGENCY|FATAL)\]?\b[:\s-]+(.*)/i);
+    if (m) {
+      push();
+      cur = makeLogEntry(m[1], '', m[2], line, source, fallback);
+      continue;
+    }
+
+    if (cur && cur.detail.length < 8000) cur.detail += '\n' + line;
+  }
+
+  push();
+  return out.slice(-LOG_MAX_ENTRIES_PER_SOURCE);
+}
+
+function collectErrorLogs(force = false) {
+  const now = Date.now();
+  if (!force && errorLogsCache.data && now - errorLogsCache.time < LOG_CACHE_MS) return errorLogsCache.data;
+
+  const sources = discoverLogSources();
+  const entries = [];
+  for (const source of sources) {
+    const text = readLogTail(source.path);
+    if (text) entries.push(...parseLogText(text, source));
+  }
+  entries.sort((a, b) => b.t - a.t);
+
+  const data = {
+    time: now,
+    sources: sources.map((s) => ({
+      id: s.id,
+      project: s.project,
+      source: s.source,
+      system: !!s.system,
+      bytes: s.bytes,
+      mtime: s.mtime,
+    })),
+    entries: entries.slice(0, LOG_MAX_ENTRIES),
+  };
+  errorLogsCache = { time: now, data };
+  return data;
+}
+
+function scrubLogText(text) {
+  let s = String(text || '');
+  if (SCAN_ROOT) s = s.split(SCAN_ROOT).join('<project-root>');
+  if (ROOT) s = s.split(ROOT).join('<app-root>');
+  const fallback = '/home/zae/Codingan';
+  if (fallback && s.includes(fallback)) s = s.split(fallback).join('<project-root>');
+  return s;
+}
+
+function buildErrorReport(hours, force = false, session = null) {
+  const data = collectErrorLogs(force);
+  const since = hours > 0 ? Date.now() - hours * 3600_000 : 0;
+  const visibleSources = data.sources.filter((s) => !isHidden(session, [s.project, s.source]));
+  const visibleIds = new Set(visibleSources.map((s) => s.id));
+  const entries = data.entries
+    .filter((e) => visibleIds.has(e.sourceId) && (!since || e.t >= since))
+    .filter((e) => !isHidden(session, [e.project, e.source, e.message, e.detail]));
+
+  const sourceCounts = new Map();
+  const summary = { critical: 0, error: 0, warning: 0, total: entries.length };
+  for (const e of entries) {
+    if (e.critical) summary.critical++;
+    if (e.level === 'ERROR') summary.error++;
+    else if (e.level === 'WARNING') summary.warning++;
+    const c = sourceCounts.get(e.sourceId) || { critical: 0, error: 0, warning: 0, total: 0 };
+    c.total++;
+    if (e.critical) c.critical++;
+    if (e.level === 'ERROR') c.error++;
+    else if (e.level === 'WARNING') c.warning++;
+    sourceCounts.set(e.sourceId, c);
+  }
+
+  const sources = visibleSources.map((s) => ({
+    ...s,
+    counts: sourceCounts.get(s.id) || { critical: 0, error: 0, warning: 0, total: 0 },
+  }));
+  summary.activeSources = sources.filter((s) => s.counts.total > 0).length;
+
+  return {
+    time: Date.now(),
+    generatedAt: data.time,
+    windowHours: hours,
+    scannedSources: visibleSources.length,
+    summary,
+    sources,
+    entries: entries.slice(0, 500).map((e) => ({
+      t: e.t,
+      level: e.level,
+      critical: e.critical,
+      project: e.project,
+      source: e.source,
+      message: scrubLogText(e.message),
+      detail: scrubLogText(e.detail),
+    })),
+  };
 }
 
 function restartServiceUnit(unit) {
@@ -1150,6 +1643,8 @@ function sample() {
 }
 sample();
 setInterval(sample, SAMPLE_INTERVAL_MS);
+sampleProcesses();
+setInterval(sampleProcesses, PROC_INTERVAL_MS);
 setInterval(() => {
   try { fs.writeFileSync(HISTORY_FILE, JSON.stringify(history.slice(-MAX_POINTS))); } catch {}
 }, 60_000);
@@ -2330,8 +2825,37 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify(s));
   }
   if (p === '/api/processes') {
-    const rows = await getProcesses(session.admin ? null : session.user);
-    return send(res, 200, JSON.stringify({ time: Date.now(), rows }));
+    const limit = Math.max(15, Math.min(500, parseInt(url.searchParams.get('limit'), 10) || 200));
+    const hours = Math.max(0, Math.min(168, parseInt(url.searchParams.get('hours'), 10) || 24));
+    let rows = lastProcSnapshot.rows.length ? lastProcSnapshot.rows : getProcesses();
+    if (!session.admin) rows = rows.filter((r) => r.user === session.user);
+    const total = rows.length;
+    rows = rows.slice().sort((a, b) => (b.cpu || 0) - (a.cpu || 0)).slice(0, limit);
+    let spikes = [];
+    if (session.admin) {
+      const since = hours > 0 ? Date.now() - hours * 3600_000 : 0;
+      spikes = processSpikes
+        .filter((s) => !since || s.lastSeen >= since)
+        .slice(-100)
+        .reverse();
+    }
+    return send(res, 200, JSON.stringify({
+      time: Date.now(),
+      sampledAt: lastProcSnapshot.time,
+      intervalMs: PROC_INTERVAL_MS,
+      cores: lastProcSnapshot.cores,
+      systemCpu: Number(lastStats && lastStats.cpu ? lastStats.cpu.pct : 0) || 0,
+      spikeThreshold: PROC_SPIKE_SYSTEM,
+      total,
+      rows,
+      spikes,
+    }));
+  }
+  if (p === '/api/logs/errors') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const hours = Math.max(0, Math.min(168, parseInt(url.searchParams.get('hours'), 10) || 24));
+    const report = buildErrorReport(hours, url.searchParams.get('force') === '1', session);
+    return send(res, 200, JSON.stringify(report));
   }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
   if (p === '/api/storage') {
