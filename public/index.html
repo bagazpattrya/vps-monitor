@@ -509,6 +509,39 @@
     </div>
   </div>
 
+  <div class="card c12" id="mysqlQueryCard" style="display:none">
+    <div class="sec-head">
+      <h3 class="sec-title">
+        <span>MySQL Running Queries</span>
+        <span class="badge" id="mysqlQueryCount">0</span>
+      </h3>
+      <div class="proc-controls">
+        <input type="search" id="mysqlQuerySearch" class="input" placeholder="Filter query, user, or database..." />
+        <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="mysqlShowSleep" /> Show idle</label>
+        <button class="btn-sm" id="mysqlQueryRefresh">↻ Refresh</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--mut);margin-bottom:8px" id="mysqlQueryNote">
+      Live from information_schema.PROCESSLIST, sorted by longest running. Long-running queries are the usual cause of MySQL CPU spikes.
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:70px">ID</th>
+            <th style="width:110px">User</th>
+            <th style="width:130px">Database</th>
+            <th style="width:80px">Command</th>
+            <th style="width:80px">Time</th>
+            <th style="width:150px">State</th>
+            <th>Query</th>
+          </tr>
+        </thead>
+        <tbody id="mysqlQueries"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="card c12" id="procSpikeCard" style="display:none">
     <div class="sec-head">
       <h3 class="sec-title">

@@ -69,12 +69,13 @@ j('/api/me').then(m => {
     if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
     if ($('navLinkErrors')) $('navLinkErrors').style.display = '';
     if ($('procSpikeCard')) $('procSpikeCard').style.display = '';
+    if ($('mysqlQueryCard')) $('mysqlQueryCard').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites', 'errors'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
   if (m.admin && currentView() === 'errors') errors();
-  if (m.admin && currentView() === 'processes') procs();
+  if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
 
@@ -815,6 +816,59 @@ async function procs() {
   } catch (e) {}
 }
 
+// ---- MySQL running queries ----
+let rawMysqlQueries = [];
+let mysqlQueryError = '';
+
+function renderMysqlQueries() {
+  if (!$('mysqlQueries')) return;
+  if (mysqlQueryError) {
+    $('mysqlQueryCount').textContent = '0';
+    $('mysqlQueries').innerHTML = `<tr><td colspan="7" style="color:var(--bad)">${escHtml(mysqlQueryError)}</td></tr>`;
+    return;
+  }
+  const q = ($('mysqlQuerySearch').value || '').trim().toLowerCase();
+  const showIdle = $('mysqlShowSleep').checked;
+  const filtered = rawMysqlQueries.filter(r =>
+    (showIdle || r.command !== 'Sleep') &&
+    (!q || `${r.id} ${r.user} ${r.db} ${r.state} ${r.info}`.toLowerCase().includes(q)));
+  $('mysqlQueryCount').textContent = `${filtered.length} / ${rawMysqlQueries.length}`;
+  if (!filtered.length) {
+    $('mysqlQueries').innerHTML = '<tr><td colspan="7" style="color:var(--mut)">No active queries right now</td></tr>';
+    return;
+  }
+  $('mysqlQueries').innerHTML = filtered.map((r, i) => {
+    const slow = r.command !== 'Sleep' && r.time >= 5;
+    const info = (r.info || '').replace(/\s+/g, ' ').trim();
+    return `<tr class="${slow ? 'proc-row-spike' : ''}">
+      <td>${r.id}</td>
+      <td>${escHtml(r.user)}</td>
+      <td>${escHtml(r.db || '—')}</td>
+      <td>${escHtml(r.command)}</td>
+      <td>${escHtml(fmtProcDuration(r.time))}</td>
+      <td>${escHtml(r.state || '—')}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;word-break:break-all;cursor:${info ? 'pointer' : 'default'}" ${info ? `data-mysql-query="${r.id}" title="Click to view full query"` : ''}>${escHtml(info.length > 200 ? info.slice(0, 200) + '…' : info) || '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function mysqlQueries() {
+  if (!isAdmin || !$('mysqlQueries')) return;
+  try {
+    const r = await fetch('/api/mysql/processlist');
+    if (r.status === 401) { location.href = '/login'; return; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      mysqlQueryError = d.error || 'Failed to read MySQL processlist';
+      rawMysqlQueries = [];
+    } else {
+      mysqlQueryError = '';
+      rawMysqlQueries = d.rows || [];
+    }
+    renderMysqlQueries();
+  } catch (e) {}
+}
+
 // ---- Error logs ----
 function renderErrorKpis() {
   if (!errorData) return;
@@ -1201,6 +1255,17 @@ async function hist() {
 $('procSearch').addEventListener('input', renderProcs);
 if ($('procMinCpu')) $('procMinCpu').addEventListener('input', renderProcs);
 if ($('procRefresh')) $('procRefresh').addEventListener('click', procs);
+if ($('mysqlQueryRefresh')) $('mysqlQueryRefresh').addEventListener('click', mysqlQueries);
+if ($('mysqlQuerySearch')) $('mysqlQuerySearch').addEventListener('input', renderMysqlQueries);
+if ($('mysqlShowSleep')) $('mysqlShowSleep').addEventListener('change', renderMysqlQueries);
+if ($('mysqlQueries')) {
+  $('mysqlQueries').addEventListener('click', (e) => {
+    const cell = e.target.closest('[data-mysql-query]');
+    if (!cell) return;
+    const r = rawMysqlQueries.find(x => x.id === parseInt(cell.dataset.mysqlQuery, 10));
+    if (r) openModalText(`MySQL query · ID ${r.id} · ${r.user}@${r.db || '-'} · ${fmtProcDuration(r.time)}`, r.info);
+  });
+}
 if ($('procSpikeList')) {
   $('procSpikeList').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-spike-index]');
@@ -1917,7 +1982,7 @@ function navigateView(name, refresh = true) {
     if (view === 'storage') storage();
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
-    if (view === 'processes') procs();
+    if (view === 'processes') { procs(); mysqlQueries(); }
     if (view === 'errors') errors();
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
@@ -2702,4 +2767,4 @@ setInterval(() => {
 }, 15000);
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif
-setInterval(() => { if (currentView() === 'processes') procs(); }, 5000);
+setInterval(() => { if (currentView() === 'processes') { procs(); mysqlQueries(); } }, 5000);

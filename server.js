@@ -2016,6 +2016,25 @@ async function listDatabases(session) {
   return { ok: true, databases };
 }
 
+// Query MySQL yang sedang berjalan (SHOW PROCESSLIST). Koneksi monitor sendiri dikecualikan.
+// Output `mysql -B` meng-escape \n \t \\ di dalam nilai, jadi di-unescape setelah split per-baris.
+async function getMysqlProcessList(session) {
+  const sql = "SELECT ID, USER, SUBSTRING_INDEX(HOST, ':', 1), IFNULL(DB, ''), COMMAND, TIME, IFNULL(STATE, ''), IFNULL(LEFT(INFO, 2000), '') FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() ORDER BY TIME DESC LIMIT 500";
+  const r = await runFile('mysql', ['-BNe', sql], { timeout: 8000 });
+  if (!r.ok) return { ok: false, error: 'Gagal membaca processlist MySQL: ' + r.output.trim().slice(0, 300) };
+  const unesc = (v) => v.replace(/\\([nt\\])/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'));
+  const rows = [];
+  for (const line of r.output.split('\n')) {
+    if (!line) continue;
+    const f = line.split('\t');
+    if (f.length < 8) continue;
+    const row = { id: Number(f[0]), user: f[1], host: f[2], db: f[3], command: f[4], time: Number(f[5]) || 0, state: f[6], info: unesc(f.slice(7).join('\t')) };
+    if (isHidden(session, [row.db, row.user, row.info])) continue;
+    rows.push(row);
+  }
+  return { ok: true, time: Date.now(), rows };
+}
+
 // Terapkan hidden keywords ke daftar backup: file disaring, total dihitung ulang,
 // dan baris log yang menyebut keyword dibuang.
 function filterBackupInfo(session, info) {
@@ -3101,6 +3120,11 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/backups/databases' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const r = await listDatabases(session);
+    return send(res, r.ok ? 200 : 500, JSON.stringify(r));
+  }
+  if (p === '/api/mysql/processlist' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const r = await getMysqlProcessList(session);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
   if (p === '/api/backups/dump' && req.method === 'GET') {
