@@ -845,9 +845,14 @@ function renderErrorProjects() {
   const sel = $('errorProject');
   if (!sel || !errorData) return;
   const cur = sel.value;
-  const projects = [...new Set((errorData.sources || []).map(s => s.project).filter(Boolean))].sort();
+  const counts = new Map();
+  for (const s of (errorData.sources || [])) {
+    if (!s.project) continue;
+    counts.set(s.project, (counts.get(s.project) || 0) + ((s.counts && s.counts.total) || 0));
+  }
+  const projects = [...counts.keys()].sort();
   sel.innerHTML = '<option value="">All projects</option>' + projects.map(p =>
-    `<option value="${escHtml(p)}">${escHtml(p)}</option>`
+    `<option value="${escHtml(p)}">${escHtml(p)} (${counts.get(p)})</option>`
   ).join('');
   if (cur && projects.includes(cur)) sel.value = cur;
 }
