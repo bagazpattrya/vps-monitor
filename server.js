@@ -3127,6 +3127,25 @@ const server = http.createServer(async (req, res) => {
     const r = await getMysqlProcessList(session);
     return send(res, r.ok ? 200 : 500, JSON.stringify(r));
   }
+  if (p === '/api/mysql/kill' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const id = Number(body && body.id);
+    if (!Number.isInteger(id) || id <= 0) return send(res, 400, JSON.stringify({ error: 'Invalid connection id' }));
+    const list = await getMysqlProcessList(session);
+    if (!list.ok) return send(res, 500, JSON.stringify(list));
+    const row = list.rows.find((r) => r.id === id);
+    if (!row) return send(res, 404, JSON.stringify({ error: 'Connection no longer exists' }));
+    if (['system user', 'event_scheduler'].includes(row.user)) return send(res, 400, JSON.stringify({ error: 'Refusing to kill a MySQL system thread' }));
+    // Pastikan yang dimatikan memang query yang dilihat user (koneksi yang sama bisa sudah pindah ke query lain).
+    const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+    if (norm(row.info) !== norm(body.info)) return send(res, 409, JSON.stringify({ error: 'Query has changed since you loaded the list. Refresh and try again.' }));
+    const r = await runFile('mysql', ['-BNe', `KILL QUERY ${id}`], { timeout: 8000 });
+    if (!r.ok) return send(res, 500, JSON.stringify({ ok: false, error: 'KILL QUERY gagal: ' + r.output.trim().slice(0, 300) }));
+    audit(session.user, 'mysql.kill', `id=${id} ${row.user}@${row.db || '-'} ran ${row.time}s`, norm(row.info));
+    return send(res, 200, JSON.stringify({ ok: true }));
+  }
   if (p === '/api/backups/dump' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const db = url.searchParams.get('db') || '';

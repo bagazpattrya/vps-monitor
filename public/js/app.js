@@ -824,7 +824,7 @@ function renderMysqlQueries() {
   if (!$('mysqlQueries')) return;
   if (mysqlQueryError) {
     $('mysqlQueryCount').textContent = '0';
-    $('mysqlQueries').innerHTML = `<tr><td colspan="7" style="color:var(--bad)">${escHtml(mysqlQueryError)}</td></tr>`;
+    $('mysqlQueries').innerHTML = `<tr><td colspan="8" style="color:var(--bad)">${escHtml(mysqlQueryError)}</td></tr>`;
     return;
   }
   const q = ($('mysqlQuerySearch').value || '').trim().toLowerCase();
@@ -834,7 +834,7 @@ function renderMysqlQueries() {
     (!q || `${r.id} ${r.user} ${r.db} ${r.state} ${r.info}`.toLowerCase().includes(q)));
   $('mysqlQueryCount').textContent = `${filtered.length} / ${rawMysqlQueries.length}`;
   if (!filtered.length) {
-    $('mysqlQueries').innerHTML = '<tr><td colspan="7" style="color:var(--mut)">No active queries right now</td></tr>';
+    $('mysqlQueries').innerHTML = '<tr><td colspan="8" style="color:var(--mut)">No active queries right now</td></tr>';
     return;
   }
   $('mysqlQueries').innerHTML = filtered.map((r, i) => {
@@ -848,8 +848,28 @@ function renderMysqlQueries() {
       <td>${escHtml(fmtProcDuration(r.time))}</td>
       <td>${escHtml(r.state || '—')}</td>
       <td style="font-family:var(--font-mono);font-size:11px;word-break:break-all;cursor:${info ? 'pointer' : 'default'}" ${info ? `data-mysql-query="${r.id}" title="Click to view full query"` : ''}>${escHtml(info.length > 200 ? info.slice(0, 200) + '…' : info) || '—'}</td>
+      <td style="text-align:right">${r.command !== 'Sleep' && info ? `<button class="btn-sm" data-mysql-kill="${r.id}">Kill</button>` : ''}</td>
     </tr>`;
   }).join('');
+}
+
+async function killMysqlQuery(id) {
+  const r = rawMysqlQueries.find(x => x.id === id);
+  if (!r) return;
+  const snippet = r.info.replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!confirm(`Kill query on connection ${r.id}?\n\n${r.user}@${r.db || '-'} · running ${fmtProcDuration(r.time)}\n\n${snippet}`)) return;
+  try {
+    const res = await fetch('/api/mysql/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: r.id, info: r.info }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) alert(d.error || 'Failed to kill query');
+  } catch (e) {
+    alert('Failed to kill query');
+  }
+  mysqlQueries();
 }
 
 async function mysqlQueries() {
@@ -1260,6 +1280,8 @@ if ($('mysqlQuerySearch')) $('mysqlQuerySearch').addEventListener('input', rende
 if ($('mysqlShowSleep')) $('mysqlShowSleep').addEventListener('change', renderMysqlQueries);
 if ($('mysqlQueries')) {
   $('mysqlQueries').addEventListener('click', (e) => {
+    const kill = e.target.closest('[data-mysql-kill]');
+    if (kill) return killMysqlQuery(parseInt(kill.dataset.mysqlKill, 10));
     const cell = e.target.closest('[data-mysql-query]');
     if (!cell) return;
     const r = rawMysqlQueries.find(x => x.id === parseInt(cell.dataset.mysqlQuery, 10));
