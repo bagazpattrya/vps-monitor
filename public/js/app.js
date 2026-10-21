@@ -2768,3 +2768,27 @@ setInterval(() => {
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif
 setInterval(() => { if (currentView() === 'processes') { procs(); mysqlQueries(); } }, 5000);
+
+// Section collapsible (Running Processes, MySQL Queries, Spike History), state disimpan di localStorage
+document.querySelectorAll('[data-collapsible]').forEach((card) => {
+  const title = card.querySelector('.sec-title');
+  if (!title) return;
+  const key = 'collapsed:' + card.id;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'collapse-toggle';
+  btn.setAttribute('aria-label', 'Toggle section');
+  title.prepend(btn);
+
+  const apply = (collapsed) => {
+    card.classList.toggle('collapsed', collapsed);
+    btn.setAttribute('aria-expanded', String(!collapsed));
+  };
+  try { apply(localStorage.getItem(key) === '1'); } catch { apply(false); }
+
+  title.addEventListener('click', () => {
+    const collapsed = !card.classList.contains('collapsed');
+    apply(collapsed);
+    try { localStorage.setItem(key, collapsed ? '1' : '0'); } catch {}
+  });
+});

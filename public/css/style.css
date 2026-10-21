@@ -427,6 +427,28 @@ body.fullscreen-focus .chart-box {
   gap: 8px;
 }
 
+.collapse-toggle {
+  background: none;
+  border: 0;
+  color: var(--mut);
+  cursor: pointer;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.collapse-toggle:hover { color: var(--tx); }
+.collapse-toggle::before { content: '▾'; font-size: 14px; line-height: 1; }
+[data-collapsible] .sec-title { cursor: pointer; user-select: none; }
+[data-collapsible].collapsed .collapse-toggle { transform: rotate(-90deg); }
+[data-collapsible].collapsed > :not(.sec-head) { display: none; }
+[data-collapsible].collapsed > .sec-head { margin-bottom: 0; }
+[data-collapsible].collapsed .proc-controls,
+[data-collapsible].collapsed .sec-head > span { display: none; }
+
 .tabs {
   display: inline-flex;
   background: var(--bg-elev);
