@@ -22,6 +22,8 @@ const PROC_INTERVAL_MS = 5_000;
 const PROC_MAX_SPIKES = 500;
 const PROC_SPIKE_SYSTEM = 70;
 const PROC_SPIKE_PROCESS = 80;
+const SPIKE_QUERY_INTERVAL_MS = 10_000;
+const SPIKE_MAX_QUERIES = 10;
 const PROC_SPIKES_FILE = path.join(DATA_DIR, 'process-spikes.json');
 const SCAN_ROOT = process.env.SCAN_DIR || '/var/www';
 // Keyword global (dipisah koma) untuk menyembunyikan project dari non-superadmin.
@@ -506,6 +508,40 @@ function pickSpikeProc(row) {
   return row ? { pid: row.pid, user: row.user, cpu: row.cpu, mem: row.mem, cmd: row.cmd } : null;
 }
 
+function isMysqlProc(row) {
+  return Boolean(row) && /^(mysqld|mariadbd)$/.test(path.basename(String(row.cmd || '').split(' ')[0]));
+}
+
+// Saat mysqld jadi biang spike, ambil query yang sedang jalan dari PROCESSLIST dan simpan di episode.
+// Snapshot hanya sekali per SPIKE_QUERY_INTERVAL_MS; query yang selesai di antara dua snapshot tidak tertangkap.
+let spikeQueryBusy = false;
+let spikeQueryAt = 0;
+async function captureSpikeQueries(ep) {
+  if (spikeQueryBusy || Date.now() - spikeQueryAt < SPIKE_QUERY_INTERVAL_MS) return;
+  spikeQueryBusy = true;
+  spikeQueryAt = Date.now();
+  try {
+    const r = await getMysqlProcessList(null, 4000);
+    if (!r.ok) return;
+    const byKey = new Map((ep.queries || []).map((q) => [`${q.user}|${q.db}|${q.info}`, q]));
+    for (const row of r.rows) {
+      if (!row.info || ['Sleep', 'Daemon', 'Binlog Dump'].includes(row.command)) continue;
+      const key = `${row.user}|${row.db}|${row.info.slice(0, 1000)}`;
+      const q = byKey.get(key);
+      if (q) {
+        q.time = Math.max(q.time, row.time);
+        q.seen += 1;
+      } else {
+        byKey.set(key, { user: row.user, host: row.host, db: row.db, state: row.state, time: row.time, seen: 1, info: row.info.slice(0, 1000) });
+      }
+    }
+    ep.queries = [...byKey.values()].sort((a, b) => b.time - a.time).slice(0, SPIKE_MAX_QUERIES);
+    procSpikesDirty = true;
+  } finally {
+    spikeQueryBusy = false;
+  }
+}
+
 function recordProcessSpike(systemCpu, top) {
   const topProc = top[0] || null;
   const processCpu = topProc ? topProc.cpu : 0;
@@ -514,8 +550,10 @@ function recordProcessSpike(systemCpu, top) {
   const now = Date.now();
   const last = processSpikes[processSpikes.length - 1];
   const top5 = top.slice(0, 5).map(pickSpikeProc);
+  let ep;
 
   if (last && now - last.lastSeen < 60_000 && (last.top ? last.top.pid : null) === (topProc ? topProc.pid : null)) {
+    ep = last;
     last.lastSeen = now;
     last.durationSec = Math.round((now - last.start) / 1000);
     last.peakCpu = Math.max(last.peakCpu || 0, systemCpu);
@@ -526,7 +564,7 @@ function recordProcessSpike(systemCpu, top) {
     }
     last.samples = (last.samples || 1) + 1;
   } else {
-    processSpikes.push({
+    ep = {
       id: String(now),
       start: now,
       lastSeen: now,
@@ -536,10 +574,12 @@ function recordProcessSpike(systemCpu, top) {
       top: pickSpikeProc(topProc),
       top5,
       samples: 1,
-    });
+    };
+    processSpikes.push(ep);
     if (processSpikes.length > PROC_MAX_SPIKES) processSpikes = processSpikes.slice(-PROC_MAX_SPIKES);
   }
   procSpikesDirty = true;
+  if (isMysqlProc(topProc)) captureSpikeQueries(ep).catch(() => {});
 }
 
 function sampleProcesses() {
@@ -2018,9 +2058,9 @@ async function listDatabases(session) {
 
 // Query MySQL yang sedang berjalan (SHOW PROCESSLIST). Koneksi monitor sendiri dikecualikan.
 // Output `mysql -B` meng-escape \n \t \\ di dalam nilai, jadi di-unescape setelah split per-baris.
-async function getMysqlProcessList(session) {
+async function getMysqlProcessList(session, timeout = 8000) {
   const sql = "SELECT ID, USER, SUBSTRING_INDEX(HOST, ':', 1), IFNULL(DB, ''), COMMAND, TIME, IFNULL(STATE, ''), IFNULL(LEFT(INFO, 2000), '') FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() ORDER BY TIME DESC LIMIT 500";
-  const r = await runFile('mysql', ['-BNe', sql], { timeout: 8000 });
+  const r = await runFile('mysql', ['-BNe', sql], { timeout });
   if (!r.ok) return { ok: false, error: 'Gagal membaca processlist MySQL: ' + r.output.trim().slice(0, 300) };
   const unesc = (v) => v.replace(/\\([nt\\])/g, (_, c) => (c === 'n' ? '\n' : c === 't' ? '\t' : '\\'));
   const rows = [];
@@ -2029,7 +2069,7 @@ async function getMysqlProcessList(session) {
     const f = line.split('\t');
     if (f.length < 8) continue;
     const row = { id: Number(f[0]), user: f[1], host: f[2], db: f[3], command: f[4], time: Number(f[5]) || 0, state: f[6], info: unesc(f.slice(7).join('\t')) };
-    if (isHidden(session, [row.db, row.user, row.info])) continue;
+    if (session && isHidden(session, [row.db, row.user, row.info])) continue;
     rows.push(row);
   }
   return { ok: true, time: Date.now(), rows };
@@ -2917,7 +2957,8 @@ const server = http.createServer(async (req, res) => {
       spikes = processSpikes
         .filter((s) => !since || s.lastSeen >= since)
         .slice(-100)
-        .reverse();
+        .reverse()
+        .map((sp) => sp.queries ? { ...sp, queries: sp.queries.filter((q) => !isHidden(session, [q.db, q.user, q.info])) } : sp);
     }
     return send(res, 200, JSON.stringify({
       time: Date.now(),

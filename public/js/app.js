@@ -795,6 +795,12 @@ function showSpikeDetail(index) {
   for (const p of (s.top5 || [])) {
     lines.push(`  ${String(p.cpu).padStart(6)}%  PID ${p.pid}  ${p.user}  ${p.cmd}`);
   }
+  if (s.queries && s.queries.length) {
+    lines.push('', 'MySQL queries running during the spike (longest first):');
+    for (const q of s.queries) {
+      lines.push(`  ${fmtProcDuration(q.time)} · ${q.user}@${q.db || '-'} · seen ${q.seen}x${q.state ? ' · ' + q.state : ''}`, `    ${q.info}`);
+    }
+  }
   openModalText(`CPU spike · ${new Date(s.start).toLocaleString([])}`, lines.join('\n'));
 }
 
