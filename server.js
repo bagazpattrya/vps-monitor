@@ -1726,18 +1726,44 @@ function pullGitProject(targetPath) {
         }
         exec(stashCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (serr, sstdout, sstderr) => {
           const sout = prep + (sstdout || '') + (sstderr || '');
+          // Kalau stash gagal, jangan lanjut: reset --hard di bawah bisa menghapus perubahan lokal.
+          if (serr) return resolve({ ok: false, error: 'Gagal menyimpan local changes ke stash: ' + serr.message, output: out + '\n--- autostash ---\n' + sout });
           exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err2, stdout2, stderr2) => {
             gitCache.time = 0;
             const out2 = out + '\n--- autostash ---\n' + sout + '\n--- retry pull ---\n' + ((stdout2 || '') + (stderr2 || ''));
-            if (err2) return resolve({ ok: false, error: err2.message + ' (local changes di-stash otomatis, cek git stash list)', output: out2 });
+            if (err2) {
+              // Pull kedua juga gagal (mis. conflict dengan perubahan upstream). Jangan tinggalkan
+              // merge/rebase belum selesai, karena pull berikutnya akan gagal "unmerged files".
+              for (const a of ['merge --abort', 'rebase --abort', 'cherry-pick --abort']) {
+                try { execSync(`${asOwner(a)} 2>&1`, { timeout: 15_000 }); } catch {}
+              }
+              try { execSync(`${asOwner('reset --hard HEAD')} 2>&1`, { timeout: 15_000 }); } catch {}
+              gitCache.time = 0;
+              return resolve({ ok: false, error: err2.message + ' (perubahan lokal aman di git stash, repo dikembalikan ke kondisi bersih)', output: out2 });
+            }
             // Pull berhasil: kembalikan perubahan lokal yang tadi di-stash supaya fix lokal tidak hilang.
             let topStash = '';
             try { topStash = execSync(`${asOwner('stash list -1 --format=%s')} 2>&1`, { timeout: 10_000 }).toString().trim(); } catch {}
             if (!topStash.endsWith(stashMsg)) return resolve(runFix(out2));
             exec(asOwner('stash pop'), { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (perr, pstdout, pstderr) => {
               gitCache.time = 0;
-              const out3 = out2 + '\n--- restore local changes (stash pop) ---\n' + ((pstdout || '') + (pstderr || ''));
-              if (perr) return resolve({ ok: false, error: 'Pull berhasil, tapi restore local changes gagal (conflict). Perubahan lokal aman di git stash, cek repo: ' + targetPath, output: out3 });
+              let out3 = out2 + '\n--- restore local changes (stash pop) ---\n' + ((pstdout || '') + (pstderr || ''));
+              // stash pop yang conflict meninggalkan index unmerged + conflict marker di file.
+              // Stash tetap tersimpan, jadi bersihkan working tree agar pull berikutnya tidak gagal.
+              if (!perr) {
+                let checkOut = '';
+                try { execSync(`${asOwner('diff --check')} 2>&1`, { timeout: 10_000 }); }
+                catch (e) { checkOut = (e.stdout || '') + (e.stderr || ''); }
+                if (/leftover conflict marker/i.test(checkOut)) {
+                  perr = new Error('leftover conflict marker');
+                  out3 += '\n' + checkOut;
+                }
+              }
+              if (perr) {
+                try { execSync(`${asOwner('reset --hard HEAD')} 2>&1`, { timeout: 15_000 }); } catch {}
+                gitCache.time = 0;
+                return resolve({ ok: false, error: 'Pull berhasil, tapi perubahan lokal tidak bisa digabung otomatis (conflict). Perubahan lokal aman di git stash; repo dikembalikan ke versi hasil pull. Cek repo: ' + targetPath, output: out3 });
+              }
               return resolve(runFix(out3));
             });
           });
