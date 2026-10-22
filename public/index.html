@@ -906,19 +906,20 @@
     <div style="font-size:12px;color:var(--mut);margin-bottom:14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
       Rsync <code>storage/app/public/</code> dari hosting lama. Password SSH hanya sekali pakai (via env, tidak tampil di <code>ps</code>/log) dan <b>tidak disimpan</b>. Transfer jalan di screen agar selamat dari putus koneksi/restart panel.
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+    <fieldset id="xForm" class="xfer-form"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--mut)">Project (folder di /var/www)*<br><input id="xProject" class="input" style="width:100%" placeholder="oso-marketing" /></label>
       <label style="font-size:12px;color:var(--mut)">IP host lama*<br><input id="xHost" class="input" style="width:100%" placeholder="82.180.152.60" /></label>
       <label style="font-size:12px;color:var(--mut)">SSH port<br><input id="xPort" class="input" style="width:100%" placeholder="22" /></label>
       <label style="font-size:12px;color:var(--mut)">SSH username*<br><input id="xUser" class="input" style="width:100%" placeholder="u882031126" /></label>
       <label style="font-size:12px;color:var(--mut)">Auth<br><select id="xAuth" class="input" style="width:100%"><option value="password">Password sekali pakai</option><option value="key">SSH key (sudah terpasang)</option></select></label>
       <label style="font-size:12px;color:var(--mut)">Password SSH (mode password)<br><input id="xPassword" type="password" class="input" style="width:100%" placeholder="••••••••" /></label>
-      <label style="font-size:12px;color:var(--mut;grid-column:1/-1)">Source path di host lama* (isi folder ini yang dicopy)<br><input id="xSrc" class="input" style="width:100%" placeholder="/home/u882031126/domains/theoso.id/project-marketing-management/storage/app/public/" /></label>
-    </div>
+      <label style="font-size:12px;color:var(--mut);grid-column:1/-1">Source path di host lama* (isi folder ini yang dicopy)<br><input id="xSrc" class="input" style="width:100%" placeholder="/home/u882031126/domains/theoso.id/project-marketing-management/storage/app/public/" /></label>
+    </div></fieldset>
     <div style="display:flex;gap:10px;margin-bottom:12px">
       <button class="btn ok" id="xStart" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">⇄ Start Transfer</button>
       <button class="btn danger" id="xCancel" style="display:none">✕ Cancel</button>
     </div>
+    <div id="xBar" class="xfer-bar" style="display:none"><span></span></div>
     <div id="xStatus" style="font-size:12px;color:var(--mut);margin-bottom:8px">Belum ada transfer.</div>
     <pre id="xLog" style="background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;max-height:320px;overflow:auto;white-space:pre-wrap">Log transfer...</pre>
   </div>

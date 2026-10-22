@@ -920,3 +920,13 @@ tr.proc-row-spike:hover { background: rgba(239, 68, 68, 0.14) !important; }
 .err-row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 @media (max-width: 720px) { .err-actions-note { display: none; } }
 .badge.crit { background: rgba(239, 68, 68, 0.18); color: var(--bad); border-color: rgba(239, 68, 68, 0.35); }
+
+/* Transfer storage: indikator berjalan + kunci form */
+.xfer-form { border: 0; padding: 0; margin: 0; min-width: 0; }
+.xfer-form:disabled { opacity: 0.55; }
+.btn.busy, .btn.busy:disabled { opacity: 1; cursor: not-allowed; animation: xfer-pulse 1.6s ease-in-out infinite; }
+.xfer-spin { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: nav-spin 0.8s linear infinite; }
+.xfer-bar { height: 3px; border-radius: 3px; background: var(--border); overflow: hidden; margin-bottom: 8px; }
+.xfer-bar span { display: block; width: 35%; height: 100%; background: var(--ok); border-radius: 3px; animation: xfer-slide 1.2s ease-in-out infinite; }
+@keyframes xfer-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(290%); } }
+@keyframes xfer-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.35); } 50% { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); } }

@@ -2102,6 +2102,9 @@ async function deployJobsRefresh(silent) {
     $('depJobs').innerHTML = d.jobs.length ? d.jobs.map(j =>
       `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : '🚀'} ${j.label} — ${j.status}</button>`
     ).join('') : '<span style="color:var(--mut);font-size:12px">Belum ada job.</span>';
+    // setelah reload halaman: sambung lagi ke transfer yang masih jalan supaya tombol tetap terkunci
+    const live = d.jobs.find(j => j.type === 'transfer' && (j.status === 'running' || j.status === 'running-transfer'));
+    if (live && !xferActiveId) { xferActiveId = live.id; xferPoll(); }
   } catch (e) { if (!silent) alert('Error: ' + e.message); }
 }
 async function depSubmit(dryRun) {
@@ -2119,21 +2122,34 @@ async function depSubmit(dryRun) {
     depShow(r.id);
   } catch (e) { alert('Error: ' + e.message); }
 }
+let xferSubmitting = false;
+function setXferBusy(on) {
+  const b = $('xStart');
+  b.disabled = on;
+  b.classList.toggle('busy', on);
+  b.innerHTML = on ? '<span class="xfer-spin"></span> Transfer berjalan…' : '⇄ Start Transfer';
+  $('xForm').disabled = on;
+  $('xBar').style.display = on ? '' : 'none';
+}
 async function xferSubmit() {
+  if (xferSubmitting || $('xStart').disabled) return;
   const body = {
     project: $('xProject').value.trim(), host: $('xHost').value.trim(), port: $('xPort').value.trim() || '22',
     user: $('xUser').value.trim(), authType: $('xAuth').value, password: $('xPassword').value, src: $('xSrc').value.trim(),
   };
   if (!body.project || !body.host || !body.user || !body.src) return alert('Isi project, host, user, source path');
   if (body.authType === 'password' && !body.password) return alert('Isi password SSH');
-  if (!confirm(`Start transfer ke ${body.project}/storage/app/public dari ${body.user}@${body.host}?`)) return;
+  xferSubmitting = true;
   try {
+    if (!confirm(`Start transfer ke ${body.project}/storage/app/public dari ${body.user}@${body.host}?`)) return;
+    setXferBusy(true);
     const r = await api('POST', '/api/deploy/transfer', body);
     $('xPassword').value = '';
     xferActiveId = r.id;
     $('xCancel').style.display = '';
     xferPoll();
-  } catch (e) { alert('Error: ' + e.message); }
+  } catch (e) { setXferBusy(false); alert('Error: ' + e.message); }
+  finally { xferSubmitting = false; }
 }
 async function xferPoll() {
   if (!xferActiveId) return;
@@ -2142,11 +2158,16 @@ async function xferPoll() {
     const t = d.transfer || {};
     $('xStatus').innerHTML = `Transfer <strong>${t.name || ''}</strong>: ` +
       (t.exitCode !== null && t.exitCode !== undefined ? (t.exitCode === 0 ? '<strong style="color:var(--ok)">SELESAI OK</strong>' : `<strong style="color:var(--bad)">GAGAL (exit ${t.exitCode})</strong>`) : (t.running ? '<strong>BERJALAN…</strong> (biarkan, bisa lama untuk folder besar)' : `status job: ${d.status}`));
-    $('xLog').textContent = t.logTail || '(belum ada log)';
-    if ((t.exitCode === null || t.exitCode === undefined) && t.running !== false) {
+    $('xLog').textContent = t.logTail || (t.name ? '(belum ada log)' : '(menyiapkan: validasi, cek koneksi, install sshpass jika perlu…)');
+    const active = d.status === 'running' || d.status === 'running-transfer';
+    const finished = t.exitCode !== null && t.exitCode !== undefined;
+    if (active && !finished) {
+      setXferBusy(true);
+      $('xCancel').style.display = '';
       clearTimeout(xferPollTimer);
-      xferPollTimer = setTimeout(xferPoll, 5000);
+      xferPollTimer = setTimeout(xferPoll, active && !t.name ? 2000 : 5000);
     } else {
+      setXferBusy(false);
       $('xCancel').style.display = 'none';
     }
     deployJobsRefresh(true);

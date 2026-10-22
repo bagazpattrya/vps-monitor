@@ -2667,7 +2667,7 @@ async function runTransferJob(job, t) {
     const sshBase = `ssh -p ${port} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10`;
     const rsyncInner = `rsync -avz --progress -e ${shq(sshBase)} ${shq(t.user + '@' + t.host + ':' + src + '/')} ${shq(dest)} >> ${shq(job.transfer.logFile)} 2>&1; echo "RSYNC_EXIT:$?" >> ${shq(job.transfer.logFile)}`;
     const launch = t.authType === 'password'
-      ? `env SSHPASS=${shq(t.password)} screen -S ${shq(name)} -dm bash -c ${shq(`export SSHPASS; sshpass -e ${rsyncInner}`)}}`
+      ? `env SSHPASS=${shq(t.password)} screen -S ${shq(name)} -dm bash -c ${shq(`export SSHPASS; sshpass -e ${rsyncInner}`)}`
       : `screen -S ${shq(name)} -dm bash -c ${shq(rsyncInner)}`;
     try { fs.writeFileSync(job.transfer.logFile, `transfer ${name} dimulai ${new Date().toISOString()}\n`); } catch {}
     r = await runCmd(`echo "" >> ${shq(job.transfer.logFile)} 2>/dev/null; ${launch} 2>&1`, { timeout: 15000 });
@@ -3577,7 +3577,10 @@ const server = http.createServer(async (req, res) => {
       authType: body.authType === 'key' ? 'key' : 'password',
       password: String(body.password || ''), src: String(body.src || '').trim(),
     };
+    const busy = [...DEPLOY_JOBS.values()].find((j) => j.type === 'transfer' && j.xferProject === t.project && (j.status === 'running' || j.status === 'running-transfer'));
+    if (busy) return send(res, 409, JSON.stringify({ error: `Transfer untuk ${t.project} masih berjalan (${busy.id}). Tunggu selesai atau cancel dulu.` }));
     const job = newJob('transfer', `${t.project} <- ${t.user}@${t.host}`, [t.password]);
+    job.xferProject = t.project;
     audit(session.user, 'transfer.start', t.project, `${t.user}@${t.host}:${t.port}`);
     runTransferJob(job, t).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
