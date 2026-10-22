@@ -446,7 +446,7 @@ function renderSites() {
       <td>${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'}</td>
       <td>${target}</td>
       <td style="color:var(--mut);font-family:var(--font-mono)" title="${escHtml(s.dir)}">${escHtml(s.file)}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn-sm" data-cfg-site="${escHtml(s.id)}" title="Lihat config nginx yang aktif">Config</button> <button class="btn-sm danger" data-del-site="${escHtml(s.id)}">Hapus</button></td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn-sm" data-cfg-site="${escHtml(s.id)}" title="Lihat config nginx yang aktif">Config</button> <button class="btn-sm danger" data-del-site="${escHtml(s.id)}" title="Hapus config nginx saja">Hapus config</button> <button class="btn-sm danger" data-und-site="${escHtml(s.id)}" title="Hapus deployment: nginx + folder + git">Undeploy</button></td>
     </tr>`;
   }).join('');
 }
@@ -523,6 +523,10 @@ const ACTIVITY_LABELS = {
   'backup.run': ['backup run', 'warn'],
   'backup.download': ['backup download', ''],
   'deploy.start': ['deploy', 'warn'],
+  'undeploy.start': ['undeploy', 'down'],
+  'undeploy.done': ['undeploy done', 'down'],
+  'undeploy.denied': ['undeploy DENIED', 'down'],
+  'undeploy.fail': ['undeploy FAILED', 'down'],
   'transfer.start': ['transfer', 'warn'],
   'transfer.cancel': ['transfer cancel', 'down'],
   'user.create': ['user create', 'warn'],
@@ -2016,7 +2020,7 @@ function navigateView(name, refresh = true) {
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
     if (view === 'activity') { activity(); activityAutoToggle(); }
-    if (view === 'deploy') deployJobsRefresh();
+    if (view === 'deploy') { deployJobsRefresh(); undLoadTargets(); }
     if (view === 'sites') sites();
   }
 }
@@ -2100,7 +2104,7 @@ async function deployJobsRefresh(silent) {
     const d = await api('GET', '/api/deploy/jobs');
     $('deployJobsCount').textContent = d.jobs.length;
     $('depJobs').innerHTML = d.jobs.length ? d.jobs.map(j =>
-      `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : '🚀'} ${j.label} — ${j.status}</button>`
+      `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : (j.type === 'undeploy' ? '🗑' : '🚀')} ${j.label} — ${j.status}</button>`
     ).join('') : '<span style="color:var(--mut);font-size:12px">Belum ada job.</span>';
     // setelah reload halaman: sambung lagi ke transfer yang masih jalan supaya tombol tetap terkunci
     const live = d.jobs.find(j => j.type === 'transfer' && (j.status === 'running' || j.status === 'running-transfer'));
@@ -2173,6 +2177,172 @@ async function xferPoll() {
     deployJobsRefresh(true);
   } catch (e) { $('xStatus').textContent = 'Error: ' + e.message; }
 }
+
+// ---- Un-deploy ----
+let undTargets = [];
+let undActiveId = null;
+let undPollTimer = null;
+
+function undRenderInfo() {
+  const t = undTargets.find((x) => x.dir === $('undTarget').value);
+  const db = t && t.db;
+  const dbShared = !!(db && db.sharedWith && db.sharedWith.length);
+  const userShared = !!(db && db.userSharedWith && db.userSharedWith.length);
+  const dbLocal = !!(db && db.local !== false);
+  $('undDropDb').disabled = !db || dbShared || !dbLocal;
+  $('undDropDbUser').disabled = !db || !db.user || dbShared || userShared || !dbLocal;
+  $('undRemoveSsl').disabled = !t || !t.ssl;
+  if (!db || dbShared || !dbLocal) $('undDropDb').checked = false;
+  if (!db || !db.user || dbShared || userShared || !dbLocal) $('undDropDbUser').checked = false;
+  if (!t || !t.ssl) $('undRemoveSsl').checked = false;
+  $('undDbLabel').textContent = db
+    ? `(${db.name}${db.user ? ' / ' + db.user : ''}${dbShared ? ' — dipakai juga oleh ' + db.sharedWith.join(', ') : ''}${!dbLocal ? ' — host/port bukan MySQL lokal' : ''})`
+    : '';
+  $('undDbUserLabel').textContent = db && db.user
+    ? `(${db.user}${userShared ? ' — dipakai juga oleh ' + db.userSharedWith.join(', ') : ''})`
+    : '';
+  if (!t) {
+    $('undDropDb').checked = false;
+    $('undDropDbUser').checked = false;
+    $('undRemoveSsl').checked = false;
+    $('undInfo').textContent = 'Pilih project...';
+    $('undStart').disabled = true;
+    return;
+  }
+  const domains = t.domains.length
+    ? t.domains.map(escHtml).join(', ')
+    : '<span style="color:var(--warn)">(tanpa vhost nginx)</span>';
+  const dbTxt = db
+    ? `${escHtml(db.name)}${db.user ? ' / ' + escHtml(db.user) : ''} <span style="opacity:.7">(${escHtml(db.source)}${db.host ? ', host ' + escHtml(db.host) : ''})</span>` +
+      (dbShared ? ` <span style="color:var(--warn)">— DB dipakai juga oleh ${escHtml(db.sharedWith.join(', '))}</span>` : '') +
+      (userShared ? ` <span style="color:var(--warn)">— user dipakai juga oleh ${escHtml(db.userSharedWith.join(', '))}</span>` : '') +
+      (!dbLocal ? ' <span style="color:var(--warn)">— host/port bukan MySQL lokal, drop DB dinonaktifkan</span>' : '')
+    : '<span style="color:var(--warn)">tidak terdeteksi</span>';
+  $('undInfo').innerHTML = `<div><strong>${escHtml(t.dir)}</strong> · ${escHtml(t.framework)}${t.git ? ' · git repo' : ''}</div>
+    <div style="font-family:var(--font-mono);font-size:11px;margin-top:3px">${escHtml(t.path)}</div>
+    <div style="margin-top:4px">Domain: ${domains}</div>
+    <div style="margin-top:4px">Database: ${dbTxt}</div>`;
+  $('undStart').disabled = false;
+}
+
+async function undLoadTargets() {
+  try {
+    const d = await api('GET', '/api/undeploy/targets');
+    undTargets = d.targets || [];
+    const prev = $('undTarget').value;
+    $('undTarget').innerHTML = undTargets.length
+      ? '<option value="">— pilih project —</option>' + undTargets.map((t) => {
+          const dm = t.domains.length ? ' — ' + t.domains.join(', ') : '';
+          const db = t.db ? ' — DB ' + t.db.name : '';
+          return `<option value="${escHtml(t.dir)}">${escHtml(t.dir + dm + db)}</option>`;
+        }).join('')
+      : '<option value="">Tidak ada project terdeteksi</option>';
+    if (undTargets.some((t) => t.dir === prev)) $('undTarget').value = prev;
+    undRenderInfo();
+  } catch (e) {
+    undTargets = [];
+    $('undTarget').innerHTML = '<option value="">Gagal memuat project</option>';
+    $('undInfo').textContent = 'Error: ' + e.message;
+    $('undStart').disabled = true;
+  }
+}
+
+async function openUndeployForSite(siteId) {
+  const s = rawSites.find((x) => x.id === siteId);
+  if (!s) return;
+  if (!s.root) return alert('Site ini tidak punya root folder, jadi tidak ada project yang bisa di-undeploy.');
+  // Tampilkan view dulu tanpa refresh, pilih target, baru ubah hash. Kalau hash diubah
+  // lebih awal, hashchange bisa memuat ulang daftar dan menghapus pilihan yang baru diset.
+  navigateView('deploy', false);
+  await undLoadTargets();
+  // Hanya root project itu sendiri (WordPress) atau <project>/public (Laravel).
+  // Jangan pakai startsWith: root /var/www/group/subproject bukan milik target /var/www/group.
+  const root = s.root.replace(/\/+$/, '');
+  const t = undTargets.find((x) => root === x.path || root === x.path + '/public');
+  if (!t) return alert(`Project untuk ${s.root} tidak terdeteksi sebagai folder project langsung di server.`);
+  $('undTarget').value = t.dir;
+  undRenderInfo();
+  if (location.hash !== '#/deploy') location.hash = '#/deploy';
+  $('undeployCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(() => $('undConfirm').focus(), 250);
+}
+
+async function undSubmit() {
+  const t = undTargets.find((x) => x.dir === $('undTarget').value);
+  if (!t) return alert('Pilih project yang akan di-undeploy');
+  const confirmName = $('undConfirm').value.trim();
+  if (confirmName !== t.dir) return alert(`Ketik nama folder persis: ${t.dir}`);
+  if (!$('undPassword').value) return alert('Password akun wajib diisi');
+  const dropDb = $('undDropDb').checked && !$('undDropDb').disabled && t.db && t.db.local !== false;
+  const dropDbUser = dropDb && $('undDropDbUser').checked && !$('undDropDbUser').disabled;
+  const removeSsl = $('undRemoveSsl').checked && !$('undRemoveSsl').disabled;
+  const lines = [
+    `UN-DEPLOY ${t.dir}`,
+    '',
+    `Folder  : ${t.path} (termasuk .git)`,
+    `Nginx   : ${t.domains.join(', ') || '(tidak ada vhost)'}`,
+    'Worker  : supervisor + cron project dihapus',
+    dropDb ? `Database: ${t.db.name} (backup otomatis dulu)` : 'Database: dibiarkan',
+    dropDbUser ? `DB user : ${t.db.user}` : 'DB user : dibiarkan',
+    removeSsl ? `SSL     : ${t.domains.join(', ') || '(tidak ada)'}` : 'SSL     : dibiarkan',
+    '',
+    'Tindakan ini TIDAK BISA DIBATALKAN. Lanjutkan?',
+  ];
+  if (!confirm(lines.join('\n'))) return;
+  const btn = $('undStart');
+  btn.disabled = true;
+  $('undStatus').textContent = 'Memulai un-deploy...';
+  $('undOutput').textContent = '';
+  $('undSteps').innerHTML = '';
+  try {
+    const r = await api('POST', '/api/undeploy', {
+      dir: t.dir, confirm: confirmName, password: $('undPassword').value,
+      dbName: dropDb && t.db ? t.db.name : '',
+      dbUser: dropDbUser && t.db ? t.db.user : '',
+      dropDb, dropDbUser, removeSsl,
+    });
+    $('undPassword').value = '';
+    undActiveId = r.id;
+    undPoll();
+    deployJobsRefresh(true);
+  } catch (e) {
+    btn.disabled = false;
+    $('undStatus').textContent = 'Gagal: ' + e.message;
+    alert('Error: ' + e.message);
+  }
+}
+
+async function undPoll() {
+  if (!undActiveId) return;
+  try {
+    const d = await api('GET', `/api/deploy/status?id=${encodeURIComponent(undActiveId)}`);
+    const cls = d.status === 'done' ? 'ok' : (d.status === 'failed' ? 'down' : '');
+    $('undStatus').innerHTML = `<span class="pill ${cls}">${escHtml(d.status)}</span> ${escHtml(d.label)}`;
+    $('undSteps').innerHTML = d.steps.map(depStepPill).join('') || '<span style="color:var(--mut);font-size:12px">Menunggu...</span>';
+    const last = [...d.steps].reverse().find((s) => s.output) || d.steps[d.steps.length - 1];
+    $('undOutput').textContent = (last && last.output ? `--- ${last.name} ---\n${last.output}` : '(belum ada output)');
+    deployJobsRefresh(true);
+    if (d.status === 'running') {
+      clearTimeout(undPollTimer);
+      undPollTimer = setTimeout(undPoll, 3000);
+    } else {
+      undActiveId = null;
+      $('undStart').disabled = false;
+      await undLoadTargets();
+    }
+  } catch (e) {
+    $('undStatus').textContent = 'Error: ' + e.message;
+    $('undStart').disabled = false;
+    undActiveId = null;
+  }
+}
+
+// Un-deploy events
+$('undRefresh').addEventListener('click', undLoadTargets);
+$('undTarget').addEventListener('change', undRenderInfo);
+$('undStart').addEventListener('click', undSubmit);
+$('undConfirm').addEventListener('keydown', (e) => { if (e.key === 'Enter') undSubmit(); });
+$('undPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') undSubmit(); });
 
 // UI Events
 $('gitSearch').addEventListener('input', renderGitProjects);
@@ -2477,6 +2647,8 @@ $('sitesList').addEventListener('click', (e) => {
   if (c) return openSiteConfig(c.dataset.cfgSite);
   const b = e.target.closest('[data-del-site]');
   if (b) openSiteDelete(b.dataset.delSite);
+  const u = e.target.closest('[data-und-site]');
+  if (u) return openUndeployForSite(u.dataset.undSite);
 });
 $('siteCfgClose').addEventListener('click', () => $('siteCfgModal').classList.remove('open'));
 $('siteCfgModal').addEventListener('click', (e) => { if (e.target === $('siteCfgModal')) $('siteCfgModal').classList.remove('open'); });

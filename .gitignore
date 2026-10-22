@@ -4,5 +4,7 @@ data/users.json
 data/activity.jsonl
 data/process-spikes.json
 data/*.log
+data/removed-sites/
+data/removed-dbs/
 .opencode/
 .env

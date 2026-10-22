@@ -1339,12 +1339,24 @@ function hiddenKeywordsFor(session) {
   if (!session || session.superadmin) return [];
   return [...new Set([...GLOBAL_HIDDEN_KEYWORDS, ...(session.hiddenKeywords || [])])];
 }
+// Keyword dicocokkan sebagai kata utuh, bukan substring: keyword pendek seperti "eo"
+// tidak boleh ikut menyembunyikan "neogate" (n-eo-gate). Pemisah = selain huruf/angka.
+const KEYWORD_RE_CACHE = new Map();
+function keywordRegex(k) {
+  let re = KEYWORD_RE_CACHE.get(k);
+  if (!re) {
+    const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`(^|[^a-z0-9])${esc}(?=$|[^a-z0-9])`, 'i');
+    KEYWORD_RE_CACHE.set(k, re);
+  }
+  return re;
+}
 // true bila nilai (string, atau objek yang di-JSON-kan) mengandung salah satu keyword.
 function isHidden(session, value) {
   const kws = hiddenKeywordsFor(session);
   if (!kws.length || value == null) return false;
   const s = (typeof value === 'string' ? value : JSON.stringify(value)).toLowerCase();
-  return kws.some((k) => s.includes(k));
+  return kws.some((k) => keywordRegex(k).test(s));
 }
 
 function getGitProjects(force = false) {
@@ -1703,7 +1715,8 @@ function pullGitProject(targetPath) {
         const asOwner = (a) => (uid !== null && uid !== me)
           ? `sudo -H -u "#${uid}" git -C "${targetPath}" ${a}`
           : `git -C "${targetPath}" ${a}`;
-        const stashCmd = asOwner(`stash push --include-untracked -m "auto-panel ${new Date().toISOString()}"`);
+        const stashMsg = `auto-panel ${new Date().toISOString()}`;
+        const stashCmd = asOwner(`stash push --include-untracked -m "${stashMsg}"`);
         let prep = '';
         if (stuck) {
           for (const a of ['merge --abort', 'rebase --abort', 'cherry-pick --abort', 'reset']) {
@@ -1717,7 +1730,16 @@ function pullGitProject(targetPath) {
             gitCache.time = 0;
             const out2 = out + '\n--- autostash ---\n' + sout + '\n--- retry pull ---\n' + ((stdout2 || '') + (stderr2 || ''));
             if (err2) return resolve({ ok: false, error: err2.message + ' (local changes di-stash otomatis, cek git stash list)', output: out2 });
-            return resolve(runFix(out2));
+            // Pull berhasil: kembalikan perubahan lokal yang tadi di-stash supaya fix lokal tidak hilang.
+            let topStash = '';
+            try { topStash = execSync(`${asOwner('stash list -1 --format=%s')} 2>&1`, { timeout: 10_000 }).toString().trim(); } catch {}
+            if (!topStash.endsWith(stashMsg)) return resolve(runFix(out2));
+            exec(asOwner('stash pop'), { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (perr, pstdout, pstderr) => {
+              gitCache.time = 0;
+              const out3 = out2 + '\n--- restore local changes (stash pop) ---\n' + ((pstdout || '') + (pstderr || ''));
+              if (perr) return resolve({ ok: false, error: 'Pull berhasil, tapi restore local changes gagal (conflict). Perubahan lokal aman di git stash, cek repo: ' + targetPath, output: out3 });
+              return resolve(runFix(out3));
+            });
           });
         });
         return;
@@ -2247,12 +2269,20 @@ function jobStep(job, name, status, output) {
   if (clean) st.output = (st.output ? st.output + '\n' : '') + clean.slice(-8000);
   try { fs.appendFileSync(job.logFile, `\n===== ${name} [${status}] =====\n${clean.slice(-8000)}`); } catch {}
 }
-function newJob(type, label, secrets) {
+function newJob(type, label, secrets, owner) {
   const id = `dep-${Date.now().toString(36)}-${(++deploySeq).toString(36)}`;
-  const job = { id, type, label, status: 'running', steps: [], secrets: secrets || [], createdAt: Date.now(), logFile: path.join(DATA_DIR, `${id}.log`) };
+  const job = { id, type, label, owner: owner || null, status: 'running', steps: [], secrets: secrets || [], createdAt: Date.now(), logFile: path.join(DATA_DIR, `${id}.log`) };
   DEPLOY_JOBS.set(id, job);
   if (DEPLOY_JOBS.size > 20) { const first = DEPLOY_JOBS.keys().next().value; DEPLOY_JOBS.delete(first); }
   return job;
+}
+// Job selalu terlihat oleh user yang membuatnya, walaupun labelnya cocok dengan hidden keyword.
+// Tanpa ini, keyword pendek seperti "eo" ikut cocok di tengah kata "n-eo-gate" dan job yang
+// sedang berjalan mendadak balas 404 "Job tidak ada (mungkin server restart)".
+function jobVisible(session, job) {
+  if (!job) return false;
+  if (job.owner && session && String(job.owner).toLowerCase() === String(session.user).toLowerCase()) return true;
+  return !isHidden(session, job.label);
 }
 function jobPublic(job) {
   return { id: job.id, type: job.type, label: job.label, status: job.status, steps: job.steps, createdAt: job.createdAt, warn: job.warn || null };
@@ -2393,6 +2423,12 @@ async function runDeployJob(job, p) {
     const exPath = path.join(dest, '.env.example');
     if (!fs.existsSync(exPath)) throw new Error('.env.example tidak ada (bukan Laravel?)');
     let env = fs.readFileSync(exPath, 'utf8');
+    // Quote nilai .env bila mengandung #/spasi/quote/backslash. Password acak bisa mengandung #;
+    // tanpa quote phpdotenv memotong nilai di # -> "Access denied" walau import SQL sukses.
+    const envVal = (v) => {
+      v = String(v);
+      return /[\s#"'\\]/.test(v) ? `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : v;
+    };
     const setEnv = (k, v) => {
       const re = new RegExp(`^${k}=.*$`, 'm');
       // Function replacer: nilai dengan $ (SMTP password dsb) bukan pola khusus String.replace.
@@ -2405,9 +2441,9 @@ async function runDeployJob(job, p) {
     if (!/^DB_PORT=/m.test(env)) env += '\nDB_PORT=3306\n';
     setEnv('DB_DATABASE', p.dbName);
     setEnv('DB_USERNAME', p.dbUser);
-    setEnv('DB_PASSWORD', p.dbPass);
+    setEnv('DB_PASSWORD', envVal(p.dbPass));
     if (p.appName) setEnv('APP_NAME', `"${p.appName.replace(/"/g, '')}"`);
-    const qv = (v) => (/[\s#]/.test(v) ? `"${v.replace(/"/g, '')}"` : v);
+    const qv = envVal;
     setEnv('MAIL_MAILER', p.mail.mailer);
     if (p.mail.scheme) setEnv('MAIL_SCHEME', p.mail.scheme);
     if (p.mail.mailer === 'smtp') {
@@ -2850,6 +2886,7 @@ async function probeSites(sites) {
 // ---- site delete (backup config -> hapus -> nginx -t -> reload; rollback bila nginx -t gagal) ----
 const REMOVED_SITES_DIR = path.join(DATA_DIR, 'removed-sites');
 const NGINX_AVAILABLE_DIR = process.env.NGINX_AVAILABLE_DIR || '/etc/nginx/sites-available';
+const NGINX_ENABLED_DIR = process.env.NGINX_ENABLED_DIR || '/etc/nginx/sites-enabled';
 
 async function deleteHostedSite(site) {
   if ((site.upstream || '').match(new RegExp(`(127\\.0\\.0\\.1|localhost|\\[::1\\]):${PORT}(\\D|$)`))) {
@@ -2895,6 +2932,417 @@ async function deleteHostedSite(site) {
   const what = removeTarget ? 'symlink + file sites-available' : 'file config';
   if (!r.ok) return { ok: true, backup, warning: 'Config terhapus tapi reload nginx gagal: ' + r.output.trim(), output: `${what} dihapus` };
   return { ok: true, backup, output: `${what} dihapus, nginx di-reload` };
+}
+
+// ---- Un-deploy (hapus deployment: nginx vhost, folder+git, worker/cron; DB/SSL opsional) ----
+// Hanya folder langsung di SCAN_ROOT yang boleh dihapus. Parser .env/wp-config di sini
+// hanya mengambil nama DB/user (tidak pernah password) untuk ditampilkan + opsi drop.
+const REMOVED_DB_DIR = path.join(DATA_DIR, 'removed-dbs');
+
+// Root nginx yang dianggap milik project ini: folder itu sendiri (WordPress) atau
+// <folder>/public (Laravel). Jangan cocokkan <folder>/<subproject> — kalau folder
+// seperti /var/www/bz punya banyak subproject, menghapus bz akan menghapus semuanya.
+function siteRootBelongsToTarget(root, target) {
+  if (!root) return false;
+  const norm = (x) => path.normalize(String(x).trim().replace(/^['"]|['"]$/g, '')).replace(/[\\/]+$/, '');
+  const r = norm(root);
+  const t = norm(target);
+  return r === t || r === t + path.sep + 'public';
+}
+
+function readEnvValue(file, key) {
+  try {
+    const txt = fs.readFileSync(file, 'utf8');
+    const m = txt.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*)$`, 'm'));
+    if (!m) return null;
+    let v = m[1].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    return v.trim() || null;
+  } catch { return null; }
+}
+function readWpDefine(file, key) {
+  try {
+    // Buang komentar dulu supaya define contoh/komentar tidak ikut terbaca.
+    const txt = fs.readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    const m = txt.match(new RegExp(`^\\s*define\\(\\s*['"]${key}['"]\\s*,\\s*['"]([^'"]*)['"]\\s*\\)`, 'm'));
+    return m ? (m[1].trim() || null) : null;
+  } catch { return null; }
+}
+// Panel hanya boleh drop DB yang benar-benar ada di MySQL lokal (socket/host localhost).
+// Jangan sampai DB_HOST remote kebetulan punya nama sama dengan DB lokal lalu yang dihapus DB lokal.
+function dbEndpointLocal(host, port) {
+  const raw = String(host || '').trim().replace(/^['"]|['"]$/g, '');
+  let h = raw;
+  let p = String(port || '').trim().replace(/^['"]|['"]$/g, '');
+  if (raw.startsWith('[')) {
+    const end = raw.indexOf(']');
+    h = end > 0 ? raw.slice(1, end) : raw;
+    const rest = end > 0 ? raw.slice(end + 1) : '';
+    if (/^:\d+$/.test(rest)) p = rest.slice(1);
+  } else {
+    const m = raw.match(/^([^:]+):(\d+)$/);
+    if (m) { h = m[1]; p = m[2]; }
+    else if (raw.includes(':') && !/^[0-9a-f:]+$/i.test(raw)) h = raw.split(':')[0]; // host:/socket/path
+  }
+  h = h.toLowerCase();
+  if (h && h !== 'localhost' && h !== '127.0.0.1' && h !== '::1') return false;
+  if (p && p !== '3306') return false;
+  return true;
+}
+function detectProjectDb(dir) {
+  const ident = (v) => (v && /^[A-Za-z0-9_$-]+$/.test(v) ? v : null);
+  const envPath = path.join(dir, '.env');
+  const conn = readEnvValue(envPath, 'DB_CONNECTION');
+  // Hanya tawarkan drop DB untuk MySQL/MariaDB; sqlite/pgsql jangan disentuh.
+  const envDb = (!conn || /^(mysql|mariadb)$/i.test(conn)) ? ident(readEnvValue(envPath, 'DB_DATABASE')) : null;
+  if (envDb) {
+    const host = readEnvValue(envPath, 'DB_HOST');
+    const port = readEnvValue(envPath, 'DB_PORT');
+    return { name: envDb, user: ident(readEnvValue(envPath, 'DB_USERNAME')), source: '.env', host, port, local: dbEndpointLocal(host, port) };
+  }
+  const wpDb = ident(readWpDefine(path.join(dir, 'wp-config.php'), 'DB_NAME'));
+  if (wpDb) {
+    const host = readWpDefine(path.join(dir, 'wp-config.php'), 'DB_HOST');
+    return { name: wpDb, user: ident(readWpDefine(path.join(dir, 'wp-config.php'), 'DB_USER')), source: 'wp-config.php', host, port: null, local: dbEndpointLocal(host, null) };
+  }
+  return null;
+}
+function undeployTargets(session) {
+  let entries = [];
+  try { entries = fs.readdirSync(SCAN_ROOT, { withFileTypes: true }); } catch { return []; }
+  const panelDir = path.resolve(ROOT);
+  // Pindai DB semua folder langsung (termasuk yang tidak layak di-undeploy) supaya
+  // DB/user yang dipakai project lain tidak pernah ditawarkan untuk di-drop.
+  const dbByDir = new Map();
+  const dbProjects = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    const full = path.resolve(SCAN_ROOT, e.name);
+    if (full === panelDir) continue;
+    try {
+      const st = fs.lstatSync(full);
+      if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    } catch { continue; }
+    const db = detectProjectDb(full);
+    if (!db) continue;
+    const rec = { dir: e.name, db, hidden: isHidden(session, [e.name, full]) };
+    dbByDir.set(e.name, db);
+    dbProjects.push(rec);
+  }
+  const allSites = getHostedSites();
+  const out = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    const full = path.resolve(SCAN_ROOT, e.name);
+    if (full === panelDir) continue; // jangan pernah tawarkan panel monitor sendiri
+    let st;
+    try { st = fs.lstatSync(full); } catch { continue; }
+    if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    const sites = allSites.filter((s) => siteRootBelongsToTarget(s.root, full))
+      .filter((s) => !isHidden(session, [s.file, s.domains, s.root, s.upstream]));
+    const git = fs.existsSync(path.join(full, '.git'));
+    const laravel = fs.existsSync(path.join(full, 'artisan'));
+    const wordpress = fs.existsSync(path.join(full, 'wp-config.php')) || fs.existsSync(path.join(full, 'wp-includes'));
+    if (!sites.length && !git && !laravel && !wordpress) continue;
+    if (isHidden(session, [e.name, full])) continue;
+    out.push({
+      dir: e.name,
+      path: full,
+      domains: [...new Set(sites.flatMap((s) => s.domains).filter(Boolean))],
+      sites: sites.map((s) => ({ id: s.id, file: s.file, dir: s.dir, domains: s.domains, ssl: !!s.ssl })),
+      git,
+      framework: laravel ? 'laravel' : (wordpress ? 'wordpress' : 'other'),
+      db: dbByDir.get(e.name) || detectProjectDb(full),
+      ssl: sites.some((s) => s.ssl),
+    });
+  }
+  // DB / user yang dipakai folder lain jangan ditawarkan untuk di-drop.
+  const dbUsage = new Map();
+  const userUsage = new Map();
+  const addUsage = (map, key, rec) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(rec);
+  };
+  for (const rec of dbProjects) {
+    addUsage(dbUsage, rec.db.name, rec);
+    if (rec.db.user) addUsage(userUsage, rec.db.user, rec);
+  }
+  const label = (rec) => rec.hidden ? 'project tersembunyi' : rec.dir;
+  for (const t of out) {
+    if (!t.db) continue;
+    t.db.sharedWith = [...new Set((dbUsage.get(t.db.name) || []).filter((rec) => rec.dir !== t.dir).map(label))];
+    t.db.userSharedWith = t.db.user
+      ? [...new Set((userUsage.get(t.db.user) || []).filter((rec) => rec.dir !== t.dir).map(label))]
+      : [];
+  }
+  return out.sort((a, b) => a.dir.localeCompare(b.dir));
+}
+function supervisorConfsFor(target) {
+  const dirs = process.env.SUPERVISOR_CONF_DIR ? [process.env.SUPERVISOR_CONF_DIR] : SUPERVISOR_CONF_DIRS;
+  // Boundary check: /var/www/foo tidak boleh match worker /var/www/foobar.
+  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(^|[^A-Za-z0-9_.-])${esc}(?![A-Za-z0-9_.-])`);
+  const out = [];
+  const seen = new Set();
+  for (const dir of dirs) {
+    let files = [];
+    try { files = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const f of files) {
+      // Hanya file conf yang benar-benar dibaca supervisor (bukan .bak/.disabled/file sampah).
+      if (!f.isFile() || f.name.startsWith('.') || f.name.endsWith('~') || !/\.(conf|ini)$/i.test(f.name)) continue;
+      if (/^supervisord?\.conf$/i.test(f.name)) continue; // jangan pernah hapus config utama
+      const full = path.join(dir, f.name);
+      if (seen.has(full)) continue;
+      seen.add(full);
+      let txt = '';
+      try { txt = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      // Cek hanya baris directive yang benar-benar menjalankan worker, bukan komentar
+      // atau path yang hanya kebetulan disebut di logfile program lain.
+      const blocks = [...txt.matchAll(/^\[program:([^\]]+)\]([\s\S]*?)(?=^\[[^\]]+\]|(?![\s\S]))/gm)];
+      const names = blocks.filter(([, , body]) =>
+        body.split(/\r?\n/).some((l) => !/^\s*[;#]/.test(l) && /^\s*(command|directory|environment)\s*=/.test(l) && re.test(l))
+      ).map(([, name]) => name);
+      if (!names.length) continue;
+      // Jangan hapus seluruh file kalau masih ada program/section lain di dalamnya.
+      const otherSections = /^\[(?!program:)[^\]]+\]/m.test(txt);
+      out.push({ file: full, names, removeFile: names.length === blocks.length && !otherSections });
+    }
+  }
+  return out;
+}
+// Jangan hapus certbot cert kalau masih dipakai vhost lain (mis. wildcard/SAN bersama).
+function certUsedByOtherSites(domain) {
+  const needle = `/etc/letsencrypt/live/${domain}/`;
+  for (const dir of NGINX_SITE_DIRS) {
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) {
+      if (f.startsWith('.') || f.endsWith('.bak') || f.endsWith('~')) continue;
+      try {
+        if (fs.readFileSync(path.join(dir, f), 'utf8').includes(needle)) return path.join(dir, f);
+      } catch {}
+    }
+  }
+  return null;
+}
+function dbUserHasOtherGrants(user, db) {
+  return new Promise((resolve) => {
+    runFile('mysql', ['-BNe', `SHOW GRANTS FOR '${sqlEsc(user)}'@'localhost';`], { timeout: 15000 }).then((g) => {
+      if (!g.ok) return resolve(true); // tidak bisa diverifikasi -> jangan drop user
+      const lines = g.output.split('\n').map((x) => x.trim()).filter(Boolean);
+      const other = lines.some((l) => {
+        const m = l.match(/^GRANT\s+.*?\s+ON\s+(.+?)\s+TO\s+/i);
+        if (!m) return true;
+        const scope = m[1].trim();
+        if (scope === '*.*' && /^GRANT\s+USAGE\s+ON\s+\*\.\*/i.test(l)) return false;
+        return scope !== `\`${db}\`.*`;
+      });
+      resolve(other);
+    }).catch(() => resolve(true));
+  });
+}
+
+async function runUndeployJob(job, p) {
+  const target = path.resolve(p.path);
+  try {
+    jobStep(job, 'validate', 'running', `dir=${p.dir} path=${target} db=${p.db ? p.db.name : '-'} dropDb=${!!p.dropDb} dropDbUser=${!!p.dropDbUser} removeSsl=${!!p.removeSsl}`);
+    if (path.dirname(target) !== path.resolve(SCAN_ROOT)) throw new Error('Target bukan folder langsung di ' + SCAN_ROOT);
+    if (target === path.resolve(ROOT)) throw new Error('Folder panel monitor tidak boleh dihapus');
+    let st;
+    try { st = fs.lstatSync(target); } catch { throw new Error(`Folder ${target} tidak ada`); }
+    if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('Target bukan folder biasa (symlink ditolak)');
+    if ((await runCmd(`mountpoint -q -- ${shq(target)}`, { timeout: 10000 })).ok) throw new Error('Target adalah mount point, tidak boleh dihapus');
+    const conflict = [...DEPLOY_JOBS.values()].find((j) => j.id !== job.id && j.status === 'running' && (j.undeployDir === p.dir || String(j.label || '').startsWith(p.dir + ' (')));
+    if (conflict) throw new Error(`Job lain untuk ${p.dir} masih berjalan (${conflict.id})`);
+    jobStep(job, 'validate', 'ok', 'target valid');
+
+    // 1. DB opsional: backup WAJIB sukses sebelum ada perubahan destruktif. Ditaruh paling
+    //    awal supaya kalau backup gagal, worker/cron/vhost/folder masih utuh.
+    let dbDump = null;
+    if (p.dropDb) {
+      if (!p.db || p.db.local === false) throw new Error('DB host/port bukan MySQL lokal — drop DB dibatalkan');
+      const db = p.db.name;
+      const dbi = vDbIdent(db, 'Nama database', 64);
+      if (!dbi.ok) throw new Error(dbi.error);
+      if (SYSTEM_DBS.has(String(db).toLowerCase())) throw new Error('Database sistem tidak boleh dihapus');
+      jobStep(job, 'mysql: backup database', 'running', db);
+      const bdir = fs.existsSync('/var/backups/mysql') ? '/var/backups/mysql' : REMOVED_DB_DIR;
+      try { fs.mkdirSync(bdir, { recursive: true, mode: 0o700 }); } catch {}
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      dbDump = path.join(bdir, `undeploy-${db}-${stamp}.sql.gz`);
+      const cmd = `mysqldump --single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4 ${shq(db)} 2>${shq(dbDump + '.err')} | gzip -c > ${shq(dbDump)}`;
+      const r = await runFile('bash', ['-o', 'pipefail', '-c', cmd], { timeout: 600000 });
+      const dumpOk = r.ok && fs.existsSync(dbDump) && fs.statSync(dbDump).size > 0;
+      if (!dumpOk) {
+        let err = r.output;
+        try { err += fs.readFileSync(dbDump + '.err', 'utf8'); } catch {}
+        try { if (fs.existsSync(dbDump)) fs.unlinkSync(dbDump); } catch {}
+        throw new Error('backup database gagal — belum ada yang dihapus\n' + String(err).slice(-2500));
+      }
+      try { fs.unlinkSync(dbDump + '.err'); } catch {}
+      try { fs.chmodSync(dbDump, 0o600); } catch {}
+      jobStep(job, 'mysql: backup database', 'ok', dbDump);
+    } else {
+      jobStep(job, 'mysql: backup database', 'skip', 'opsi nonaktif');
+    }
+
+    // 2. Supervisor worker milik project ini (dicari dari path project di file conf).
+    jobStep(job, 'supervisor worker', 'running', '');
+    const progs = supervisorConfsFor(target);
+    if (!progs.length) {
+      jobStep(job, 'supervisor worker', 'skip', 'tidak ada worker untuk project ini');
+    } else {
+      let out = '';
+      let partial = false;
+      for (const pr of progs) {
+        for (const name of pr.names) {
+          const r = await runCmd(`supervisorctl stop ${shq(name + ':*')} 2>&1`, { timeout: 30000 });
+          out += `stop ${name}: ${r.output.trim()}\n`;
+        }
+        if (!pr.removeFile) {
+          partial = true;
+          out += `${pr.file}: berisi program lain — file TIDAK dihapus (hapus manual bila perlu)\n`;
+          continue;
+        }
+        try { fs.unlinkSync(pr.file); } catch (e) { throw new Error(`hapus ${pr.file} gagal: ${e.message}`); }
+        out += `hapus ${pr.file}\n`;
+      }
+      const rr = await runCmd('supervisorctl reread 2>&1 && supervisorctl update 2>&1', { timeout: 60000 });
+      out += rr.output.trim();
+      jobStep(job, 'supervisor worker', rr.ok && !partial ? 'ok' : 'warn', out);
+    }
+
+    // 3. Cron www-data yang menyebut path project ini saja (tidak menyentuh cron lain).
+    //    Boundary path penting: /var/www/foo jangan sampai menghapus cron /var/www/foobar.
+    jobStep(job, 'cron scheduler', 'running', '');
+    const ct = await runCmd('crontab -u www-data -l 2>/dev/null || true', { timeout: 15000 });
+    const escTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const cronRe = new RegExp(`(^|[^A-Za-z0-9_.-])${escTarget}(?![A-Za-z0-9_.-])`);
+    if (!cronRe.test(ct.output)) {
+      jobStep(job, 'cron scheduler', 'skip', 'tidak ada cron untuk project ini');
+    } else {
+      const pat = `(^|[^[:alnum:]_.-])${escTarget}([^[:alnum:]_.-]|$)`;
+      const r = await runCmd(`(crontab -u www-data -l 2>/dev/null | grep -v -E ${shq(pat)} || true) | crontab -u www-data - 2>&1`, { timeout: 15000 });
+      if (!r.ok) throw new Error('hapus cron gagal\n' + r.output);
+      jobStep(job, 'cron scheduler', 'ok', 'cron line project dihapus');
+    }
+
+    // 4. Nginx: hanya site yang tadi terlihat oleh user (p.sites), bukan semua root yang cocok.
+    //    Re-cek root saat job jalan: kalau config sempat diubah ke project lain, jangan dihapus.
+    jobStep(job, 'nginx vhost', 'running', '');
+    const liveSites = new Map(getHostedSites().map((s) => [s.id, s]));
+    const seenSites = new Set();
+    const sites = (p.sites || []).map((x) => liveSites.get(x.id))
+      .filter((s) => s && siteRootBelongsToTarget(s.root, target))
+      .filter((s) => {
+        let key = s.id;
+        try { key = fs.realpathSync(s.id); } catch {}
+        if (seenSites.has(key)) return false;
+        seenSites.add(key);
+        return true;
+      });
+    if (!sites.length) {
+      jobStep(job, 'nginx vhost', 'skip', 'tidak ada vhost dengan root project ini');
+    } else {
+      const notes = [];
+      for (const site of sites) {
+        const d = await deleteHostedSite(site);
+        if (!d.ok) throw new Error(`hapus vhost ${site.file} gagal: ${d.error}`);
+        let note = `${site.file}: ${d.output}${d.backup ? ' (backup: ' + d.backup + ')' : ''}`;
+        // deleteHostedSite menghapus sites-available hanya bila sites-enabled berupa symlink.
+        // Kalau config di-copy (bukan symlink), pastikan file kembarannya juga dihapus.
+        const avail = path.join(NGINX_AVAILABLE_DIR, site.file);
+        if (path.resolve(site.dir) === path.resolve(NGINX_ENABLED_DIR) && fs.existsSync(avail)) {
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 17);
+          const backup = path.join(REMOVED_SITES_DIR, `${stamp}-${site.file}-available`);
+          try {
+            const text = fs.readFileSync(avail, 'utf8');
+            fs.mkdirSync(REMOVED_SITES_DIR, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(backup, `# removed by vps-monitor undeploy from ${avail}\n${text}`, { mode: 0o600 });
+            fs.unlinkSync(avail);
+            note += `; sites-available dihapus (backup: ${backup})`;
+          } catch (e) {
+            throw new Error(`hapus ${avail} gagal: ${e.message}`);
+          }
+        }
+        notes.push(note);
+      }
+      jobStep(job, 'nginx vhost', 'ok', notes.join('\n'));
+    }
+
+    // 5. SSL opsional (sertifikat certbot; non-fatal bila tidak ada).
+    if (p.removeSsl) {
+      jobStep(job, 'ssl cert', 'running', '');
+      const sslDomains = [...new Set(sites.filter((s) => s.ssl).flatMap((s) => s.domains))];
+      if (!sslDomains.length) {
+        jobStep(job, 'ssl cert', 'skip', 'tidak ada sertifikat SSL terdeteksi');
+      } else {
+        let out = '';
+        let warn = false;
+        for (const d of sslDomains) {
+          const other = certUsedByOtherSites(d);
+          if (other) {
+            warn = true;
+            out += `\n--- ${d} ---\nDIPERTAHANKAN: cert masih dipakai vhost lain (${other})`;
+            continue;
+          }
+          const r = await runCmd(`certbot delete --cert-name ${shq(d)} --non-interactive 2>&1`, { timeout: 120000 });
+          out += `\n--- ${d} ---\n` + r.output.trim();
+          if (!r.ok) warn = true;
+        }
+        jobStep(job, 'ssl cert', warn ? 'warn' : 'ok', out.slice(-4000));
+      }
+    } else {
+      jobStep(job, 'ssl cert', 'skip', 'opsi nonaktif');
+    }
+
+    // 6. Database opsional: DROP setelah backup sukses. User hanya di-drop bila
+    //    grant-nya tidak dipakai database lain.
+    if (p.dropDb) {
+      const db = p.db.name;
+      jobStep(job, 'mysql: drop database', 'running', db);
+      let r = await runFile('mysql', ['-BNe', `DROP DATABASE IF EXISTS \`${db}\`;`], { timeout: 60000 });
+      if (!r.ok) throw new Error('drop database gagal\n' + r.output);
+      jobStep(job, 'mysql: drop database', 'ok', `database ${db} dihapus (backup: ${dbDump})`);
+
+      if (p.dropDbUser && p.db.user) {
+        jobStep(job, 'mysql: drop user', 'running', p.db.user);
+        const other = await dbUserHasOtherGrants(p.db.user, db);
+        if (other) {
+          jobStep(job, 'mysql: drop user', 'warn', `user ${p.db.user} masih punya grant lain / tidak bisa diverifikasi — TIDAK dihapus`);
+        } else {
+          r = await runFile('mysql', ['-BNe', `DROP USER IF EXISTS '${sqlEsc(p.db.user)}'@'localhost';`], { timeout: 60000 });
+          if (!r.ok) jobStep(job, 'mysql: drop user', 'warn', 'drop user gagal (database sudah dihapus)\n' + r.output);
+          else jobStep(job, 'mysql: drop user', 'ok', `user ${p.db.user} dihapus`);
+        }
+      } else {
+        jobStep(job, 'mysql: drop user', 'skip', 'opsi nonaktif / user tidak terdeteksi');
+      }
+    } else {
+      jobStep(job, 'mysql: drop database', 'skip', 'opsi nonaktif');
+      jobStep(job, 'mysql: drop user', 'skip', 'opsi nonaktif');
+    }
+
+    // 7. Folder + .git. Dijalankan paling akhir supaya kalau step sebelumnya gagal,
+    //    source masih ada untuk diperbaiki/di-retry.
+    jobStep(job, 'hapus folder + git', 'running', target);
+    const du = await runCmd(`du -sh ${shq(target)} 2>/dev/null | cut -f1`, { timeout: 60000 });
+    const rm = await runCmd(`rm -rf -- ${shq(target)}`, { timeout: 600000 });
+    if (!rm.ok || fs.existsSync(target)) throw new Error('hapus folder gagal\n' + rm.output);
+    jobStep(job, 'hapus folder + git', 'ok', `dihapus ${du.output.trim() || '?'} (${target})`);
+
+    jobStep(job, 'verify', 'ok', 'vhost + folder sudah tidak ada; DNS/CDN di luar server tidak diubah');
+    job.status = 'done';
+    if (job.owner) audit(job.owner, 'undeploy.done', target, `dir=${p.dir}`);
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 3000);
+    jobStep(job, 'ERROR', 'fail', msg);
+    job.status = 'failed';
+    if (job.owner) audit(job.owner, 'undeploy.fail', target, msg.slice(0, 200));
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -3552,7 +4000,7 @@ const server = http.createServer(async (req, res) => {
       framework, tablePrefix, wpTitle, wpAdminUser, wpAdminEmail, wpAdminPass,
       themeRepo, themeFolder, themeBranch,
     };
-    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password, params.wpAdminPass].filter(Boolean));
+    const job = newJob('deploy', `${params.dir} (${params.domain})`, [params.dbPass, params.mail.password, params.wpAdminPass].filter(Boolean), session.user);
     audit(session.user, 'deploy.start', params.dir, `${params.domain} dryRun=${params.dryRun}`);
     runDeployJob(job, params).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
@@ -3560,12 +4008,12 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/deploy/status' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const job = DEPLOY_JOBS.get(url.searchParams.get('id'));
-    if (!job || isHidden(session, job.label)) return send(res, 404, JSON.stringify({ error: 'Job tidak ada (mungkin server restart)' }));
+    if (!jobVisible(session, job)) return send(res, 404, JSON.stringify({ error: 'Job tidak ada (mungkin server restart)' }));
     return send(res, 200, JSON.stringify(jobPublic(job)));
   }
   if (p === '/api/deploy/jobs' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    return send(res, 200, JSON.stringify({ jobs: [...DEPLOY_JOBS.values()].map(jobPublic).filter((j) => !isHidden(session, j.label)) }));
+    return send(res, 200, JSON.stringify({ jobs: [...DEPLOY_JOBS.values()].filter((j) => jobVisible(session, j)).map(jobPublic) }));
   }
   if (p === '/api/deploy/transfer' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
@@ -3579,7 +4027,7 @@ const server = http.createServer(async (req, res) => {
     };
     const busy = [...DEPLOY_JOBS.values()].find((j) => j.type === 'transfer' && j.xferProject === t.project && (j.status === 'running' || j.status === 'running-transfer'));
     if (busy) return send(res, 409, JSON.stringify({ error: `Transfer untuk ${t.project} masih berjalan (${busy.id}). Tunggu selesai atau cancel dulu.` }));
-    const job = newJob('transfer', `${t.project} <- ${t.user}@${t.host}`, [t.password]);
+    const job = newJob('transfer', `${t.project} <- ${t.user}@${t.host}`, [t.password], session.user);
     job.xferProject = t.project;
     audit(session.user, 'transfer.start', t.project, `${t.user}@${t.host}:${t.port}`);
     runTransferJob(job, t).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
@@ -3588,7 +4036,7 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/deploy/transfer/status' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     const job = DEPLOY_JOBS.get(url.searchParams.get('id'));
-    if (!job || job.type !== 'transfer') return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
+    if (!job || job.type !== 'transfer' || !jobVisible(session, job)) return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
     return send(res, 200, JSON.stringify({ ...jobPublic(job), transfer: transferStatus(job) }));
   }
   if (p === '/api/deploy/transfer/cancel' && req.method === 'POST') {
@@ -3596,11 +4044,67 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const job = DEPLOY_JOBS.get(body.id);
-    if (!job || !job.transfer) return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
+    if (!job || !job.transfer || !jobVisible(session, job)) return send(res, 404, JSON.stringify({ error: 'Job tidak ada' }));
     await runCmd(`screen -S ${shq(job.transfer.name)} -X quit 2>&1`, { timeout: 15000 });
     job.status = 'cancelled';
     audit(session.user, 'transfer.cancel', job.transfer.name);
     return send(res, 200, JSON.stringify({ ok: true }));
+  }
+
+  // ---- Un-deploy API ----
+  if (p === '/api/undeploy/targets' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify({ time: Date.now(), targets: undeployTargets(session) }));
+  }
+  if (p === '/api/undeploy' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    // Target selalu diambil ulang dari whitelist server (bukan path bebas dari browser).
+    const target = typeof body.dir === 'string' ? undeployTargets(session).find((t) => t.dir === body.dir) : null;
+    if (!target) return send(res, 404, JSON.stringify({ error: 'Project tidak ditemukan / tidak bisa di-undeploy' }));
+    if (String(body.confirm || '') !== target.dir) {
+      return send(res, 400, JSON.stringify({ error: `Ketik nama folder persis untuk konfirmasi: ${target.dir}` }));
+    }
+    const dropDb = body.dropDb === true;
+    const dropDbUser = body.dropDbUser === true;
+    const removeSsl = body.removeSsl === true;
+    if (dropDb && !target.db) return send(res, 400, JSON.stringify({ error: 'Database project tidak terdeteksi — drop DB tidak bisa dijalankan' }));
+    if (dropDb && target.db.local === false) {
+      return send(res, 400, JSON.stringify({ error: 'DB project memakai host/port bukan MySQL lokal — drop DB dibatalkan' }));
+    }
+    if (dropDb && String(body.dbName || '') !== target.db.name) {
+      return send(res, 400, JSON.stringify({ error: 'Nama database berubah sejak halaman dimuat — refresh daftar project lalu ulangi' }));
+    }
+    if (dropDb && target.db.sharedWith && target.db.sharedWith.length) {
+      return send(res, 400, JSON.stringify({ error: `Database ${target.db.name} juga dipakai project lain (${target.db.sharedWith.join(', ')}) — drop DB dibatalkan` }));
+    }
+    if (dropDb && SYSTEM_DBS.has(String(target.db.name).toLowerCase())) return send(res, 400, JSON.stringify({ error: 'Database sistem tidak boleh dihapus' }));
+    if (dropDbUser && (!dropDb || !target.db || !target.db.user)) {
+      return send(res, 400, JSON.stringify({ error: 'Drop DB user butuh drop database + nama user yang terdeteksi' }));
+    }
+    if (dropDbUser && String(body.dbUser || '') !== target.db.user) {
+      return send(res, 400, JSON.stringify({ error: 'Nama DB user berubah sejak halaman dimuat — refresh daftar project lalu ulangi' }));
+    }
+    if (dropDbUser && target.db.userSharedWith && target.db.userSharedWith.length) {
+      return send(res, 400, JSON.stringify({ error: `DB user ${target.db.user} juga dipakai project lain (${target.db.userSharedWith.join(', ')}) — drop user dibatalkan` }));
+    }
+    const pw = await auth.confirmPassword(session, body.password);
+    if (!pw.ok) {
+      audit(session.user, 'undeploy.denied', target.dir, pw.error);
+      return send(res, pw.status, JSON.stringify({ error: pw.error }));
+    }
+    const conflict = [...DEPLOY_JOBS.values()].find((j) => j.status === 'running' && (j.undeployDir === target.dir || String(j.label || '').startsWith(target.dir + ' (')));
+    if (conflict) return send(res, 409, JSON.stringify({ error: `Job lain untuk ${target.dir} masih berjalan (${conflict.id})` }));
+
+    const job = newJob('undeploy', `${target.dir} (${target.domains.join(', ') || 'tanpa domain'})`, [], session.user);
+    job.undeployDir = target.dir;
+    audit(session.user, 'undeploy.start', target.dir, `dropDb=${dropDb} dropDbUser=${dropDbUser} removeSsl=${removeSsl}`);
+    runUndeployJob(job, { ...target, dropDb, dropDbUser, removeSsl }).catch((e) => {
+      jobStep(job, 'ERROR', 'fail', String((e && e.message) || e));
+      job.status = 'failed';
+    });
+    return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
   let file = p === '/' ? '/index.html' : p;
