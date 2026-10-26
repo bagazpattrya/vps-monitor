@@ -1658,7 +1658,8 @@ function pullGitProject(targetPath) {
             const seedersDir = path.join(targetPath, 'database', 'seeders');
             if (fs.existsSync(seedersDir)) {
               const files = fs.readdirSync(seedersDir);
-              const matches = files.filter((f) => /^(roles?|permissions?|roles?.*permissions?|permissions?.*roles?)seeder\.php$/i.test(f));
+              // + system setting: nama beda per project (SystemSettingSeeder / SettingSeeder)
+              const matches = files.filter((f) => /^(roles?|permissions?|roles?.*permissions?|permissions?.*roles?|(system)?settings?)seeder\.php$/i.test(f));
               for (const seederFile of matches) {
                 const className = path.basename(seederFile, '.php');
                 try {
