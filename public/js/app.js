@@ -219,8 +219,24 @@ let fsParentPath = null;
 let rawFsEntries = [];
 let fsCurrentPreviewPath = '';
 
+let fsSelected = new Set();
+
+function fsArchiveUrl(dir, names) {
+  return `/api/fs/archive?dir=${encodeURIComponent(dir)}` + names.map(n => `&name=${encodeURIComponent(n)}`).join('');
+}
+
+function updateFsSelUI() {
+  const n = fsSelected.size;
+  $('fsBtnDownloadSel').style.display = n ? '' : 'none';
+  $('fsBtnDownloadSel').textContent = `⬇ Download terpilih (${n}) .tar.gz`;
+  const all = $('fsSelAll');
+  const visible = document.querySelectorAll('#fsList .fs-sel');
+  all.checked = visible.length > 0 && [...visible].every(c => c.checked);
+}
+
 async function loadFs(dirPath) {
   if (!isAdmin) return;
+  fsSelected = new Set();
   try {
     const url = dirPath ? `/api/fs/list?path=${encodeURIComponent(dirPath)}` : '/api/fs/list';
     const d = await j(url);
@@ -232,7 +248,7 @@ async function loadFs(dirPath) {
     renderFsList();
     $('fsBtnUp').disabled = !fsParentPath;
   } catch (err) {
-    $('fsList').innerHTML = `<tr><td colspan="6" style="color:var(--bad);text-align:center;padding:18px">${escHtml(err.message || 'Gagal membuka direktori')}</td></tr>`;
+    $('fsList').innerHTML = `<tr><td colspan="7" style="color:var(--bad);text-align:center;padding:18px">${escHtml(err.message || 'Gagal membuka direktori')}</td></tr>`;
   }
 }
 
@@ -265,7 +281,7 @@ function renderFsList() {
   $('fsEntriesCount').textContent = `${list.length} item${list.length === 1 ? '' : 's'}`;
 
   if (!list.length) {
-    $('fsList').innerHTML = `<tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">${rawFsEntries.length ? 'Tidak ada file yang cocok dengan filter' : 'Direktori kosong'}</td></tr>`;
+    $('fsList').innerHTML = `<tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">${rawFsEntries.length ? 'Tidak ada file yang cocok dengan filter' : 'Direktori kosong'}</td></tr>`;
     return;
   }
 
@@ -278,6 +294,7 @@ function renderFsList() {
 
     return `
       <tr>
+        <td style="width:28px;text-align:center"><input type="checkbox" class="fs-sel" data-name="${escHtml(item.name)}"${fsSelected.has(item.name) ? ' checked' : ''}></td>
         <td style="font-size:15px;text-align:center">${icon}</td>
         <td>
           <span ${clickAttr}>${escHtml(item.name)}</span>
@@ -287,7 +304,8 @@ function renderFsList() {
         <td style="color:var(--mut)">${mtimeStr}</td>
         <td style="text-align:right;white-space:nowrap">
           ${item.isDir
-            ? `<button class="btn-sm fs-open-dir" data-path="${escHtml(full)}">Buka</button>`
+            ? `<button class="btn-sm fs-open-dir" data-path="${escHtml(full)}">Buka</button>
+               <a href="${fsArchiveUrl(fsCurrentPath, [item.name])}" class="btn-sm ok" style="text-decoration:none;display:inline-block;margin-left:4px" title="Download folder (.tar.gz)" download>⬇</a>`
             : `<button class="btn-sm fs-preview-file" data-path="${escHtml(full)}">Lihat</button>
                <a href="/api/fs/download?path=${encodeURIComponent(full)}" class="btn-sm ok" style="text-decoration:none;display:inline-block;margin-left:4px" download>⬇</a>`
           }
@@ -2788,6 +2806,23 @@ $('fsBreadcrumbs').addEventListener('click', (e) => {
 $('fsBookmarks').addEventListener('click', (e) => {
   const btn = e.target.closest('.fs-bmark');
   if (btn && btn.dataset.path) loadFs(btn.dataset.path);
+});
+
+$('fsList').addEventListener('change', (e) => {
+  const cb = e.target.closest('.fs-sel');
+  if (!cb) return;
+  cb.checked ? fsSelected.add(cb.dataset.name) : fsSelected.delete(cb.dataset.name);
+  updateFsSelUI();
+});
+$('fsSelAll').addEventListener('change', (e) => {
+  document.querySelectorAll('#fsList .fs-sel').forEach(c => {
+    c.checked = e.target.checked;
+    e.target.checked ? fsSelected.add(c.dataset.name) : fsSelected.delete(c.dataset.name);
+  });
+  updateFsSelUI();
+});
+$('fsBtnDownloadSel').addEventListener('click', () => {
+  if (fsSelected.size) location.href = fsArchiveUrl(fsCurrentPath, [...fsSelected]);
 });
 
 $('fsList').addEventListener('click', (e) => {

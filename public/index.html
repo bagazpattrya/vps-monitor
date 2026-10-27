@@ -671,6 +671,7 @@
         <div class="proc-controls">
           <input type="search" id="fsFilterInput" class="input" placeholder="Filter files in folder..." style="min-width:180px" />
           <button class="btn" id="fsBtnUp">⬆ Up</button>
+          <button class="btn" id="fsBtnDownloadSel" style="display:none">⬇ Download terpilih</button>
           <button class="btn" id="fsBtnRefresh">↻ Refresh</button>
         </div>
       </div>
@@ -687,6 +688,7 @@
         <table>
           <thead>
             <tr>
+              <th style="width:28px"><input type="checkbox" id="fsSelAll" title="Pilih semua"></th>
               <th style="width:40px">Tipe</th>
               <th>Nama File / Folder</th>
               <th style="width:110px">Ukuran</th>
@@ -696,7 +698,7 @@
             </tr>
           </thead>
           <tbody id="fsList">
-            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat direktori...</td></tr>
+            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">Memuat direktori...</td></tr>
           </tbody>
         </table>
       </div>

@@ -1857,6 +1857,8 @@ function serveFile(req, res, file) {
   res.end(body);
 }
 
+let archiveActive = false;
+
 function audit(user, action, target, details = '') {
   const ts = new Date().toISOString();
   console.log(`[AUDIT ${ts}] user=${user} action=${action} target=${target}${details ? ' ' + details : ''}`);
@@ -3758,6 +3760,30 @@ const server = http.createServer(async (req, res) => {
       'Content-Length': stat.size,
     });
     fs.createReadStream(target).pipe(res);
+    return;
+  }
+  if (p === '/api/fs/archive') {
+    if (!session.superadmin) return needSuper();
+    const dir = safeFsPath(url.searchParams.get('dir'));
+    const names = url.searchParams.getAll('name');
+    if (!dir || !names.length || names.some((n) => !n || n === '..' || n.includes('/') || n.includes('\0') || !fs.existsSync(path.join(dir, n)))) {
+      return send(res, 400, 'Bad request', 'text/plain');
+    }
+    if (archiveActive) return send(res, 429, 'Arsip lain sedang berjalan, coba lagi nanti', 'text/plain');
+    const label = names.length === 1 ? names[0] : (path.basename(dir) || 'root') + '-selected';
+    audit(session.user, 'fs.archive', dir, `items=${names.join(',')}`);
+    res.writeHead(200, {
+      'Content-Type': 'application/gzip',
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(label)}.tar.gz"`,
+    });
+    // '--' mencegah nama diawali '-' dibaca sebagai opsi tar; warning (file unreadable) diabaikan.
+    // Prioritas CPU/IO terendah + gzip -1 agar web/MySQL di VPS 2 core tidak tercekik.
+    archiveActive = true;
+    const tar = spawn('nice', ['-n', '19', 'ionice', '-c3', 'tar', '-I', 'gzip -1', '-cf', '-', '-C', dir, '--', ...names], { stdio: ['ignore', 'pipe', 'ignore'] });
+    tar.stdout.pipe(res);
+    tar.on('error', () => res.end());
+    tar.on('close', () => { archiveActive = false; });
+    req.on('close', () => { try { tar.kill(); } catch {} });
     return;
   }
   if (p === '/api/sites' && req.method === 'GET') {
