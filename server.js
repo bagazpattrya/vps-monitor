@@ -4293,7 +4293,7 @@ const server = http.createServer(async (req, res) => {
     try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const fwEarly = ['wordpress', 'wordpress-theme', 'nodejs'].includes(body.framework) ? body.framework : 'laravel';
     const isNode = fwEarly === 'nodejs';
-    const useDb = isNode ? (body.nodeUseDb === true || !!body.dbName) : true;
+    const useDb = isNode ? (body.nodeUseDb === true) : true;
     const checks = [
       ['dir', vDir(body.dir)], ['domain', vDomain(body.domain)],
       ['deployer', vLinuxUser(body.deployer)],

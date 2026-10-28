@@ -2109,18 +2109,24 @@ let xferActiveId = null;
 let xferPollTimer = null;
 
 function depForm() {
+  const fw = $('depFramework').value;
+  const isNode = fw === 'nodejs';
+  const nodeUseDb = isNode && $('depNodeUseDb') && $('depNodeUseDb').checked;
   return {
     dir: $('depDir').value.trim(), repo: $('depRepo').value.trim(), branch: $('depBranch').value.trim() || 'main',
     domain: $('depDomain').value.trim(), deployer: $('depDeployer').value.trim(),
-    framework: $('depFramework').value,
+    framework: fw,
     nodePort: $('depNodePort') ? $('depNodePort').value.trim() : '3000',
     nodeScript: $('depNodeScript') ? $('depNodeScript').value.trim() : 'npm start',
     nodeBuild: $('depNodeBuild') ? $('depNodeBuild').value.trim() : '',
-    nodeUseDb: $('depNodeUseDb') ? $('depNodeUseDb').checked : false,
+    nodeUseDb,
     themeRepo: $('depThemeRepo').value.trim(), themeFolder: $('depThemeFolder').value.trim(),
     themeBranch: $('depThemeBranch').value.trim() || 'main',
-    projectType: $('depType').value, dbName: $('depDbName').value.trim(), dbUser: $('depDbUser').value.trim(),
-    dbPass: $('depDbPass').value, sqlPath: $('depSqlPath').value.trim(),
+    projectType: $('depType').value,
+    dbName: (!isNode || nodeUseDb) ? $('depDbName').value.trim() : '',
+    dbUser: (!isNode || nodeUseDb) ? $('depDbUser').value.trim() : '',
+    dbPass: (!isNode || nodeUseDb) ? $('depDbPass').value : '',
+    sqlPath: (!isNode || nodeUseDb) ? $('depSqlPath').value.trim() : '',
     appName: $('depAppName').value.trim(), appKey: $('depAppKey').value.trim(),
     tablePrefix: $('depWpPrefix').value.trim(), wpTitle: $('depWpTitle').value.trim(),
     wpAdminUser: $('depWpUser').value.trim(), wpAdminEmail: $('depWpEmail').value.trim(), wpAdminPass: $('depWpPass').value,
