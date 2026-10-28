@@ -1,5 +1,6 @@
 'use strict';
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1414,7 +1415,6 @@ function resolveGitProject(rel) {
   const full = path.normalize(path.join(SCAN_ROOT, rel));
   if (!full.startsWith(SCAN_ROOT + path.sep) && full !== SCAN_ROOT) return { error: 'Invalid project' };
   if (!getGitProjects().some((p) => p.path === full)) return { error: 'Project not in verified whitelist' };
-  if (!fs.existsSync(path.join(full, 'artisan'))) return { error: 'Bukan project Laravel (artisan tidak ditemukan)' };
   let uid = null;
   try { uid = fs.statSync(full).uid; } catch {}
   const me = (typeof process.getuid === 'function') ? process.getuid() : 0;
@@ -1440,6 +1440,7 @@ function listSeeders(dir) {
 async function runSeeders(rel, classes) {
   const pr = resolveGitProject(rel);
   if (pr.error) return { ok: false, error: pr.error };
+  if (!fs.existsSync(path.join(pr.full, 'artisan'))) return { ok: false, error: 'Bukan project Laravel (artisan tidak ditemukan)' };
   const available = new Set(listSeeders(pr.full));
   if (!Array.isArray(classes) || !classes.length) return { ok: false, error: 'Pilih minimal satu seeder' };
   for (const c of classes) if (typeof c !== 'string' || !available.has(c)) return { ok: false, error: `Seeder tidak valid: ${c}` };
@@ -1641,7 +1642,32 @@ function pullGitProject(targetPath) {
       try {
         const isLaravel = fs.existsSync(path.join(targetPath, 'artisan'));
         const isWP = fs.existsSync(path.join(targetPath, 'wp-load.php'));
-        
+        const isNode = fs.existsSync(path.join(targetPath, 'package.json'));
+
+        // Node.js post-update tasks: npm install + build + pm2 restart
+        if (isNode) {
+          const dirName = path.basename(targetPath);
+          try {
+            const npmOut = execSync(`cd "${targetPath}" && sudo -H -u "#${uid}" npm install --omit=dev 2>&1`, { timeout: 120_000 }).toString();
+            combined += '\n--- npm install --omit=dev ---\n' + npmOut;
+          } catch (nErr) {
+            combined += '\n--- npm install [FAILED] ---\n' + (nErr.stdout || nErr.message);
+          }
+          try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(targetPath, 'package.json'), 'utf8'));
+            if (pkg.scripts && pkg.scripts.build) {
+              const bOut = execSync(`cd "${targetPath}" && sudo -H -u "#${uid}" npm run build 2>&1`, { timeout: 120_000 }).toString();
+              combined += '\n--- npm run build ---\n' + bOut;
+            }
+          } catch {}
+          try {
+            const pmOut = execSync(`sudo -H -u "#${uid}" pm2 restart "${dirName}" 2>&1 || pm2 restart "${dirName}" 2>&1`, { timeout: 30_000 }).toString();
+            combined += `\n--- pm2 restart ${dirName} ---\n` + pmOut;
+          } catch (pErr) {
+            combined += `\n--- pm2 restart ${dirName} [FAILED] ---\n` + (pErr.stdout || pErr.message);
+          }
+        }
+
         // Laravel post-update tasks: migrate + Spatie permission seed + optimize:clear
         if (isLaravel) {
           const artisanCmd = (cmd) => (uid !== null && uid !== me)
@@ -2237,6 +2263,14 @@ function runFile(file, args, opts = {}) {
     });
   });
 }
+function checkPortFree(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => { srv.close(() => resolve(true)); });
+    srv.listen(port, '127.0.0.1');
+  });
+}
 const asUser = (user, prog, args) => `sudo -H -u ${user} ${prog} ${args.map(shq).join(' ')}`;
 
 function vErr(msg) { return { ok: false, error: msg }; }
@@ -2322,13 +2356,15 @@ function jobPublic(job) {
 async function runDeployJob(job, p) {
   const dest = path.join('/var/www', p.dir);
   const isWP = p.framework === 'wordpress' || p.framework === 'wordpress-theme';
+  const isNode = p.framework === 'nodejs';
   const mysql = (sql) => runFile('mysql', ['-BNe', sql], { timeout: 15000 });
   const ago = async (prog, args, opts) => runCmd(asUser(p.deployer, prog, args), opts);
   try {
     let r;
     // 1. validasi sudah lolos di handler; cek folder belum ada
-    jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} db=${p.dbName}/${p.dbUser} fw=${p.framework} type=${p.projectType} queue=${p.useQueue} scheduler=${p.useScheduler}`);
+    jobStep(job, 'validate', 'running', `dir=${p.dir} domain=${p.domain} repo=${p.repo} branch=${p.branch} deployer=${p.deployer} fw=${p.framework}${isNode ? ` port=${p.nodePort}` : ''}${p.useDb ? ` db=${p.dbName}/${p.dbUser}` : ''}`);
     if (fs.existsSync(dest)) throw new Error(`Folder ${dest} sudah ada`);
+    if (isNode && (!p.nodePort || p.nodePort < 1 || p.nodePort > 65535)) throw new Error('Port Node.js harus 1-65535');
     jobStep(job, 'validate', 'ok', 'semua input valid');
 
     if (p.dryRun) {
@@ -2354,10 +2390,25 @@ async function runDeployJob(job, p) {
         if (!r.ok) throw new Error('wp-cli tidak tersedia\n' + r.output);
         jobStep(job, 'dry-run: wp-cli', 'ok', r.output.trim());
       }
-      jobStep(job, 'dry-run: mysql', 'running', '');
-      r = await mysql('SELECT 1;');
-      if (!r.ok) throw new Error('mysql root socket gagal\n' + r.output);
-      jobStep(job, 'dry-run: mysql', 'ok', 'root socket OK');
+      if (isNode) {
+        jobStep(job, 'dry-run: node + pm2', 'running', '');
+        r = await runCmd('node -v 2>&1', { timeout: 15000 });
+        if (!r.ok) throw new Error('Node.js belum terinstall di server\n' + r.output);
+        const nVer = r.output.trim();
+        r = await runCmd('which pm2 2>&1', { timeout: 15000 });
+        const pm2Ok = r.ok && !!r.output.trim();
+        jobStep(job, 'dry-run: node + pm2', pm2Ok ? 'ok' : 'warn', `Node=${nVer}, PM2=${pm2Ok ? 'OK' : 'belum ada (di-install otomatis)'}`);
+        jobStep(job, 'dry-run: port check', 'running', `port ${p.nodePort}`);
+        const portFree = await checkPortFree(p.nodePort);
+        jobStep(job, 'dry-run: port check', portFree ? 'ok' : 'fail', portFree ? `port ${p.nodePort} bebas (siap dipakai)` : `port ${p.nodePort} sudah digunakan`);
+        if (!portFree) throw new Error(`Port ${p.nodePort} sudah digunakan oleh service lain`);
+      }
+      if (p.useDb) {
+        jobStep(job, 'dry-run: mysql', 'running', '');
+        r = await mysql('SELECT 1;');
+        if (!r.ok) throw new Error('mysql root socket gagal\n' + r.output);
+        jobStep(job, 'dry-run: mysql', 'ok', 'root socket OK');
+      }
       jobStep(job, 'dry-run: dns+nginx', 'running', '');
       r = await runCmd(`getent ahosts ${shq(p.domain)} 2>&1 || true`, { timeout: 15000 });
       jobStep(job, 'dry-run: dns+nginx', r.output.trim() ? 'ok' : 'fail', r.output || '(domain belum resolve)');
@@ -2370,13 +2421,17 @@ async function runDeployJob(job, p) {
     }
 
     // 2. MySQL
-    jobStep(job, 'mysql: create db+user', 'running', '');
-    // CREATE IF NOT EXISTS saja tidak cukup: retry dengan password baru harus update password user lama.
-    // sqlStr: escape backslash DULU lalu quote — password ber-backslash kalau tidak, MySQL salah parse.
-    const sqlStr = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
-    if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
-    jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
+    if (p.useDb && p.dbName && p.dbUser && p.dbPass) {
+      jobStep(job, 'mysql: create db+user', 'running', '');
+      // CREATE IF NOT EXISTS saja tidak cukup: retry dengan password baru harus update password user lama.
+      // sqlStr: escape backslash DULU lalu quote — password ber-backslash kalau tidak, MySQL salah parse.
+      const sqlStr = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      r = await mysql(`CREATE DATABASE IF NOT EXISTS \`${p.dbName}\`; CREATE USER IF NOT EXISTS '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; ALTER USER '${p.dbUser}'@'localhost' IDENTIFIED BY '${sqlStr(p.dbPass)}'; GRANT ALL PRIVILEGES ON \`${p.dbName}\`.* TO '${p.dbUser}'@'localhost'; FLUSH PRIVILEGES;`);
+      if (!r.ok) throw new Error('mysql setup gagal\n' + r.output);
+      jobStep(job, 'mysql: create db+user', 'ok', 'database + user siap');
+    } else {
+      jobStep(job, 'mysql: create db+user', 'skip', isNode ? 'tanpa database' : '');
+    }
 
     // 3. Clone sebagai deployer. Pre-create dir sebagai root dulu karena grup
     // www-data hanya r-x di /var/www (ACL) sehingga deployer tidak bisa mkdir langsung.
@@ -2399,8 +2454,28 @@ async function runDeployJob(job, p) {
     jobStep(job, 'git clone', 'ok', r.output.slice(-2000));
     }
 
-    // 4. composer (wajib Laravel; WP hanya bila repo bawa composer.json)
-    if (isWP && !fs.existsSync(path.join(dest, 'composer.json'))) {
+    // 4. composer (wajib Laravel; WP hanya bila repo bawa composer.json) / npm (Node.js)
+    if (isNode) {
+      jobStep(job, 'composer install', 'skip', 'bukan PHP');
+      if (!fs.existsSync(path.join(dest, 'package.json'))) throw new Error('package.json tidak ada di repo (bukan project Node.js?)');
+      jobStep(job, 'npm install', 'running', '');
+      r = await runCmd(`cd ${shq(dest)} && sudo -H -u ${p.deployer} npm install 2>&1`, { timeout: 600000 });
+      if (!r.ok) throw new Error('npm install gagal\n' + r.output.slice(-3000));
+      jobStep(job, 'npm install', 'ok', r.output.slice(-1500));
+
+      let pkg = {};
+      try { pkg = JSON.parse(fs.readFileSync(path.join(dest, 'package.json'), 'utf8')); } catch {}
+      const hasBuild = p.nodeBuild || (pkg.scripts && pkg.scripts.build);
+      if (hasBuild) {
+        jobStep(job, 'npm run build', 'running', p.nodeBuild || 'npm run build');
+        const bCmd = p.nodeBuild ? `cd ${shq(dest)} && sudo -H -u ${p.deployer} ${p.nodeBuild} 2>&1` : `cd ${shq(dest)} && sudo -H -u ${p.deployer} npm run build 2>&1`;
+        r = await runCmd(bCmd, { timeout: 600000 });
+        if (!r.ok) throw new Error('npm build gagal\n' + r.output.slice(-3000));
+        jobStep(job, 'npm run build', 'ok', r.output.slice(-1500));
+      } else {
+        jobStep(job, 'npm run build', 'skip', 'tidak ada build script');
+      }
+    } else if (isWP && !fs.existsSync(path.join(dest, 'composer.json'))) {
       jobStep(job, 'composer install', 'skip', 'tidak ada composer.json');
     } else {
       if (!fs.existsSync(path.join(dest, 'composer.json'))) throw new Error('composer.json tidak ada (bukan project yang didukung?)');
@@ -2410,7 +2485,7 @@ async function runDeployJob(job, p) {
       jobStep(job, 'composer install', 'ok', r.output.slice(-1500));
     }
 
-    // 5. config app: .env (Laravel) / wp-config.php (WordPress)
+    // 5. config app: .env (Laravel / Node.js) / wp-config.php (WordPress)
     if (isWP) {
       jobStep(job, 'wp-config.php', 'running', '');
       const samplePath = path.join(dest, 'wp-config-sample.php');
@@ -2449,6 +2524,34 @@ async function runDeployJob(job, p) {
       r = await runCmd(`php -l ${shq(path.join(dest, 'wp-config.php'))} 2>&1`, { timeout: 30000 });
       if (!r.ok || !/No syntax errors/.test(r.output)) throw new Error('wp-config.php hasil generate rusak (php -l gagal)\n' + r.output.slice(-1500));
       jobStep(job, 'wp-config.php', 'ok', `prefix=${p.tablePrefix} salts=${/api.wordpress.org/.test(salts) ? 'wordpress.org' : 'lokal'}`);
+    } else if (isNode) {
+      jobStep(job, '.env', 'running', '');
+      const exPath = path.join(dest, '.env.example');
+      let env = fs.existsSync(exPath) ? fs.readFileSync(exPath, 'utf8') : '';
+      const envVal = (v) => {
+        v = String(v);
+        return /[\s#"'\\]/.test(v) ? `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : v;
+      };
+      const setEnv = (k, v) => {
+        const re = new RegExp(`^${k}=.*$`, 'm');
+        env = re.test(env) ? env.replace(re, () => `${k}=${v}`) : env + `\n${k}=${v}\n`;
+      };
+      setEnv('PORT', p.nodePort);
+      setEnv('NODE_ENV', 'production');
+      setEnv('APP_URL', `https://${p.domain}`);
+      if (p.useDb && p.dbName) {
+        setEnv('DB_CONNECTION', 'mysql');
+        setEnv('DB_HOST', '127.0.0.1');
+        setEnv('DB_PORT', '3306');
+        setEnv('DB_DATABASE', p.dbName);
+        setEnv('DB_USERNAME', p.dbUser);
+        setEnv('DB_PASSWORD', envVal(p.dbPass));
+        setEnv('DATABASE_URL', envVal(`mysql://${p.dbUser}:${p.dbPass}@127.0.0.1:3306/${p.dbName}`));
+      }
+      for (const [k, v] of Object.entries(p.envExtra || {})) setEnv(k, v);
+      fs.writeFileSync(path.join(dest, '.env'), env);
+      await runCmd(`chown ${p.deployer}:www-data ${shq(path.join(dest, '.env'))} && chmod 660 ${shq(path.join(dest, '.env'))}`);
+      jobStep(job, '.env', 'ok', `PORT=${p.nodePort}, NODE_ENV=production${p.useDb ? ', DB=' + p.dbName : ''}`);
     } else {
     jobStep(job, '.env', 'running', '');
     const exPath = path.join(dest, '.env.example');
@@ -2500,7 +2603,21 @@ async function runDeployJob(job, p) {
     } // end Laravel .env
 
     // 6. DB: migrate/seed/import (Laravel) atau wp install/import (WordPress)
-    if (isWP && p.projectType === 'new') {
+    if (isNode) {
+      if (p.useDb && p.projectType === 'existing' && p.sqlPath) {
+        jobStep(job, 'import sql', 'running', p.sqlPath);
+        if (!fs.existsSync(p.sqlPath)) throw new Error(`File SQL tidak ada: ${p.sqlPath}`);
+        const isGz = p.sqlPath.endsWith('.gz');
+        const imp = isGz
+          ? `zcat ${shq(p.sqlPath)} | MYSQL_PWD=${shq(p.dbPass)} mysql -u ${shq(p.dbUser)} ${shq(p.dbName)}`
+          : `MYSQL_PWD=${shq(p.dbPass)} mysql -u ${shq(p.dbUser)} ${shq(p.dbName)} < ${shq(p.sqlPath)}`;
+        r = await runCmd(imp, { timeout: 600000 });
+        if (!r.ok) throw new Error('import SQL gagal (cek kredensial DB / file corrupt)\n' + r.output.slice(-3000));
+        jobStep(job, 'import sql', 'ok', `import ${p.sqlPath} OK`);
+      } else {
+        jobStep(job, 'database migrate/seed', 'skip', p.useDb ? 'database siap' : 'tanpa database');
+      }
+    } else if (isWP && p.projectType === 'new') {
       jobStep(job, 'wp core install', 'running', '');
       r = await ago('/usr/local/bin/wp', ['core', 'install', `--path=${dest}`, `--url=https://${p.domain}`, `--title=${p.wpTitle}`, `--admin_user=${p.wpAdminUser}`, `--admin_password=${p.wpAdminPass}`, `--admin_email=${p.wpAdminEmail}`, '--skip-email'], { timeout: 120000, env: { WP_CLI_CACHE_DIR: '/tmp/wp-cli-cache' } });
       if (!r.ok) throw new Error('wp core install gagal\n' + r.output.slice(-3000));
@@ -2570,8 +2687,8 @@ async function runDeployJob(job, p) {
       } else jobStep(job, 'plugin ACF', 'ok', r.output.slice(-1500));
     }
 
-    // 7-8. storage:link + optimize + fix perms + gate (Laravel). WP: langsung perms.
-    if (isWP) {
+    // 7-8. storage:link + optimize + fix perms + gate (Laravel). WP / Node: langsung perms.
+    if (isWP || isNode) {
       jobStep(job, 'storage:link + optimize', 'skip', 'bukan Laravel');
     } else {
     jobStep(job, 'storage:link + optimize', 'running', '');
@@ -2580,20 +2697,23 @@ async function runDeployJob(job, p) {
     jobStep(job, 'storage:link + optimize', 'ok', r.output.slice(-1000));
     }
     jobStep(job, 'fix-permissions + gate www-data', 'running', '');
-    r = await runCmd(`bash /var/www/fix-permissions.sh ${shq(dest)} --user ${shq(p.deployer)} 2>&1`, { timeout: 120000 });
-    if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
-    await runCmd(`chmod 640 ${shq(path.join(dest, isWP ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
-    for (const sub of (isWP ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
-      const wd = shq(path.join(dest, sub));
-      // JANGAN chmod 2755 di sini: itu menurunkan mask ACL dari fix-permissions.sh menjadi r-x
-      // sehingga www-data terkunci (gate gagal). Standar script: 775+setgid, lalu setfacl
-      // dijalankan SESUDAH chmod agar mask dihitung ulang dan www-data tetap rwx.
-      await runCmd(`mkdir -p ${wd} && chown ${p.deployer}:www-data ${wd} && chmod 2775 ${wd} && { setfacl -m u:www-data:rwx -m d:u:www-data:rwx ${wd} 2>/dev/null; } || true`);
-      const t = path.join(dest, sub, '.writetest-www-data');
-      const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
-      if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
+    if (fs.existsSync('/var/www/fix-permissions.sh')) {
+      r = await runCmd(`bash /var/www/fix-permissions.sh ${shq(dest)} --user ${shq(p.deployer)} 2>&1`, { timeout: 120000 });
+      if (!r.ok) throw new Error('fix-permissions gagal\n' + r.output.slice(-2000));
     }
-    jobStep(job, 'fix-permissions + gate www-data', 'ok', isWP ? 'www-data bisa tulis wp-content/uploads' : 'www-data bisa tulis storage/ + bootstrap/cache');
+    await runCmd(`chmod 640 ${shq(path.join(dest, isWP ? 'wp-config.php' : '.env'))} 2>/dev/null || true`);
+    if (!isNode) {
+      for (const sub of (isWP ? ['wp-content/uploads'] : ['storage', 'bootstrap/cache'])) {
+        const wd = shq(path.join(dest, sub));
+        await runCmd(`mkdir -p ${wd} && chown ${p.deployer}:www-data ${wd} && chmod 2775 ${wd} && { setfacl -m u:www-data:rwx -m d:u:www-data:rwx ${wd} 2>/dev/null; } || true`);
+        const t = path.join(dest, sub, '.writetest-www-data');
+        const w = await runCmd(`sudo -n -u www-data touch ${shq(t)} 2>&1 && rm -f ${shq(t)}`, { timeout: 15000 });
+        if (!w.ok) throw new Error(`GATE GAGAL: www-data tidak bisa tulis ke ${sub} — deploy dihentikan sebelum go-live\n` + w.output);
+      }
+      jobStep(job, 'fix-permissions + gate www-data', 'ok', isWP ? 'www-data bisa tulis wp-content/uploads' : 'www-data bisa tulis storage/ + bootstrap/cache');
+    } else {
+      jobStep(job, 'fix-permissions + gate www-data', 'ok', `permission ${p.deployer}:www-data siap`);
+    }
 
     // 9. DNS
     jobStep(job, 'dns check', 'running', p.domain);
@@ -2603,7 +2723,9 @@ async function runDeployJob(job, p) {
 
     // 10-11. nginx
     jobStep(job, 'nginx vhost', 'running', '');
-    const vhost = `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}${isWP ? '' : '/public'};\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size ${isWP ? '200M' : '50M'};\n}\n`;
+    const vhost = isNode
+      ? `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest};\n\n    location / {\n        proxy_pass http://127.0.0.1:${p.nodePort};\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_cache_bypass $http_upgrade;\n        proxy_read_timeout 60s;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size 50M;\n}\n`
+      : `server {\n    listen 80;\n    listen [::]:80;\n    server_name ${p.domain};\n    root ${dest}${isWP ? '' : '/public'};\n    index index.php;\n    location / {\n        try_files $uri $uri/ /index.php?$query_string;\n    }\n    location ~ \\.php$ {\n        include snippets/fastcgi-php.conf;\n        fastcgi_pass unix:/run/php/${phpBin()}-fpm.sock;\n    }\n    location ~ /\\.ht {\n        deny all;\n    }\n    client_max_body_size ${isWP ? '200M' : '50M'};\n}\n`;
     fs.writeFileSync(`/etc/nginx/sites-available/${p.domain}`, vhost);
     job.createdVhost = p.domain;
     await runCmd(`ln -sf /etc/nginx/sites-available/${shq(p.domain)} /etc/nginx/sites-enabled/${shq(p.domain)}`);
@@ -2620,8 +2742,56 @@ async function runDeployJob(job, p) {
     jobStep(job, 'certbot ssl', r.ok ? 'ok' : 'warn', r.output.slice(-2000) || '(tidak ada output)');
     if (!r.ok) job.warn = 'SSL gagal — site jalan di HTTP, ulangi certbot manual setelah DNS propagasi penuh';
 
-    // 13. supervisor worker (Laravel + queue saja; WP tidak butuh)
-    if (isWP) {
+    // 13. PM2 (Node.js) / supervisor worker (Laravel)
+    if (isNode) {
+      jobStep(job, 'pm2 start', 'running', '');
+      let pm2Check = await runCmd('which pm2 2>&1');
+      if (!pm2Check.ok || !pm2Check.output.trim()) {
+        await runCmd('npm install -g pm2 2>&1', { timeout: 180000 });
+      }
+      await runCmd(`sudo -H -u ${p.deployer} pm2 delete ${shq(p.dir)} 2>&1 || true`);
+
+      let pkg = {};
+      try { pkg = JSON.parse(fs.readFileSync(path.join(dest, 'package.json'), 'utf8')); } catch {}
+
+      let startCmd;
+      if (fs.existsSync(path.join(dest, 'ecosystem.config.js'))) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start ecosystem.config.js`;
+      } else if (p.nodeScript && p.nodeScript.startsWith('npm ')) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start npm --name ${shq(p.dir)} -- ${p.nodeScript.slice(4)}`;
+      } else if (p.nodeScript && fs.existsSync(path.join(dest, p.nodeScript))) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start ${shq(p.nodeScript)} --name ${shq(p.dir)}`;
+      } else if (pkg.scripts && pkg.scripts.start) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start npm --name ${shq(p.dir)} -- start`;
+      } else if (fs.existsSync(path.join(dest, 'server.js'))) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start server.js --name ${shq(p.dir)}`;
+      } else if (fs.existsSync(path.join(dest, 'index.js'))) {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start index.js --name ${shq(p.dir)}`;
+      } else {
+        startCmd = `cd ${shq(dest)} && sudo -H -u ${p.deployer} pm2 start npm --name ${shq(p.dir)} -- start`;
+      }
+
+      r = await runCmd(startCmd, { timeout: 60000 });
+      if (!r.ok) throw new Error('pm2 start gagal\n' + r.output.slice(-2000));
+      job.createdPm2 = p.dir;
+      await runCmd(`sudo -H -u ${p.deployer} pm2 save 2>&1 || true`);
+
+      let pm2Status = '';
+      for (let i = 0; i < 10; i++) {
+        await new Promise((s) => setTimeout(s, 2000));
+        r = await runCmd(`sudo -H -u ${p.deployer} pm2 jlist 2>&1`, { timeout: 15000 });
+        try {
+          const list = JSON.parse(r.output);
+          const item = list.find((x) => x.name === p.dir);
+          if (item && item.pm2_env) {
+            pm2Status = item.pm2_env.status;
+            if (pm2Status === 'online') break;
+          }
+        } catch {}
+      }
+      jobStep(job, 'pm2 start', pm2Status === 'online' ? 'ok' : 'warn', `status=${pm2Status || 'unknown'}`);
+      jobStep(job, 'supervisor worker', 'skip', 'Node.js dikelola via PM2');
+    } else if (isWP) {
       jobStep(job, 'supervisor worker', 'skip', 'WordPress tidak pakai queue worker');
     } else if (p.useQueue) {
       jobStep(job, 'supervisor worker', 'running', '');
@@ -2644,7 +2814,9 @@ async function runDeployJob(job, p) {
     } else jobStep(job, 'supervisor worker', 'skip', 'nonaktif (opsi)');
 
     // 14. cron scheduler (opsional, idempoten). WP: wp-cron tiap 5 mnt (DISABLE_WP_CRON sudah true di wp-config).
-    if (p.useScheduler) {
+    if (isNode) {
+      jobStep(job, 'cron scheduler', 'skip', 'Node.js menggunakan PM2');
+    } else if (p.useScheduler) {
       jobStep(job, 'cron scheduler', 'running', '');
       const line = isWP
         ? `*/5 * * * * cd ${dest} && php wp-cron.php >> /dev/null 2>&1`
@@ -2663,10 +2835,12 @@ async function runDeployJob(job, p) {
     jobStep(job, 'verify', 'running', '');
     r = await runCmd(`curl -sk -m 15 -o /dev/null -w "%{http_code}" https://${p.domain}/ 2>&1`, { timeout: 30000 });
     const httpsCode = r.output.trim();
-    const permDirs = isWP ? [path.join(dest, 'wp-content')] : [path.join(dest, 'storage'), path.join(dest, 'bootstrap/cache')];
-    r = await runCmd(`find ${permDirs.map(shq).join(' ')} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
-    if (r.output.trim()) throw new Error('Masih ada dir o+writable di storage/bootstrap (harusnya kosong)\n' + r.output);
-    jobStep(job, 'verify', 'ok', `https=${httpsCode}, tidak ada dir o+writable`);
+    const permDirs = isWP ? [path.join(dest, 'wp-content')] : (isNode ? [] : [path.join(dest, 'storage'), path.join(dest, 'bootstrap/cache')]);
+    if (permDirs.length) {
+      r = await runCmd(`find ${permDirs.map(shq).join(' ')} -type d -perm -o+w 2>/dev/null | head`, { timeout: 15000 });
+      if (r.output.trim()) throw new Error('Masih ada dir o+writable di storage/bootstrap (harusnya kosong)\n' + r.output);
+    }
+    jobStep(job, 'verify', 'ok', `https=${httpsCode}${permDirs.length ? ', tidak ada dir o+writable' : ''}`);
     job.status = 'done';
   } catch (e) {
     jobStep(job, 'ERROR', 'fail', String((e && e.message) || e).slice(0, 3000));
@@ -2683,6 +2857,10 @@ async function runDeployJob(job, p) {
       if (job.createdSupervisor && /^[a-zA-Z0-9.-]+-worker$/.test(job.createdSupervisor)) {
         await runCmd(`supervisorctl stop ${shq(job.createdSupervisor + ':*')} 2>&1; rm -f /etc/supervisor/conf.d/${job.createdSupervisor}.conf; supervisorctl reread 2>&1; supervisorctl update 2>&1`, { timeout: 60000 });
         notes.push(`supervisor ${job.createdSupervisor} dihentikan+dihapus`);
+      }
+      if (job.createdPm2 && /^[a-zA-Z0-9._-]+$/.test(job.createdPm2)) {
+        await runCmd(`sudo -H -u ${p.deployer} pm2 delete ${shq(job.createdPm2)} 2>&1 || true; sudo -H -u ${p.deployer} pm2 save 2>&1 || true`);
+        notes.push(`pm2 ${job.createdPm2} dihapus`);
       }
       if (job.createdDir && job.createdDir === path.join('/var/www', p.dir) && fs.existsSync(job.createdDir)) {
         await runCmd(`(crontab -u www-data -l 2>/dev/null | grep -v -F ${shq(job.createdDir)} || true) | crontab -u www-data - 2>&1`, { timeout: 15000 });
@@ -3076,7 +3254,8 @@ function undeployTargets(session) {
     const git = fs.existsSync(path.join(full, '.git'));
     const laravel = fs.existsSync(path.join(full, 'artisan'));
     const wordpress = fs.existsSync(path.join(full, 'wp-config.php')) || fs.existsSync(path.join(full, 'wp-includes'));
-    if (!sites.length && !git && !laravel && !wordpress) continue;
+    const nodejs = fs.existsSync(path.join(full, 'package.json'));
+    if (!sites.length && !git && !laravel && !wordpress && !nodejs) continue;
     if (isHidden(session, [e.name, full])) continue;
     out.push({
       dir: e.name,
@@ -3084,7 +3263,7 @@ function undeployTargets(session) {
       domains: [...new Set(sites.flatMap((s) => s.domains).filter(Boolean))],
       sites: sites.map((s) => ({ id: s.id, file: s.file, dir: s.dir, domains: s.domains, ssl: !!s.ssl })),
       git,
-      framework: laravel ? 'laravel' : (wordpress ? 'wordpress' : 'other'),
+      framework: laravel ? 'laravel' : (wordpress ? 'wordpress' : (nodejs ? 'nodejs' : 'other')),
       db: dbByDir.get(e.name) || detectProjectDb(full),
       ssl: sites.some((s) => s.ssl),
     });
@@ -3245,6 +3424,9 @@ async function runUndeployJob(job, p) {
       out += rr.output.trim();
       jobStep(job, 'supervisor worker', rr.ok && !partial ? 'ok' : 'warn', out);
     }
+
+    // 2b. PM2 process (bila ada)
+    await runCmd(`pm2 delete ${shq(target)} 2>&1 || true; pm2 save 2>&1 || true`);
 
     // 3. Cron www-data yang menyebut path project ini saja (tidak menyentuh cron lain).
     //    Boundary path penting: /var/www/foo jangan sampai menghapus cron /var/www/foobar.
@@ -4109,34 +4291,43 @@ const server = http.createServer(async (req, res) => {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
-    const fwEarly = body.framework === 'wordpress' ? 'wordpress' : (body.framework === 'wordpress-theme' ? 'wordpress-theme' : 'laravel');
+    const fwEarly = ['wordpress', 'wordpress-theme', 'nodejs'].includes(body.framework) ? body.framework : 'laravel';
+    const isNode = fwEarly === 'nodejs';
+    const useDb = isNode ? (body.nodeUseDb === true || !!body.dbName) : true;
     const checks = [
       ['dir', vDir(body.dir)], ['domain', vDomain(body.domain)],
       ['deployer', vLinuxUser(body.deployer)],
-      ['dbName', vDbIdent(body.dbName, 'Nama database', 64)], ['dbUser', vDbIdent(body.dbUser, 'User database', 32)],
     ];
+    if (useDb) {
+      checks.push(
+        ['dbName', vDbIdent(body.dbName, 'Nama database', 64)],
+        ['dbUser', vDbIdent(body.dbUser, 'User database', 32)]
+      );
+    }
     // Mode wordpress-theme tidak pakai repo site (core fresh dari wordpress.org).
     if (fwEarly !== 'wordpress-theme') checks.splice(2, 0, ['repo', vRepo(body.repo)], ['branch', vBranch(body.branch)]);
     for (const [k, c] of checks) if (!c.ok) return send(res, 400, JSON.stringify({ error: `${k}: ${c.error}` }));
-    if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
-    if (/[\r\n\0]/.test(body.dbPass)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh ada baris baru' }));
-    // Samakan dengan policy MySQL validate_password MEDIUM + check_user_name (cek di awal agar gagal cepat, bukan di tengah deploy).
-    {
-      const pw = body.dbPass;
-      const need = [];
-      if (!/[a-z]/.test(pw)) need.push('huruf kecil');
-      if (!/[A-Z]/.test(pw)) need.push('huruf besar');
-      if (!/[0-9]/.test(pw)) need.push('angka');
-      if (!/[^A-Za-z0-9]/.test(pw)) need.push('karakter spesial');
-      if (need.length) return send(res, 400, JSON.stringify({ error: `dbPass kurang: ${need.join(', ')} (syarat MySQL MEDIUM)` }));
-      const low = pw.toLowerCase();
-      for (const u of [String(body.dbUser || '').toLowerCase(), String(body.dbName || '').toLowerCase()]) {
-        if (u && u.length >= 4 && low.includes(u)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh mengandung nama user/database (ditolak MySQL)' }));
+    if (useDb) {
+      if (typeof body.dbPass !== 'string' || body.dbPass.length < 8) return send(res, 400, JSON.stringify({ error: 'dbPass: minimal 8 karakter' }));
+      if (/[\r\n\0]/.test(body.dbPass)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh ada baris baru' }));
+      // Samakan dengan policy MySQL validate_password MEDIUM + check_user_name (cek di awal agar gagal cepat, bukan di tengah deploy).
+      {
+        const pw = body.dbPass;
+        const need = [];
+        if (!/[a-z]/.test(pw)) need.push('huruf kecil');
+        if (!/[A-Z]/.test(pw)) need.push('huruf besar');
+        if (!/[0-9]/.test(pw)) need.push('angka');
+        if (!/[^A-Za-z0-9]/.test(pw)) need.push('karakter spesial');
+        if (need.length) return send(res, 400, JSON.stringify({ error: `dbPass kurang: ${need.join(', ')} (syarat MySQL MEDIUM)` }));
+        const low = pw.toLowerCase();
+        for (const u of [String(body.dbUser || '').toLowerCase(), String(body.dbName || '').toLowerCase()]) {
+          if (u && u.length >= 4 && low.includes(u)) return send(res, 400, JSON.stringify({ error: 'dbPass tidak boleh mengandung nama user/database (ditolak MySQL)' }));
+        }
       }
     }
     const projectType = body.projectType === 'existing' ? 'existing' : 'new';
-    const sqlPath = projectType === 'existing' ? String(body.sqlPath || '').trim() : '';
-    if (projectType === 'existing') {
+    const sqlPath = (useDb && projectType === 'existing') ? String(body.sqlPath || '').trim() : '';
+    if (useDb && projectType === 'existing') {
       const c = vAbsPath(sqlPath, 'Path SQL');
       if (!c.ok) return send(res, 400, JSON.stringify({ error: c.error }));
       if (!/\.(sql|sql\.gz)$/i.test(sqlPath)) return send(res, 400, JSON.stringify({ error: 'File SQL harus .sql / .sql.gz' }));
@@ -4168,6 +4359,16 @@ const server = http.createServer(async (req, res) => {
     if (mail.port && !/^\d{1,5}$/.test(mail.port)) return send(res, 400, JSON.stringify({ error: 'SMTP port harus angka' }));
     if (mail.host && !/^[A-Za-z0-9.-]+$/.test(mail.host)) return send(res, 400, JSON.stringify({ error: 'SMTP host tidak valid' }));
     const framework = fwEarly;
+    let nodePort = 3000;
+    let nodeScript = 'npm start';
+    let nodeBuild = '';
+    if (isNode) {
+      const pNum = parseInt(body.nodePort || '3000', 10);
+      if (isNaN(pNum) || pNum < 1 || pNum > 65535) return send(res, 400, JSON.stringify({ error: 'nodePort: port harus antara 1-65535' }));
+      nodePort = pNum;
+      nodeScript = String(body.nodeScript || 'npm start').trim().slice(0, 200) || 'npm start';
+      nodeBuild = String(body.nodeBuild || '').trim().slice(0, 200);
+    }
     let tablePrefix = 'wp_', wpTitle = null, wpAdminUser = null, wpAdminEmail = null, wpAdminPass = null;
     let themeRepo = null, themeFolder = null, themeBranch = 'main';
     const isWP = framework === 'wordpress' || framework === 'wordpress-theme';
@@ -4200,7 +4401,8 @@ const server = http.createServer(async (req, res) => {
     const cv = Object.fromEntries(checks.map(([k, c]) => [k, c.value]));
     const params = {
       dir: cv.dir, domain: cv.domain, repo: cv.repo || null, branch: cv.branch || 'main',
-      deployer: cv.deployer, dbName: cv.dbName, dbUser: cv.dbUser, dbPass: body.dbPass,
+      deployer: cv.deployer, dbName: cv.dbName || null, dbUser: cv.dbUser || null, dbPass: body.dbPass || null,
+      useDb, nodePort, nodeScript, nodeBuild,
       projectType, sqlPath, appName: String(body.appName || '').trim().slice(0, 100) || null,
       appKey: String(body.appKey || '').trim() || null,
       useQueue: body.useQueue !== false, useScheduler: body.useScheduler !== false,

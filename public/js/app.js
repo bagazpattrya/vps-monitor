@@ -1905,20 +1905,45 @@ $('cronList').addEventListener('click', (e) => {
 function depFrameworkToggle() {
   const fw = $('depFramework').value;
   const wp = fw === 'wordpress' || fw === 'wordpress-theme';
+  const node = fw === 'nodejs';
   $('depWpOnly').style.display = wp ? '' : 'none';
   $('depThemeOnly').style.display = fw === 'wordpress-theme' ? '' : 'none';
-  // Field Laravel-only disembunyikan untuk kedua mode WordPress
-  for (const id of ['depAppNameWrap', 'depAppKeyWrap', 'depEnvExtraWrap', 'depMailWrap', 'depQueueWrap', 'depRepoWrap', 'depBranchWrap']) {
+
+  for (const id of ['depNodePortWrap', 'depNodeScriptWrap', 'depNodeBuildWrap', 'depNodeDbWrap']) {
     const el = $(id);
-    if (!el) continue;
-    // repo+branch site tidak dipakai di mode theme (core fresh + theme repo)
-    if (id === 'depRepoWrap' || id === 'depBranchWrap') { el.style.display = fw === 'wordpress-theme' ? 'none' : ''; continue; }
-    el.style.display = wp ? 'none' : '';
+    if (el) el.style.display = node ? '' : 'none';
   }
+
+  const showDb = !node || ($('depNodeUseDb') && $('depNodeUseDb').checked);
+  for (const id of ['depTypeWrap', 'depDbNameWrap', 'depDbUserWrap', 'depDbPassWrap', 'depSqlPathWrap']) {
+    const el = $(id);
+    if (el) el.style.display = showDb ? '' : 'none';
+  }
+
+  // Field Laravel-only disembunyikan untuk WordPress dan Node.js
+  for (const id of ['depAppNameWrap', 'depAppKeyWrap', 'depMailWrap', 'depQueueWrap']) {
+    const el = $(id);
+    if (el) el.style.display = (wp || node) ? 'none' : '';
+  }
+
+  for (const id of ['depRepoWrap', 'depBranchWrap']) {
+    const el = $(id);
+    if (el) el.style.display = fw === 'wordpress-theme' ? 'none' : '';
+  }
+
+  if ($('depEnvExtraWrap')) $('depEnvExtraWrap').style.display = wp ? 'none' : '';
+
   const sched = $('depSched');
-  if (sched) sched.nextSibling.textContent = wp ? ' WP-Cron (cron www-data tiap 5 mnt)' : ' Scheduler (cron www-data)';
+  if (sched && sched.parentElement) {
+    if (node) sched.parentElement.style.display = 'none';
+    else {
+      sched.parentElement.style.display = '';
+      sched.nextSibling.textContent = wp ? ' WP-Cron (cron www-data tiap 5 mnt)' : ' Scheduler (cron www-data)';
+    }
+  }
 }
 $('depFramework').addEventListener('change', depFrameworkToggle);
+if ($('depNodeUseDb')) $('depNodeUseDb').addEventListener('change', depFrameworkToggle);
 $('depWpShow').addEventListener('click', () => {
   const el = $('depWpPass');
   el.type = el.type === 'password' ? 'text' : 'password';
@@ -2088,6 +2113,10 @@ function depForm() {
     dir: $('depDir').value.trim(), repo: $('depRepo').value.trim(), branch: $('depBranch').value.trim() || 'main',
     domain: $('depDomain').value.trim(), deployer: $('depDeployer').value.trim(),
     framework: $('depFramework').value,
+    nodePort: $('depNodePort') ? $('depNodePort').value.trim() : '3000',
+    nodeScript: $('depNodeScript') ? $('depNodeScript').value.trim() : 'npm start',
+    nodeBuild: $('depNodeBuild') ? $('depNodeBuild').value.trim() : '',
+    nodeUseDb: $('depNodeUseDb') ? $('depNodeUseDb').checked : false,
     themeRepo: $('depThemeRepo').value.trim(), themeFolder: $('depThemeFolder').value.trim(),
     themeBranch: $('depThemeBranch').value.trim() || 'main',
     projectType: $('depType').value, dbName: $('depDbName').value.trim(), dbUser: $('depDbUser').value.trim(),
@@ -2138,9 +2167,14 @@ async function deployJobsRefresh(silent) {
 async function depSubmit(dryRun) {
   const body = { ...depForm(), dryRun };
   const isThemeForm = body.framework === 'wordpress-theme';
+  const isNode = body.framework === 'nodejs';
   // repo site tidak dipakai di mode theme (core fresh), jadi tidak wajib diisi
-  if (!body.dir || (!isThemeForm && !body.repo) || !body.domain || !body.deployer || !body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field bertanda *');
-  if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
+  if (!body.dir || (!isThemeForm && !body.repo) || !body.domain || !body.deployer) return alert('Isi semua field bertanda *');
+  if (!isNode || body.nodeUseDb) {
+    if (!body.dbName || !body.dbUser || !body.dbPass) return alert('Isi semua field DB bertanda *');
+    if (body.projectType === 'existing' && !body.sqlPath) return alert('Project existing wajib isi path SQL di server');
+  }
+  if (isNode && !body.nodePort) return alert('Port Node.js wajib diisi (mis. 3000)');
   const isWpForm = body.framework === 'wordpress' || body.framework === 'wordpress-theme';
   if (isWpForm && body.projectType === 'new' && (!body.wpTitle || !body.wpAdminUser || !body.wpAdminEmail || !body.wpAdminPass)) return alert('WordPress baru wajib isi site title + admin user/email/password');
   if (body.framework === 'wordpress-theme' && (!body.themeRepo || !body.themeFolder)) return alert('Mode theme wajib isi theme repo + folder');
