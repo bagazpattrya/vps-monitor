@@ -545,6 +545,10 @@ const ACTIVITY_LABELS = {
   'undeploy.done': ['undeploy done', 'down'],
   'undeploy.denied': ['undeploy DENIED', 'down'],
   'undeploy.fail': ['undeploy FAILED', 'down'],
+  'rename.start': ['rename', 'down'],
+  'rename.done': ['rename done', 'down'],
+  'rename.denied': ['rename DENIED', 'down'],
+  'rename.fail': ['rename FAILED', 'down'],
   'transfer.start': ['transfer', 'warn'],
   'transfer.cancel': ['transfer cancel', 'down'],
   'user.create': ['user create', 'warn'],
@@ -1472,6 +1476,8 @@ function renderGitProjects() {
                   <button class="act-seed" data-rel="${r.relPath}">Run Seeder…</button>
                   <button class="act-env" data-rel="${r.relPath}">Edit .env…</button>
                   <button class="act-composer" data-rel="${r.relPath}">Composer Update</button>
+                  <button class="act-rename" data-mode="dir" data-rel="${r.relPath}">Rename Folder…</button>
+                  <button class="act-rename" data-mode="db" data-rel="${r.relPath}">Rename Database…</button>
                   <button class="act-term" data-rel="${r.relPath}">Terminal…</button>
                 </div>
               </div>
@@ -2122,7 +2128,7 @@ async function deployJobsRefresh(silent) {
     const d = await api('GET', '/api/deploy/jobs');
     $('deployJobsCount').textContent = d.jobs.length;
     $('depJobs').innerHTML = d.jobs.length ? d.jobs.map(j =>
-      `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : (j.type === 'undeploy' ? '🗑' : '🚀')} ${j.label} — ${j.status}</button>`
+      `<button class="btn-sm${j.id === depActiveId ? ' ok' : ''}" data-depjob="${j.id}">${j.type === 'transfer' ? '⇄' : (j.type === 'undeploy' ? '🗑' : (j.type === 'rename' ? '✏️' : '🚀'))} ${j.label} — ${j.status}</button>`
     ).join('') : '<span style="color:var(--mut);font-size:12px">Belum ada job.</span>';
     // setelah reload halaman: sambung lagi ke transfer yang masih jalan supaya tombol tetap terkunci
     const live = d.jobs.find(j => j.type === 'transfer' && (j.status === 'running' || j.status === 'running-transfer'));
@@ -2361,6 +2367,80 @@ $('undTarget').addEventListener('change', undRenderInfo);
 $('undStart').addEventListener('click', undSubmit);
 $('undConfirm').addEventListener('keydown', (e) => { if (e.key === 'Enter') undSubmit(); });
 $('undPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') undSubmit(); });
+
+// Rename project / database (dari menu ▾ Git Deployments)
+let rnTarget = null;
+let rnMode = 'dir';
+let rnPollTimer = null;
+async function openRenameModal(rel, mode) {
+  rnTarget = null;
+  rnMode = mode;
+  clearTimeout(rnPollTimer);
+  $('rnModalTitle').textContent = `Rename ${mode === 'db' ? 'Database' : 'Folder'}: ${rel}`;
+  for (const id of ['rnDirRow', 'rnHelpDir']) $(id).style.display = mode === 'dir' ? '' : 'none';
+  for (const id of ['rnDbRow', 'rnHelpDb']) $(id).style.display = mode === 'db' ? '' : 'none';
+  ['rnNewDir', 'rnNewDb', 'rnPassword'].forEach((id) => { $(id).value = ''; });
+  $('rnOutput').style.display = 'none';
+  $('rnCurrent').textContent = '';
+  $('rnStatus').textContent = 'Memuat info project...';
+  $('rnStart').disabled = true;
+  $('rnNewDb').disabled = true;
+  $('rnModal').classList.add('open');
+  try {
+    const t = (await api('GET', '/api/rename/target?relPath=' + encodeURIComponent(rel))).target;
+    rnTarget = t;
+    const ok = t.db && t.db.local !== false && !(t.db.sharedWith && t.db.sharedWith.length);
+    $('rnDirLabel').textContent = `(sekarang: ${t.name})`;
+    $('rnNewDb').disabled = !ok;
+    if (mode === 'db') $('rnStart').disabled = !ok;
+    $('rnDbLabel').textContent = ok ? `(sekarang: ${t.db.name})` : '(tidak tersedia: DB tidak terdeteksi / bukan lokal / dipakai project lain)';
+    $('rnCurrent').innerHTML = mode === 'db'
+      ? (t.db ? `Database saat ini: <strong style="font-family:var(--font-mono)">${escHtml(t.db.name)}</strong> <span style="color:var(--mut)">(${escHtml(t.db.source)}${t.db.user ? ', user ' + escHtml(t.db.user) : ''})</span>` : 'Database tidak terdeteksi')
+      : `Folder saat ini: <strong style="font-family:var(--font-mono)">${escHtml(t.name)}</strong> <span style="color:var(--mut)">(${escHtml(t.path)})</span>`;
+    $('rnStatus').textContent = '';
+    $('rnStart').disabled = mode === 'db' && !ok;
+  } catch (e) { $('rnStatus').textContent = 'Error: ' + e.message; }
+}
+async function rnSubmit() {
+  const t = rnTarget;
+  if (!t) return;
+  const newDir = rnMode === 'dir' ? $('rnNewDir').value.trim() : '';
+  const newDb = rnMode === 'db' && !$('rnNewDb').disabled ? $('rnNewDb').value.trim() : '';
+  if (!newDir && !newDb) return alert(rnMode === 'db' ? 'Isi nama database baru' : 'Isi nama folder baru');
+  if (!$('rnPassword').value) return alert('Password akun wajib diisi');
+  if (!confirm(`RENAME ${t.dir}\n\n${newDir ? `Folder  : ${t.name} -> ${newDir}\n` : ''}${newDb ? `Database: ${t.db.name} -> ${newDb}\n` : ''}\nLanjutkan?`)) return;
+  $('rnStart').disabled = true;
+  $('rnStatus').textContent = 'Memulai rename...';
+  try {
+    const r = await api('POST', '/api/rename', { dir: t.dir, newDir, newDb, dbName: t.db ? t.db.name : '', password: $('rnPassword').value });
+    $('rnPassword').value = '';
+    rnPoll(r.id);
+  } catch (e) {
+    $('rnStart').disabled = false;
+    $('rnStatus').textContent = 'Gagal: ' + e.message;
+  }
+}
+async function rnPoll(id) {
+  try {
+    const d = await api('GET', `/api/deploy/status?id=${encodeURIComponent(id)}`);
+    const cls = d.status === 'done' ? 'ok' : (d.status === 'failed' ? 'down' : '');
+    $('rnStatus').innerHTML = `<span class="pill ${cls}">${escHtml(d.status)}</span> ${escHtml(d.label)}`;
+    const last = [...d.steps].reverse().find((s) => s.output) || d.steps[d.steps.length - 1];
+    $('rnOutput').style.display = '';
+    $('rnOutput').textContent = last && last.output ? `--- ${last.name} ---\n${last.output}` : '(belum ada output)';
+    if (d.status === 'running') { rnPollTimer = setTimeout(() => rnPoll(id), 3000); return; }
+    if (d.status === 'done') gitProjects();
+    $('rnStart').disabled = d.status === 'done';
+  } catch (e) {
+    $('rnStatus').textContent = 'Error: ' + e.message;
+    $('rnStart').disabled = false;
+  }
+}
+const closeRnModal = () => { clearTimeout(rnPollTimer); $('rnModal').classList.remove('open'); };
+$('rnModalClose').addEventListener('click', closeRnModal);
+$('rnCancel').addEventListener('click', closeRnModal);
+$('rnModal').addEventListener('click', (e) => { if (e.target === $('rnModal')) closeRnModal(); });
+$('rnStart').addEventListener('click', rnSubmit);
 
 // UI Events
 $('gitSearch').addEventListener('input', renderGitProjects);
@@ -2609,6 +2689,8 @@ async function doComposerUpdate(rel) {
 $('gitList').addEventListener('click', async (e) => {
   const dbsyncBtn = e.target.closest('.act-dbsync');
   if (dbsyncBtn) { closePullMenus(); openDbSyncModal(dbsyncBtn.dataset.rel); return; }
+  const renBtn = e.target.closest('.act-rename');
+  if (renBtn) { closePullMenus(); openRenameModal(renBtn.dataset.rel, renBtn.dataset.mode); return; }
   const termBtn = e.target.closest('.act-term');
   if (termBtn) { closePullMenus(); openTermModal(termBtn.dataset.rel); return; }
   const compBtn = e.target.closest('.act-composer');

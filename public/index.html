@@ -1071,6 +1071,33 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="rnModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="rnModalTitle">Rename</span>
+      <button class="btn" id="rnModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+      <div id="rnHelpDir" style="font-size:12px;color:var(--mut);line-height:1.5">
+        Folder dipindah; path di <strong>nginx</strong>, <strong>supervisor</strong>, <strong>cron</strong> ikut diubah (rollback otomatis bila <code>nginx -t</code> gagal). Domain/APP_URL tidak diubah.
+      </div>
+      <div id="rnHelpDb" style="font-size:12px;color:var(--mut);line-height:1.5">
+        Dump → DB baru → ubah <code>.env</code>/<code>wp-config.php</code> → DB lama di-drop (backup otomatis).
+      </div>
+      <div id="rnCurrent" style="font-size:13px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:8px 12px"></div>
+      <label id="rnDirRow" style="font-size:12px;color:var(--mut)">Nama folder baru <span id="rnDirLabel"></span><br><input id="rnNewDir" class="input" style="width:100%" autocomplete="off" /></label>
+      <label id="rnDbRow" style="font-size:12px;color:var(--mut)">Nama database baru <span id="rnDbLabel"></span><br><input id="rnNewDb" class="input" style="width:100%" autocomplete="off" /></label>
+      <label style="font-size:12px;color:var(--mut)">Password akun kamu*<br><input id="rnPassword" type="password" class="input" style="width:100%" placeholder="Password akun saat ini" autocomplete="current-password" /></label>
+      <div id="rnStatus" style="font-size:12px;color:var(--mut)"></div>
+      <pre id="rnOutput" class="modal-body" style="display:none;padding:10px;background:var(--bg-elev);border-radius:8px;max-height:220px"></pre>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" id="rnCancel">Tutup</button>
+        <button class="btn-pull" id="rnStart">✏️ Rename</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="dbSyncModal">
   <div class="modal">
     <div class="modal-head">

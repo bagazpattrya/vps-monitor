@@ -6,6 +6,8 @@ const os = require('os');
 const zlib = require('zlib');
 const { execSync, exec, execFile, spawn } = require('child_process');
 const crypto = require('crypto');
+// Node tidak membaca .env otomatis; loadEnvFile tidak menimpa env yang sudah di-set (mis. pm2).
+try { process.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 const auth = require('./auth');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -3374,6 +3376,159 @@ async function runUndeployJob(job, p) {
   }
 }
 
+// ---- Rename project folder / database ----
+// Folder: mv + tulis ulang path lama di vhost nginx, supervisor conf, dan cron www-data.
+// Database: dump -> DB baru -> grant -> update .env/wp-config -> drop DB lama (backup dulu).
+function pathBoundaryRe(p) {
+  return new RegExp(`(^|[^A-Za-z0-9_.-])${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_.-])`, 'g');
+}
+const replacePath = (text, from, to) => text.replace(pathBoundaryRe(from), (m, pre) => pre + to);
+
+// Target rename dari relPath repo (boleh bersarang, mis. Microspace/app) di bawah SCAN_ROOT.
+function renameTarget(session, rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes('\0')) return null;
+  const root = path.resolve(SCAN_ROOT);
+  const full = path.resolve(root, rel);
+  if (!full.startsWith(root + path.sep) || full === path.resolve(ROOT)) return null;
+  try { const st = fs.lstatSync(full); if (!st.isDirectory() || st.isSymbolicLink()) return null; } catch { return null; }
+  if (isHidden(session, [rel, full])) return null;
+  const db = detectProjectDb(full);
+  if (db) {
+    const others = scanGitDirs(SCAN_ROOT, 6).map((d) => path.resolve(d)).filter((d) => d !== full);
+    db.sharedWith = others.filter((d) => { const o = detectProjectDb(d); return o && o.name === db.name; }).map((d) => path.relative(root, d));
+  }
+  const sites = getHostedSites().filter((s) => siteRootBelongsToTarget(s.root, full));
+  return {
+    dir: path.relative(root, full), path: full, name: path.basename(full), db,
+    sites: sites.map((s) => ({ id: s.id, file: s.file })),
+  };
+}
+
+async function runRenameJob(job, p) {
+  const oldPath = path.resolve(p.path);
+  const label = p.dir;
+  try {
+    jobStep(job, 'validate', 'running', `dir=${p.dir} newDir=${p.newDir || '-'} db=${p.db ? p.db.name : '-'} newDb=${p.newDb || '-'}`);
+    if (!oldPath.startsWith(path.resolve(SCAN_ROOT) + path.sep)) throw new Error('Target di luar ' + SCAN_ROOT);
+    if (!fs.existsSync(oldPath)) throw new Error(`Folder ${oldPath} tidak ada`);
+    const newPath = p.newDir ? path.join(path.dirname(oldPath), p.newDir) : null;
+    if (newPath && fs.existsSync(newPath)) throw new Error(`Folder ${newPath} sudah ada`);
+    const conflict = [...DEPLOY_JOBS.values()].find((j) => j.id !== job.id && j.status === 'running' && (j.undeployDir === p.dir || String(j.label || '').startsWith(p.dir + ' (')));
+    if (conflict) throw new Error(`Job lain untuk ${p.dir} masih berjalan (${conflict.id})`);
+    jobStep(job, 'validate', 'ok', 'target valid');
+
+    // 1. Database dulu (path folder lama masih valid untuk .env).
+    if (p.newDb) {
+      const oldDb = p.db.name;
+      const nd = p.newDb;
+      jobStep(job, 'mysql: rename database', 'running', `${oldDb} -> ${nd}`);
+      const ex = await runFile('mysql', ['-BNe', `SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${sqlEsc(nd)}';`], { timeout: 30000 });
+      if (!ex.ok) throw new Error('cek database gagal\n' + ex.output);
+      if (ex.output.trim() !== '0') throw new Error(`Database ${nd} sudah ada`);
+      const bdir = fs.existsSync('/var/backups/mysql') ? '/var/backups/mysql' : REMOVED_DB_DIR;
+      try { fs.mkdirSync(bdir, { recursive: true, mode: 0o700 }); } catch {}
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      const dump = path.join(bdir, `rename-${oldDb}-${stamp}.sql.gz`);
+      let r = await runFile('bash', ['-o', 'pipefail', '-c', `mysqldump --single-transaction --quick --routines --triggers --events --no-tablespaces --default-character-set=utf8mb4 ${shq(oldDb)} | gzip -c > ${shq(dump)}`], { timeout: 600000 });
+      if (!r.ok || !fs.existsSync(dump) || fs.statSync(dump).size === 0) throw new Error('backup database gagal — belum ada perubahan\n' + r.output.slice(-2000));
+      try { fs.chmodSync(dump, 0o600); } catch {}
+      r = await runFile('mysql', ['-BNe', `CREATE DATABASE \`${nd}\` CHARACTER SET utf8mb4;`], { timeout: 30000 });
+      if (!r.ok) throw new Error('buat database baru gagal\n' + r.output);
+      const undoNew = () => runFile('mysql', ['-BNe', `DROP DATABASE IF EXISTS \`${nd}\`;`], { timeout: 60000 });
+      r = await runFile('bash', ['-o', 'pipefail', '-c', `gunzip -c ${shq(dump)} | mysql --default-character-set=utf8mb4 ${shq(nd)}`], { timeout: 600000 });
+      if (!r.ok) { await undoNew(); throw new Error('import ke database baru gagal (DB baru dibatalkan, DB lama utuh)\n' + r.output.slice(-2000)); }
+      const cnt = (db) => runFile('mysql', ['-BNe', `SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${sqlEsc(db)}';`], { timeout: 30000 });
+      const [a, b] = [await cnt(oldDb), await cnt(nd)];
+      if (!a.ok || !b.ok || a.output.trim() !== b.output.trim()) { await undoNew(); throw new Error(`jumlah tabel beda (${a.output.trim()} vs ${b.output.trim()}) — DB baru dibatalkan, DB lama utuh`); }
+      if (p.db.user) {
+        r = await runFile('mysql', ['-BNe', `GRANT ALL PRIVILEGES ON \`${nd}\`.* TO '${sqlEsc(p.db.user)}'@'localhost'; FLUSH PRIVILEGES;`], { timeout: 30000 });
+        if (!r.ok) { await undoNew(); throw new Error('grant ke DB baru gagal (DB baru dibatalkan)\n' + r.output); }
+      }
+      // Update config project.
+      const file = path.join(oldPath, p.db.source);
+      const txt = fs.readFileSync(file, 'utf8');
+      const next = p.db.source === '.env'
+        ? txt.replace(/^(\s*DB_DATABASE\s*=).*$/m, `$1${nd}`)
+        : txt.replace(/(define\(\s*['"]DB_NAME['"]\s*,\s*)['"][^'"]*['"]/, `$1'${nd}'`);
+      if (next === txt) { await undoNew(); throw new Error(`gagal mengubah nama DB di ${p.db.source} (DB baru dibatalkan)`); }
+      fs.writeFileSync(file, next);
+      for (const f of ['config.php']) { try { fs.unlinkSync(path.join(oldPath, 'bootstrap/cache', f)); } catch {} }
+      r = await runFile('mysql', ['-BNe', `DROP DATABASE \`${oldDb}\`;`], { timeout: 60000 });
+      if (p.db.user) await runFile('mysql', ['-BNe', `REVOKE ALL PRIVILEGES ON \`${oldDb}\`.* FROM '${sqlEsc(p.db.user)}'@'localhost';`], { timeout: 30000 });
+      jobStep(job, 'mysql: rename database', r.ok ? 'ok' : 'warn', `${oldDb} -> ${nd}; backup: ${dump}${r.ok ? '' : '\nDB lama gagal di-drop: ' + r.output}`);
+    } else {
+      jobStep(job, 'mysql: rename database', 'skip', 'tidak diminta');
+    }
+
+    // 2. Folder.
+    if (!newPath) { jobStep(job, 'rename folder', 'skip', 'tidak diminta'); }
+    else {
+      jobStep(job, 'rename folder', 'running', `${oldPath} -> ${newPath}`);
+      const progs = supervisorConfsFor(oldPath);
+      for (const pr of progs) for (const name of pr.names) await runCmd(`supervisorctl stop ${shq(name + ':*')} 2>&1`, { timeout: 30000 });
+      const mv = await runCmd(`mv -T -- ${shq(oldPath)} ${shq(newPath)}`, { timeout: 120000 });
+      if (!mv.ok) throw new Error('mv gagal\n' + mv.output);
+      for (const f of ['config.php', 'routes-v7.php', 'events.php']) { try { fs.unlinkSync(path.join(newPath, 'bootstrap/cache', f)); } catch {} }
+
+      const undo = []; // [file, teks asli]
+      const rewrite = (file, label) => {
+        const txt = fs.readFileSync(file, 'utf8');
+        const next = replacePath(txt, oldPath, newPath);
+        if (next === txt) return false;
+        undo.push([file, txt]);
+        fs.writeFileSync(file, next);
+        return label;
+      };
+      const notes = [];
+      let nginxChanged = false;
+      try {
+        const live = new Map(getHostedSites().map((s) => [s.id, s]));
+        const seen = new Set();
+        for (const x of p.sites || []) {
+          const s = live.get(x.id);
+          if (!s) continue;
+          let real = s.id; try { real = fs.realpathSync(s.id); } catch {}
+          if (seen.has(real)) continue;
+          seen.add(real);
+          if (rewrite(real)) { nginxChanged = true; notes.push('nginx: ' + real); }
+        }
+        for (const pr of progs) if (rewrite(pr.file)) notes.push('supervisor: ' + pr.file);
+        if (nginxChanged) {
+          const t = await runCmd('nginx -t 2>&1', { timeout: 15000 });
+          if (!t.ok) throw new Error('nginx -t gagal\n' + t.output);
+        }
+      } catch (e) {
+        for (const [f, txt] of undo) { try { fs.writeFileSync(f, txt); } catch {} }
+        await runCmd(`mv -T -- ${shq(newPath)} ${shq(oldPath)}`);
+        if (progs.length) await runCmd('supervisorctl reread 2>&1 && supervisorctl update 2>&1', { timeout: 60000 });
+        for (const pr of progs) for (const name of pr.names) await runCmd(`supervisorctl start ${shq(name + ':*')} 2>&1`, { timeout: 30000 });
+        throw new Error('rename folder dibatalkan, semua dikembalikan: ' + e.message);
+      }
+      // Cron www-data.
+      const ct = await runCmd('crontab -u www-data -l 2>/dev/null || true', { timeout: 15000 });
+      if (pathBoundaryRe(oldPath).test(ct.output)) {
+        const tmp = path.join(os.tmpdir(), `cron-${job.id}`);
+        fs.writeFileSync(tmp, replacePath(ct.output, oldPath, newPath), { mode: 0o600 });
+        const r = await runCmd(`crontab -u www-data ${shq(tmp)} 2>&1`, { timeout: 15000 });
+        try { fs.unlinkSync(tmp); } catch {}
+        notes.push(r.ok ? 'cron: diperbarui' : 'cron GAGAL diperbarui (edit manual)\n' + r.output);
+      }
+      const rl = nginxChanged ? await runCmd('systemctl reload nginx 2>&1', { timeout: 30000 }) : { ok: true };
+      const sv = progs.length ? await runCmd('supervisorctl reread 2>&1 && supervisorctl update 2>&1', { timeout: 60000 }) : { ok: true };
+      for (const pr of progs) for (const name of pr.names) await runCmd(`supervisorctl start ${shq(name + ':*')} 2>&1`, { timeout: 30000 });
+      jobStep(job, 'rename folder', rl.ok ? 'ok' : 'warn', `${oldPath} -> ${newPath}\n${notes.join('\n')}${rl.ok ? '' : '\nreload nginx gagal: ' + rl.output}${sv.ok ? '' : '\nsupervisor: ' + sv.output}`);
+    }
+    jobStep(job, 'verify', 'ok', 'selesai. Catatan: APP_URL/domain tidak diubah; php-fpm opcache mungkin perlu reload.');
+    job.status = 'done';
+    if (job.owner) audit(job.owner, 'rename.done', label, `newDir=${p.newDir || '-'} newDb=${p.newDb || '-'}`);
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 3000);
+    jobStep(job, 'ERROR', 'fail', msg);
+    job.status = 'failed';
+    if (job.owner) audit(job.owner, 'rename.fail', label, msg.slice(0, 200));
+  }
+}
+
 const server = http.createServer(async (req, res) => {
 
 
@@ -4157,6 +4312,54 @@ const server = http.createServer(async (req, res) => {
       jobStep(job, 'ERROR', 'fail', String((e && e.message) || e));
       job.status = 'failed';
     });
+    return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
+  }
+
+  // ---- Rename project / database API ----
+  if (p === '/api/rename/target' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const target = renameTarget(session, url.searchParams.get('relPath'));
+    if (!target) return send(res, 404, JSON.stringify({ error: 'Project tidak ditemukan' }));
+    return send(res, 200, JSON.stringify({ target }));
+  }
+  if (p === '/api/rename' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const target = renameTarget(session, body.dir);
+    if (!target) return send(res, 404, JSON.stringify({ error: 'Project tidak ditemukan' }));
+    let newDir = '';
+    let newDb = '';
+    if (body.newDir) {
+      const v = vDir(body.newDir);
+      if (!v.ok) return send(res, 400, JSON.stringify({ error: v.error }));
+      newDir = v.value;
+      if (newDir === target.name) newDir = '';
+      else if (newDir.startsWith('.') || fs.existsSync(path.join(path.dirname(target.path), newDir))) return send(res, 400, JSON.stringify({ error: `Folder ${newDir} sudah ada / tidak valid` }));
+    }
+    if (body.newDb) {
+      const v = vDbIdent(body.newDb, 'Nama database', 64);
+      if (!v.ok) return send(res, 400, JSON.stringify({ error: v.error }));
+      newDb = v.value;
+      if (!target.db) return send(res, 400, JSON.stringify({ error: 'Database project tidak terdeteksi' }));
+      if (target.db.local === false) return send(res, 400, JSON.stringify({ error: 'DB project bukan MySQL lokal' }));
+      if (String(body.dbName || '') !== target.db.name) return send(res, 400, JSON.stringify({ error: 'Nama database berubah sejak halaman dimuat — refresh lalu ulangi' }));
+      if (target.db.sharedWith && target.db.sharedWith.length) return send(res, 400, JSON.stringify({ error: `Database ${target.db.name} juga dipakai project lain (${target.db.sharedWith.join(', ')})` }));
+      if (SYSTEM_DBS.has(target.db.name.toLowerCase()) || SYSTEM_DBS.has(newDb.toLowerCase())) return send(res, 400, JSON.stringify({ error: 'Database sistem tidak boleh dipakai' }));
+      if (newDb === target.db.name) newDb = '';
+    }
+    if (!newDir && !newDb) return send(res, 400, JSON.stringify({ error: 'Tidak ada perubahan nama' }));
+    const pw = await auth.confirmPassword(session, body.password);
+    if (!pw.ok) {
+      audit(session.user, 'rename.denied', target.dir, pw.error);
+      return send(res, pw.status, JSON.stringify({ error: pw.error }));
+    }
+    const conflict = [...DEPLOY_JOBS.values()].find((j) => j.status === 'running' && (j.undeployDir === target.dir || String(j.label || '').startsWith(target.dir + ' (')));
+    if (conflict) return send(res, 409, JSON.stringify({ error: `Job lain untuk ${target.dir} masih berjalan (${conflict.id})` }));
+    const job = newJob('rename', `${target.dir} (rename -> ${newDir || target.dir}${newDb ? ', db ' + newDb : ''})`, [], session.user);
+    job.undeployDir = target.dir;
+    audit(session.user, 'rename.start', target.dir, `newDir=${newDir || '-'} newDb=${newDb || '-'}`);
+    runRenameJob(job, { ...target, newDir, newDb }).catch((e) => { jobStep(job, 'ERROR', 'fail', String((e && e.message) || e)); job.status = 'failed'; });
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
