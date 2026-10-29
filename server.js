@@ -1642,7 +1642,7 @@ function pullGitProject(targetPath) {
       try {
         const isLaravel = fs.existsSync(path.join(targetPath, 'artisan'));
         const isWP = fs.existsSync(path.join(targetPath, 'wp-load.php'));
-        const isNode = fs.existsSync(path.join(targetPath, 'package.json'));
+        const isNode = !isLaravel && !isWP && fs.existsSync(path.join(targetPath, 'package.json'));
 
         // Node.js post-update tasks: npm install + build + pm2 restart
         if (isNode) {
@@ -1660,7 +1660,7 @@ function pullGitProject(targetPath) {
               combined += '\n--- npm run build ---\n' + bOut;
             }
           } catch {}
-          if (!isLaravel && !isWP) try {
+          try {
             const pmOut = execSync(`sudo -H -u "#${uid}" pm2 restart "${dirName}" 2>&1 || pm2 restart "${dirName}" 2>&1`, { timeout: 30_000 }).toString();
             combined += `\n--- pm2 restart ${dirName} ---\n` + pmOut;
           } catch (pErr) {
