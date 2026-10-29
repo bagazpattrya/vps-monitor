@@ -1660,7 +1660,7 @@ function pullGitProject(targetPath) {
               combined += '\n--- npm run build ---\n' + bOut;
             }
           } catch {}
-          try {
+          if (!isLaravel && !isWP) try {
             const pmOut = execSync(`sudo -H -u "#${uid}" pm2 restart "${dirName}" 2>&1 || pm2 restart "${dirName}" 2>&1`, { timeout: 30_000 }).toString();
             combined += `\n--- pm2 restart ${dirName} ---\n` + pmOut;
           } catch (pErr) {
