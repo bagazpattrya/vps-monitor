@@ -469,6 +469,22 @@
     <div class="card-foot"><span id="procLastSpikeProc" style="font-family:var(--font-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis">—</span></div>
   </div>
 
+  <!-- CPU per project -->
+  <div class="card c12" data-collapsible id="projCpuCard">
+    <div class="sec-head">
+      <h3 class="sec-title"><span>CPU by Project</span><span class="badge" id="projCpuCount">0</span></h3>
+    </div>
+    <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+      Proses dicocokkan ke project lewat working directory / command path. PHP-FPM worker bisa tidak terhitung. Avg = rata-rata CPU (semua sample, termasuk idle) selama <span id="projCpuHours">0</span> jam terakhir sejak server start.
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Project</th><th>Type</th><th>Procs</th><th>CPU now %</th><th>CPU avg %</th><th>CPU peak %</th><th>MEM %</th></tr></thead>
+        <tbody id="projCpu"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Top Processes -->
   <div class="card c12" data-collapsible id="processes">
     <div class="sec-head">

@@ -830,6 +830,22 @@ function showSpikeDetail(index) {
   openModalText(`CPU spike · ${new Date(s.start).toLocaleString([])}`, lines.join('\n'));
 }
 
+function projTypePill(r) {
+  if (r.isLaravel || r.type === 'laravel') return '<span class="pill t-laravel">Laravel</span>';
+  if (r.isWP || r.type === 'wordpress') return '<span class="pill t-wp">WordPress</span>';
+  if (r.isNode || r.type === 'node') return '<span class="pill t-node">Node.js</span>';
+  return '<span class="pill t-other">Other</span>';
+}
+
+function renderProjCpu(list, hours) {
+  $('projCpuHours').textContent = hours;
+  $('projCpuCount').textContent = list.length;
+  $('projCpu').innerHTML = list.length ? list.map(r => `<tr>
+    <td>${escHtml(r.name)}</td><td>${projTypePill(r)}</td><td>${r.procs}</td>
+    <td>${r.cpu.toFixed(1)}</td><td><strong>${r.avg.toFixed(1)}</strong></td><td>${r.peak.toFixed(1)}</td><td>${r.mem.toFixed(1)}</td></tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--mut)">No project processes detected</td></tr>';
+}
+
 async function procs() {
   try {
     const d = await j('/api/processes?limit=200&hours=24');
@@ -842,6 +858,7 @@ async function procs() {
       sampledAt: d.sampledAt || 0,
       systemCpu: d.systemCpu || 0,
     };
+    renderProjCpu(d.projects || [], d.projHours || 0);
     renderProcs();
     renderProcSummary();
     renderProcessSpikes();
@@ -1459,8 +1476,9 @@ function renderGitProjects() {
             <div class="git-item" id="item-${r.relPath.replace(/[^a-zA-Z0-9_-]/g, '_')}">
               <input type="checkbox" class="git-check repo-check" data-rel="${r.relPath}" />
               <div class="git-info">
-                <div class="git-name">
-                  <span>${r.name}</span>
+                <div class="git-name" title="${r.name}">${r.name}</div>
+                <div class="git-tags">
+                  ${projTypePill(r)}
                   <span class="pill ok">${r.branch}</span>
                   ${r.isDev ? '<span class="pill">DEV</span>' : ''}
                   ${r.dirty ? '<span class="pill down">modified</span>' : ''}

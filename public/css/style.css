@@ -704,10 +704,12 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
+.git-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.pill.t-laravel { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+.pill.t-node { background: rgba(132, 204, 22, 0.15); color: #a3e635; }
+.pill.t-wp { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.pill.t-other { background: rgba(148, 163, 184, 0.15); color: var(--mut); }
 .git-meta {
   font-size: 12px;
   color: var(--mut);

@@ -45,10 +45,14 @@ try {
 } catch { history = []; }
 
 let processSpikes = [];
+let projHist = []; // rata-rata CPU per project, bucket per jam (24 jam)
 try {
   if (fs.existsSync(PROC_SPIKES_FILE)) {
     const raw = JSON.parse(fs.readFileSync(PROC_SPIKES_FILE, 'utf8'));
-    if (Array.isArray(raw)) processSpikes = raw.slice(-PROC_MAX_SPIKES);
+    // Format lama: array spike saja. Format baru: { spikes, projHist }.
+    const spikes = Array.isArray(raw) ? raw : raw.spikes;
+    if (Array.isArray(spikes)) processSpikes = spikes.slice(-PROC_MAX_SPIKES);
+    if (!Array.isArray(raw) && Array.isArray(raw.projHist)) projHist = raw.projHist.filter((b) => b.hour > Date.now() / 3600_000 - 24).slice(-24);
   }
 } catch { processSpikes = []; }
 
@@ -452,6 +456,8 @@ function readProcSnapshot() {
 
   const rows = [];
   const nextPrev = new Map();
+  // Longest path first so nested repos win over their parent.
+  const projDirs = gitCache.projects.map((p) => [p.path, p.relPath]).sort((a, b) => b[0].length - a[0].length);
 
   for (const pid of pids) {
     let stat;
@@ -480,6 +486,14 @@ function readProcSnapshot() {
       const parts = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
       if (parts.length) cmd = parts.join(' ');
     } catch {}
+    // shortcut: project dikenali dari cwd/cmdline saja; php-fpm worker (cwd bukan folder project) tidak terhitung.
+    let project = '';
+    if (projDirs.length) {
+      let cwd = '';
+      try { cwd = fs.readlinkSync(`/proc/${pid}/cwd`); } catch {}
+      const hit = projDirs.find(([d]) => cwd === d || cwd.startsWith(d + '/') || cmd.includes(d + '/'));
+      if (hit) project = hit[1];
+    }
     let rssKb = 0;
     try {
       const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/^VmRSS:\s+(\d+)/m);
@@ -500,6 +514,7 @@ function readProcSnapshot() {
       elapsed,
       etime: formatProcDuration(elapsed),
       cmd: (cmd || comm).slice(0, 300),
+      project,
     });
   }
 
@@ -585,7 +600,34 @@ function recordProcessSpike(systemCpu, top) {
   if (isMysqlProc(topProc)) captureSpikeQueries(ep).catch(() => {});
 }
 
+function recordProjHist(rows) {
+  const hour = Math.floor(Date.now() / 3600_000);
+  let b = projHist[projHist.length - 1];
+  if (!b || b.hour !== hour) { b = { hour, n: 0, sums: {} }; projHist.push(b); if (projHist.length > 24) projHist.shift(); }
+  b.n += 1;
+  const cur = {};
+  for (const r of rows) if (r.project) cur[r.project] = (cur[r.project] || 0) + r.cpu;
+  for (const [k, v] of Object.entries(cur)) {
+    const e = b.sums[k] || (b.sums[k] = { cpu: 0, peak: 0 });
+    e.cpu += v; e.peak = Math.max(e.peak, v);
+  }
+  procSpikesDirty = true;
+}
+function projHistStats() {
+  const n = projHist.reduce((a, b) => a + b.n, 0);
+  const out = new Map();
+  for (const b of projHist) for (const [k, e] of Object.entries(b.sums)) {
+    const o = out.get(k) || { avg: 0, peak: 0 };
+    o.avg += e.cpu; o.peak = Math.max(o.peak, e.peak);
+    out.set(k, o);
+  }
+  for (const o of out.values()) o.avg = n ? Math.round((o.avg / n) * 10) / 10 : 0;
+  return { out, hours: projHist.length };
+}
+
 function sampleProcesses() {
+  // Project list dipakai untuk tag proses; refresh jarang karena getGitProjects menjalankan git per repo.
+  if (Date.now() - gitCache.time > 300_000) { try { getGitProjects(true); } catch {} }
   const rows = readProcSnapshot();
   if (!rows.length) return;
   const sorted = rows.slice().sort((a, b) => b.cpu - a.cpu);
@@ -599,13 +641,13 @@ function sampleProcesses() {
     intervalMs: PROC_INTERVAL_MS,
     spikeThreshold: PROC_SPIKE_SYSTEM,
   };
-  if (hadBaseline) recordProcessSpike(systemCpu, sorted);
+  if (hadBaseline) { recordProcessSpike(systemCpu, sorted); recordProjHist(rows); }
 }
 
 setInterval(() => {
   if (!procSpikesDirty) return;
   try {
-    fs.writeFileSync(PROC_SPIKES_FILE, JSON.stringify(processSpikes.slice(-PROC_MAX_SPIKES)));
+    fs.writeFileSync(PROC_SPIKES_FILE, JSON.stringify({ spikes: processSpikes.slice(-PROC_MAX_SPIKES), projHist }));
     procSpikesDirty = false;
   } catch {}
 }, 60_000).unref();
@@ -1373,7 +1415,9 @@ function getGitProjects(force = false) {
     const group = parts.length > 1 ? parts[0] : 'Projects';
     const isLaravel = fs.existsSync(path.join(d, 'artisan'));
     const isDev = isDevProjectName(name);
-    const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null, isLaravel, isDev };
+    const isWP = fs.existsSync(path.join(d, 'wp-load.php'));
+    const isNode = !isLaravel && !isWP && fs.existsSync(path.join(d, 'package.json'));
+    const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null, isLaravel, isWP, isNode, isDev };
     try {
       ensureFilemodeFalse(d);
     } catch {}
@@ -3774,8 +3818,28 @@ const server = http.createServer(async (req, res) => {
         .reverse()
         .map((sp) => sp.queries ? { ...sp, queries: sp.queries.filter((q) => !isHidden(session, [q.db, q.user, q.info])) } : sp);
     }
+    const byProj = new Map();
+    for (const r of (lastProcSnapshot.rows.length ? lastProcSnapshot.rows : [])) {
+      if (!r.project || (!session.admin && r.user !== session.user) || isHidden(session, [r.project])) continue;
+      const a = byProj.get(r.project) || { relPath: r.project, cpu: 0, mem: 0, procs: 0 };
+      a.cpu += r.cpu; a.mem += r.mem; a.procs += 1;
+      byProj.set(r.project, a);
+    }
+    const kind = new Map(gitCache.projects.map((g) => [g.relPath, g]));
+    const hist = session.admin ? projHistStats() : { out: new Map(), hours: 0 };
+    for (const k of hist.out.keys()) if (!byProj.has(k) && !isHidden(session, [k])) byProj.set(k, { relPath: k, cpu: 0, mem: 0, procs: 0 });
+    const projects = [...byProj.values()].map((a) => {
+      const g = kind.get(a.relPath) || {};
+      const h = hist.out.get(a.relPath) || { avg: 0, peak: 0 };
+      return { ...a, name: g.name || a.relPath, cpu: Math.round(a.cpu * 10) / 10, mem: Math.round(a.mem * 10) / 10,
+        avg: h.avg, peak: Math.round(h.peak * 10) / 10,
+        type: g.isLaravel ? 'laravel' : g.isWP ? 'wordpress' : g.isNode ? 'node' : 'other' };
+    }).sort((a, b) => (b.avg - a.avg) || (b.cpu - a.cpu)).slice(0, 20);
+    const projHours = hist.hours;
     return send(res, 200, JSON.stringify({
       time: Date.now(),
+      projects,
+      projHours,
       sampledAt: lastProcSnapshot.time,
       intervalMs: PROC_INTERVAL_MS,
       cores: lastProcSnapshot.cores,
