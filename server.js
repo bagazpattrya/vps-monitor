@@ -2167,7 +2167,7 @@ function resolveBackupFile(session, rel) {
 // Daftar database live (selain DB sistem), disaring hidden keywords untuk non-superadmin.
 const SYSTEM_DBS = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
 async function listDatabases(session) {
-  const r = await runFile('mysql', ['-BNe', 'SELECT table_schema, ROUND(SUM(data_length+index_length)) FROM information_schema.tables GROUP BY table_schema UNION SELECT schema_name, 0 FROM information_schema.schemata ORDER BY 1'], { timeout: 15000 });
+  const r = await runFile('mysql', ['-BNe', 'SET SESSION information_schema_stats_expiry=0; SELECT table_schema, ROUND(SUM(data_length+index_length)) FROM information_schema.tables GROUP BY table_schema UNION SELECT schema_name, 0 FROM information_schema.schemata ORDER BY 1'], { timeout: 15000 });
   if (!r.ok) return { ok: false, error: 'Gagal membaca daftar database: ' + r.output.trim().slice(0, 300) };
   const map = new Map();
   for (const line of r.output.split('\n')) {
