@@ -2114,6 +2114,10 @@ document.addEventListener('keydown', (e) => {
   target.select();
 });
 
+$('navSearch').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.toggle('nav-hide', !!q && !l.textContent.toLowerCase().includes(q)));
+});
 document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   link.addEventListener('click', () => {
     toggleSidebar(false);
