@@ -1605,6 +1605,28 @@ function getSyncDbInfo(rel) {
   return { ok: true, target: { relPath: rel, name: targetName, db: target.db, isDev: targetDev }, sources, defaultSource: def };
 }
 
+// Ukuran DB + file project (tanpa vendor/node_modules/.git) + storage/app/public, untuk modal Sync DB.
+async function getSyncSizes(rel, db) {
+  const pr = resolveGitProject(rel);
+  if (pr.error) return { ok: false, error: pr.error };
+  const du = async (dir, extra = []) => {
+    if (!fs.existsSync(dir)) return 0;
+    const r = await runFile('du', ['-sk', ...extra, dir], { timeout: 20000 });
+    return r.ok ? (Number(r.output.trim().split(/\s+/)[0]) || 0) * 1024 : null;
+  };
+  let dbSize = null;
+  if (db && /^[A-Za-z0-9_$.-]+$/.test(db)) {
+    const r = await runFile('mysql', ['-BNe', `SET SESSION information_schema_stats_expiry=0; SELECT IFNULL(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema='${db}'`], { timeout: 15000 });
+    if (r.ok) dbSize = Number(r.output.trim()) || 0;
+  }
+  return {
+    ok: true,
+    db: dbSize,
+    project: await du(pr.full, ['--exclude=node_modules', '--exclude=vendor', '--exclude=.git']),
+    storage: await du(path.join(pr.full, 'storage', 'app', 'public')),
+  };
+}
+
 // Salin storage/app/public source -> target. Target dibersihkan dulu (kecuali .gitignore),
 // supaya file lama tidak menumpuk jadi duplikat.
 async function syncProjectStorage(pr, sp) {
@@ -4245,6 +4267,13 @@ const server = http.createServer(async (req, res) => {
     r.sources = r.sources.filter((x) => !isHidden(session, [x.name, x.relPath, x.db]));
     if (r.defaultSource && !r.sources.some((x) => x.relPath === r.defaultSource)) r.defaultSource = null;
     return send(res, 200, JSON.stringify(r));
+  }
+  if (p === '/api/git/db/sizes' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const rel = url.searchParams.get('relPath');
+    if (isHidden(session, rel)) return send(res, 404, JSON.stringify({ error: 'Not found' }));
+    const r = await getSyncSizes(rel, url.searchParams.get('db') || '');
+    return send(res, r.ok ? 200 : 400, JSON.stringify(r));
   }
   if (p === '/api/git/db/sync' && req.method === 'POST') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));

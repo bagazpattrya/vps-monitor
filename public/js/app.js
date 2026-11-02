@@ -2652,6 +2652,7 @@ async function openDbSyncModal(rel) {
   $('dbSyncSource').disabled = true;
   $('dbSyncSrcDb').textContent = '—';
   $('dbSyncDstDb').textContent = '—';
+  $('dbSyncSrcSize').textContent = ''; $('dbSyncDstSize').textContent = '';
   $('dbSyncPassword').value = '';
   $('dbSyncErr').style.display = 'none';
   $('dbSyncRun').disabled = true;
@@ -2660,6 +2661,8 @@ async function openDbSyncModal(rel) {
     const d = await j('/api/git/db/sources?relPath=' + encodeURIComponent(rel));
     dbSyncSources = d.sources || [];
     $('dbSyncDstDb').textContent = d.target.db || '(DB kosong di .env)';
+    $('dbSyncDstSize').dataset.rel = rel + '|' + (d.target.db || '');
+    showSyncSizes('dbSyncDstSize', rel, d.target.db);
     if (!dbSyncSources.length) {
       $('dbSyncSource').innerHTML = '<option value="">Tidak ada project lain dengan DB</option>';
       return;
@@ -2676,10 +2679,23 @@ async function openDbSyncModal(rel) {
     $('dbSyncErr').style.display = '';
   }
 }
+async function showSyncSizes(elId, rel, db) {
+  const el = $(elId);
+  if (!rel) { el.textContent = ''; return; }
+  el.textContent = 'Menghitung ukuran…';
+  try {
+    const d = await j(`/api/git/db/sizes?relPath=${encodeURIComponent(rel)}&db=${encodeURIComponent(db || '')}`);
+    if (el.dataset.rel !== rel + '|' + db) return; // pilihan sudah berganti
+    const f = (v) => v == null ? '—' : fmtBytes(v);
+    el.innerHTML = `DB: <b>${f(d.db)}</b><br>Project: <b>${f(d.project)}</b><br>storage/app/public: <b>${f(d.storage)}</b>`;
+  } catch { if (el.dataset.rel === rel + '|' + db) el.textContent = 'Ukuran gagal dimuat'; }
+}
 function updateDbSyncSelection() {
   const sel = $('dbSyncSource').value;
   const s = dbSyncSources.find(x => x.relPath === sel);
   $('dbSyncSrcDb').textContent = s ? s.db : '—';
+  $('dbSyncSrcSize').dataset.rel = s ? s.relPath + '|' + s.db : '';
+  showSyncSizes('dbSyncSrcSize', s && s.relPath, s && s.db);
 }
 $('dbSyncSource').addEventListener('change', updateDbSyncSelection);
 const closeDbSyncModal = () => { $('dbSyncModal').classList.remove('open'); dbSyncTarget = null; };

@@ -1145,8 +1145,10 @@
         <select id="dbSyncSource" class="input" style="width:100%"></select>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
-        <div><span style="color:var(--mut)">Source DB:</span> <strong id="dbSyncSrcDb" style="color:var(--ok)">—</strong></div>
-        <div><span style="color:var(--mut)">Target DB:</span> <strong id="dbSyncDstDb" style="color:var(--warn)">—</strong></div>
+        <div><span style="color:var(--mut)">Source DB:</span> <strong id="dbSyncSrcDb" style="color:var(--ok)">—</strong>
+          <div id="dbSyncSrcSize" style="color:var(--mut);margin-top:4px;line-height:1.5"></div></div>
+        <div><span style="color:var(--mut)">Target DB:</span> <strong id="dbSyncDstDb" style="color:var(--warn)">—</strong>
+          <div id="dbSyncDstSize" style="color:var(--mut);margin-top:4px;line-height:1.5"></div></div>
       </div>
       <div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
