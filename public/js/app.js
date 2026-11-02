@@ -2912,7 +2912,10 @@ $('backupRunBtn').addEventListener('click', async () => {
 let dbDumpItems = [];
 function renderDbDump() {
   const q = $('dbDumpSearch').value.trim().toLowerCase();
-  const items = dbDumpItems.filter((d) => d.name.toLowerCase().includes(q));
+  const [key, dir] = $('dbDumpSort').value.split('-');
+  const items = dbDumpItems.filter((d) => d.name.toLowerCase().includes(q))
+    .sort((a, b) => (key === 'size' ? a.size - b.size : a.name.localeCompare(b.name)) * (dir === 'desc' ? -1 : 1));
+  $('dbDumpCount').textContent = `${items.length} / ${dbDumpItems.length} database`;
   $('dbDumpList').innerHTML = items.length ? items.map((d) => `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd, rgba(255,255,255,.08))">
       <div><strong>${escHtml(d.name)}</strong> <span style="color:var(--mut);font-size:12px">${fmtBytes(d.size)}</span></div>
@@ -2929,6 +2932,8 @@ $('dbDumpBtn').addEventListener('click', async () => {
   } catch (err) { $('dbDumpList').textContent = err.message || 'Gagal memuat database'; }
 });
 $('dbDumpSearch').addEventListener('input', renderDbDump);
+$('dbDumpSort').addEventListener('change', renderDbDump);
+$('dbDumpModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('open'); });
 $('dbDumpClose').addEventListener('click', () => $('dbDumpModal').classList.remove('open'));
 
 // File Explorer Events

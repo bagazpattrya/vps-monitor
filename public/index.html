@@ -1025,17 +1025,24 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="dbDumpModal">
-  <div class="modal">
+<div class="modal-backdrop drawer-backdrop" id="dbDumpModal">
+  <aside class="drawer">
     <div class="modal-head">
       <span>Download Database (live dump .sql.gz)</span>
       <button class="btn" id="dbDumpClose" style="padding:2px 8px">✕</button>
     </div>
-    <div style="padding:14px 16px;overflow:auto">
-      <input type="search" id="dbDumpSearch" class="input" placeholder="Filter database..." style="width:100%;margin-bottom:8px" />
-      <div id="dbDumpList" style="font-size:13px">Loading…</div>
+    <div style="padding:14px 16px 0;display:flex;gap:8px">
+      <input type="search" id="dbDumpSearch" class="input" placeholder="Filter database..." style="flex:1;min-width:0" />
+      <select id="dbDumpSort" class="input">
+        <option value="name-asc">Nama A–Z</option>
+        <option value="name-desc">Nama Z–A</option>
+        <option value="size-desc">Ukuran ↓</option>
+        <option value="size-asc">Ukuran ↑</option>
+      </select>
     </div>
-  </div>
+    <div style="padding:6px 16px 0;font-size:12px;color:var(--mut)" id="dbDumpCount"></div>
+    <div style="padding:6px 16px 14px;overflow:auto;flex:1;font-size:13px" id="dbDumpList">Loading…</div>
+  </aside>
 </div>
 
 <div class="modal-backdrop" id="seedModal">

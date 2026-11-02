@@ -903,6 +903,17 @@ select.input { appearance: auto; max-width: 100%; }
   word-break: break-word;
   line-height: 1.6;
 }
+.drawer-backdrop { justify-content: flex-end; align-items: stretch; }
+.drawer {
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-light);
+  width: 420px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in .2s ease-out;
+}
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: none; } }
 .modal-body.ok { color: var(--ok); }
 .modal-body.err { color: var(--bad); }
 
