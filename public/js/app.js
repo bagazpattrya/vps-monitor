@@ -38,6 +38,8 @@ let procMeta = { intervalMs: 5000, cores: 0, spikeThreshold: 70, sampledAt: 0 };
 let errorData = null;
 let errorViewEntries = [];
 let errorLevel = 'all';
+let errorSorted = [];
+let errorShowLimit = 100;
 const errorSelected = new Set();
 
 async function j(u) {
@@ -1005,15 +1007,14 @@ function renderErrors() {
   if (!errorData) return;
   const q = ($('errorSearch').value || '').trim().toLowerCase();
   const project = $('errorProject').value;
-  const counts = errorProjectCounts();
-  const entries = (errorData.entries || []).filter(e => {
+  const entries = errorSorted.filter(e => {
     if (project && e.project !== project) return false;
     if (errorLevel === 'critical' && !e.critical) return false;
     if (errorLevel === 'error' && e.level !== 'ERROR') return false;
     if (errorLevel === 'warning' && e.level !== 'WARNING') return false;
     if (q && ![e.message, e.project, e.source, e.level].some(v => String(v || '').toLowerCase().includes(q))) return false;
     return true;
-  }).sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
+  });
   errorViewEntries = entries;
   $('errorBadge').textContent = `${entries.length} / ${(errorData.entries || []).length}`;
 
@@ -1022,7 +1023,10 @@ function renderErrors() {
     syncErrorSelection();
     return;
   }
-  $('errorList').innerHTML = entries.map((e, i) => {
+  const shown = entries.slice(0, errorShowLimit);
+  const more = entries.length > shown.length
+    ? `<tr><td colspan="6" style="text-align:center"><button class="btn-sm" id="errorShowMore">Tampilkan lebih banyak (${shown.length} / ${entries.length})</button></td></tr>` : '';
+  $('errorList').innerHTML = shown.map((e, i) => {
     const lvl = e.level === 'WARNING' ? 'warn' : e.critical ? 'down' : 'warn';
     const when = e.t ? new Date(e.t).toLocaleString([]) : '—';
     return `<tr class="${e.critical ? 'err-row-crit' : ''}">
@@ -1038,7 +1042,7 @@ function renderErrors() {
         </button>
       </span></td>
     </tr>`;
-  }).join('');
+  }).join('') + more;
   syncErrorSelection();
 }
 
@@ -1075,6 +1079,8 @@ async function errors(force = false) {
     }
     const d = await j(`/api/logs/errors?${qs}${force ? '&force=1' : ''}`);
     errorData = d;
+    const counts = errorProjectCounts();
+    errorSorted = (d.entries || []).slice().sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
     errorSelected.clear();
     renderErrorKpis();
     renderErrorProjects();
@@ -1350,8 +1356,10 @@ if ($('procSpikeList')) {
   });
 }
 
-if ($('errorSearch')) $('errorSearch').addEventListener('input', renderErrors);
-if ($('errorProject')) $('errorProject').addEventListener('change', renderErrors);
+let errorSearchTimer;
+const rerenderErrors = () => { errorShowLimit = 100; renderErrors(); };
+if ($('errorSearch')) $('errorSearch').addEventListener('input', () => { clearTimeout(errorSearchTimer); errorSearchTimer = setTimeout(rerenderErrors, 200); });
+if ($('errorProject')) $('errorProject').addEventListener('change', rerenderErrors);
 if ($('errorWindow')) $('errorWindow').addEventListener('change', () => {
   const custom = $('errorWindow').value === 'custom';
   $('errorFrom').hidden = $('errorTo').hidden = !custom;
@@ -1366,11 +1374,12 @@ if ($('errorLevelTabs')) {
     document.querySelectorAll('#errorLevelTabs .tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     errorLevel = btn.dataset.level || 'all';
-    renderErrors();
+    rerenderErrors();
   });
 }
 if ($('errorList')) {
   $('errorList').addEventListener('click', (e) => {
+    if (e.target.closest('#errorShowMore')) { errorShowLimit += 200; renderErrors(); return; }
     const del = e.target.closest('[data-error-delete]');
     if (del) { deleteErrorRows([del.dataset.errorDelete]); return; }
     const btn = e.target.closest('[data-error-index]');

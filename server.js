@@ -953,6 +953,16 @@ function readLogTail(file, maxBytes = LOG_TAIL_BYTES) {
   } catch { return ''; }
 }
 
+// Hanya butuh path project; getGitProjects() menjalankan execSync git per repo (lambat, blokir event loop).
+let logProjectsCache = { time: 0, list: [] };
+function getLogProjects() {
+  const now = Date.now();
+  if (logProjectsCache.time && now - logProjectsCache.time < 30_000) return logProjectsCache.list;
+  const list = scanGitDirs(SCAN_ROOT, 6).map((d) => ({ name: path.basename(d), relPath: path.relative(SCAN_ROOT, d), path: d }));
+  logProjectsCache = { time: now, list };
+  return list;
+}
+
 function discoverLogSources() {
   const out = [];
   const seen = new Set();
@@ -967,7 +977,7 @@ function discoverLogSources() {
     out.push({ ...meta, path: file, bytes: st.size, mtime: st.mtimeMs });
   }
 
-  for (const p of getGitProjects()) {
+  for (const p of getLogProjects()) {
     for (const sub of ['storage/logs', 'logs']) {
       const dir = path.join(p.path, sub);
       let names = [];
