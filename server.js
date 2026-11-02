@@ -1202,13 +1202,15 @@ function scrubLogText(text) {
   return s;
 }
 
-function buildErrorReport(hours, force = false, session = null) {
+function buildErrorReport(hours, force = false, session = null, from = 0, to = 0) {
   const data = collectErrorLogs(force);
-  const since = hours > 0 ? Date.now() - hours * 3600_000 : 0;
+  const custom = from > 0 || to > 0;
+  const since = custom ? from : hours > 0 ? Date.now() - hours * 3600_000 : 0;
+  const until = custom ? to : 0;
   const visibleSources = data.sources.filter((s) => !isHidden(session, [s.project, s.source]));
   const visibleIds = new Set(visibleSources.map((s) => s.id));
   const entries = data.entries
-    .filter((e) => visibleIds.has(e.sourceId) && (!since || e.t >= since))
+    .filter((e) => visibleIds.has(e.sourceId) && (!since || e.t >= since) && (!until || e.t <= until))
     .filter((e) => !isHidden(session, [e.project, e.source, e.message, e.detail]));
 
   const sourceCounts = new Map();
@@ -1235,6 +1237,8 @@ function buildErrorReport(hours, force = false, session = null) {
     time: Date.now(),
     generatedAt: data.time,
     windowHours: hours,
+    from: custom ? from : 0,
+    to: custom ? to : 0,
     scannedSources: visibleSources.length,
     summary,
     sources,
@@ -3874,8 +3878,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/logs/errors') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    const hours = Math.max(0, Math.min(168, parseInt(url.searchParams.get('hours'), 10) || 24));
-    const report = buildErrorReport(hours, url.searchParams.get('force') === '1', session);
+    const h = parseInt(url.searchParams.get('hours'), 10);
+    const hours = Number.isNaN(h) ? 24 : Math.max(0, Math.min(8760, h));
+    const from = Math.max(0, parseInt(url.searchParams.get('from'), 10) || 0);
+    const to = Math.max(0, parseInt(url.searchParams.get('to'), 10) || 0);
+    const report = buildErrorReport(hours, url.searchParams.get('force') === '1', session, from, to);
     return send(res, 200, JSON.stringify(report));
   }
   if (p === '/api/logs/errors/delete' && req.method === 'POST') {

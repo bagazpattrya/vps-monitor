@@ -943,7 +943,7 @@ function renderErrorKpis() {
   if (!errorData) return;
   const s = errorData.summary || {};
   const h = Number(errorData.windowHours);
-  const windowLabel = h > 0 ? `last ${h}h` : 'all available';
+  const windowLabel = (errorData.from || errorData.to) ? 'custom range' : h > 0 ? `last ${h}h` : 'all available';
   $('errorCritical').textContent = s.critical || 0;
   $('errorErrors').textContent = s.error || 0;
   $('errorWarnings').textContent = s.warning || 0;
@@ -1067,7 +1067,13 @@ async function errors(force = false) {
   if (!isAdmin) return;
   try {
     const hours = $('errorWindow') ? ($('errorWindow').value || '24') : '24';
-    const d = await j(`/api/logs/errors?hours=${encodeURIComponent(hours)}${force ? '&force=1' : ''}`);
+    let qs = `hours=${encodeURIComponent(hours === 'custom' ? 0 : hours)}`;
+    if (hours === 'custom') {
+      const f = Date.parse($('errorFrom').value), t = Date.parse($('errorTo').value);
+      if (f) qs += `&from=${f}`;
+      if (t) qs += `&to=${t}`;
+    }
+    const d = await j(`/api/logs/errors?${qs}${force ? '&force=1' : ''}`);
     errorData = d;
     errorSelected.clear();
     renderErrorKpis();
@@ -1346,7 +1352,12 @@ if ($('procSpikeList')) {
 
 if ($('errorSearch')) $('errorSearch').addEventListener('input', renderErrors);
 if ($('errorProject')) $('errorProject').addEventListener('change', renderErrors);
-if ($('errorWindow')) $('errorWindow').addEventListener('change', () => errors());
+if ($('errorWindow')) $('errorWindow').addEventListener('change', () => {
+  const custom = $('errorWindow').value === 'custom';
+  $('errorFrom').hidden = $('errorTo').hidden = !custom;
+  errors();
+});
+['errorFrom', 'errorTo'].forEach(id => { if ($(id)) $(id).addEventListener('change', () => errors()); });
 if ($('errorRefresh')) $('errorRefresh').addEventListener('click', () => errors(true));
 if ($('errorLevelTabs')) {
   $('errorLevelTabs').addEventListener('click', (e) => {
