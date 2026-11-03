@@ -7,7 +7,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const chat = require('../chat.js');
 const chats = require('../chats.js');
-const { buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter } = chat;
+const { buildClaudeArgs, parseStreamLine, buildSandbox, scopeDirs, createLimiter } = chat;
 
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -44,16 +44,31 @@ test('parseStreamLine ignores garbage', () => {
   assert.strictEqual(parseStreamLine(''), null);
 });
 
-test('buildSandbox links only given directories', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbroot-'));
+test('buildSandbox makes a clean empty folder per user, no symlinks', () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'sbbase-'));
-  for (const d of ['a', 'b', '.git']) fs.mkdirSync(path.join(root, d));
+  const dir = buildSandbox(base, 'u');
+  fs.writeFileSync(path.join(dir, 'old'), 'x');
+  assert.strictEqual(buildSandbox(base, 'u'), dir);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('scopeDirs: admin gets only valid visible project dirs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdroot-'));
+  for (const d of ['a', 'b', '.git', '_uploads']) fs.mkdirSync(path.join(root, d));
   fs.writeFileSync(path.join(root, 'f'), 'x');
-  const dir = buildSandbox(base, 'u', ['a', 'f', '.git', '../x'], root);
-  assert.deepStrictEqual(fs.readdirSync(dir), ['a']);
-  assert.ok(fs.lstatSync(path.join(dir, 'a')).isSymbolicLink());
-  buildSandbox(base, 'u', ['b'], root);
-  assert.deepStrictEqual(fs.readdirSync(dir), ['b']);
+  assert.deepStrictEqual(scopeDirs({ superadmin: false, projects: ['a', 'f', '.git', '../x', '_uploads', 'nope'], root, extra: ['/tmp'] }), [path.join(root, 'a')]);
+});
+
+test('scopeDirs: superadmin gets the root plus existing absolute extra dirs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sdroot-'));
+  const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'sdextra-'));
+  assert.deepStrictEqual(scopeDirs({ superadmin: true, projects: [], root, extra: [extra, '/does/not/exist', 'relative/path'] }), [root, extra]);
+});
+
+test('buildClaudeArgs puts one --add-dir with all dirs last', () => {
+  const a = buildClaudeArgs({ model: 'haiku', sessionId: UUID, addDirs: ['/x/a', '/x/b'] });
+  assert.deepStrictEqual(a.slice(-3), ['--add-dir', '/x/a', '/x/b']);
+  assert.ok(!buildClaudeArgs({}).includes('--add-dir'));
 });
 
 test('limiter blocks concurrent and over-quota', () => {
@@ -110,13 +125,13 @@ process.env.SCAN_DIR = tmp;
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok';
 
 let n = 0;
-function run({ admin = true, body, user, close, timeoutMs } = {}) {
+function run({ admin = true, superadmin = false, projects = [], body, user, close, timeoutMs } = {}) {
   if (timeoutMs) process.env.CHAT_TIMEOUT_MS = String(timeoutMs); else delete process.env.CHAT_TIMEOUT_MS;
   const req = new EventEmitter();
   const out = { status: 0, chunks: [] };
   const res = Object.assign(new EventEmitter(), { writeHead(s) { out.status = s; }, write(c) { out.chunks.push(String(c)); }, end(c) { if (c) out.chunks.push(String(c)); } });
-  const session = { user: user || 'u' + (++n), admin };
-  const p = chat.handleChat({ req, res, session, body, projects: [], log: () => {} }).then(() => {
+  const session = { user: user || 'u' + (++n), admin, superadmin };
+  const p = chat.handleChat({ req, res, session, body, projects, log: () => {} }).then(() => {
     out.events = out.chunks.join('').split('\n\n').filter((x) => x.startsWith('data: ')).map((x) => JSON.parse(x.slice(6)));
     return out;
   });
@@ -292,4 +307,23 @@ test('handleChat streams tool events and does not save them', async () => {
   assert.ok(r.events.some((e) => e.tool === 'Grep ERROR'));
   const c = chats.getChat(user, r.events[0].chatId);
   assert.deepStrictEqual(c.messages.map((m) => m.text), ['tool', 'done']);
+});
+
+// ---- search scope in handleChat ----
+test('handleChat gives a superadmin SCAN_DIR and extra dirs, an admin only visible projects', async () => {
+  const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'extra-'));
+  fs.mkdirSync(path.join(tmp, 'p1'), { recursive: true });
+  process.env.CHAT_EXTRA_DIRS = extra + ',/does/not/exist';
+  const dirsOf = async (opts) => { const a = JSON.parse((await run({ body: { message: 'ok' }, ...opts })).events.find((e) => e.text).text).argv; const i = a.indexOf('--add-dir'); return i < 0 ? [] : a.slice(i + 1); };
+  assert.deepStrictEqual(await dirsOf({ superadmin: true }), [tmp, extra]);
+  assert.deepStrictEqual(await dirsOf({ projects: ['p1', 'hidden-not-listed'] }), [path.join(tmp, 'p1')]);
+  assert.deepStrictEqual(await dirsOf({ projects: [] }), []);
+  delete process.env.CHAT_EXTRA_DIRS;
+});
+
+test('system prompt tells Claude how to search gitignored logs', () => {
+  const a = buildClaudeArgs({});
+  const prompt = a[a.indexOf('--append-system-prompt') + 1];
+  assert.ok(prompt.includes('.gitignore'));
+  assert.ok(prompt.includes('exact file path'));
 });
