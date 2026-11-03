@@ -78,7 +78,10 @@
     <div class="card c12 chat-card">
       <div class="sec-head">
         <h3 class="sec-title">AI Chat <span class="badge">read-only</span></h3>
-        <button class="btn-sm" id="newChat">New chat</button>
+        <div class="proc-controls">
+          <select id="model" class="input" title="Model"></select>
+          <button class="btn-sm" id="newChat">New chat</button>
+        </div>
       </div>
       <div class="chat-msgs" id="msgs"></div>
       <form class="chat-form" id="chatForm">

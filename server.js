@@ -3845,6 +3845,7 @@ const server = http.createServer(async (req, res) => {
 
   const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
 
+  if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify(chat.chatModels()));
   if (p === '/api/chat' && req.method === 'POST') {
     let body;
     try { body = JSON.parse(await readBody(req, 8192)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }

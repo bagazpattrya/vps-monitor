@@ -15,7 +15,7 @@ The monitor must run as root (as it does under pm2). When it is not root, `claud
    `sudo -u claude-ro -H claude setup-token`
    Put the printed token in the monitor's environment as `CLAUDE_CODE_OAUTH_TOKEN` (pm2 env, not in git).
 
-4. **Set the monitor environment** (see `env.example`): `CLAUDE_BIN`, `CHAT_USER=claude-ro`, `CHAT_HOME=/home/claude-ro`, `CLAUDE_CODE_OAUTH_TOKEN`. Restart: `pm2 restart vps-monitor --update-env`.
+4. **Set the monitor environment** (see `env.example`): `CLAUDE_BIN`, `CHAT_USER=claude-ro`, `CHAT_HOME=/home/claude-ro`, `CLAUDE_CODE_OAUTH_TOKEN`. Optional: `CHAT_MODELS=haiku,sonnet` limits the model dropdown (Opus uses the shared subscription limit much faster). Restart: `pm2 restart vps-monitor --update-env`.
 
 5. **Lock down permissions.** `claude-ro` must be able to read the projects admins may see, and nothing else:
    - Project files readable (`o+r`), and not writable by `claude-ro`.

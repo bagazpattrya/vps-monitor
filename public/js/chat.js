@@ -86,6 +86,14 @@ const input = $('input');
 let sessionId = sessionStorage.getItem('chatSession') || '';
 let busy = false;
 
+const modelSel = $('model');
+j('/api/chat/models').then((m) => {
+  for (const x of m.models) modelSel.add(new Option(x, x));
+  const saved = localStorage.getItem('chatModel');
+  modelSel.value = m.models.includes(saved) ? saved : m.default;
+}).catch(() => {});
+modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
+
 function bubble(cls, text) {
   const d = document.createElement('div');
   d.className = 'chat-msg ' + cls;
@@ -101,7 +109,7 @@ async function sendMessage(message) {
   bubble('user', message);
   const reply = bubble('bot', '');
   try {
-    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId: sessionId || undefined }) });
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId: sessionId || undefined, model: modelSel.value || undefined }) });
     if (r.status === 401) { location.href = '/login'; return; }
     if (!r.ok) { reply.className = 'chat-msg err'; reply.textContent = (await r.json().catch(() => ({}))).error || 'Request failed'; return; }
     const reader = r.body.getReader();

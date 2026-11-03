@@ -146,3 +146,31 @@ test('handleChat timeout sends error', async () => {
   const r = await run({ body: { message: 'sleep' }, timeoutMs: 700 });
   assert.ok(r.events.some((e) => e.error));
 });
+
+// ---- model selection ----
+test('chatModels defaults and respects CHAT_MODELS', () => {
+  delete process.env.CHAT_MODELS;
+  assert.deepStrictEqual(chat.chatModels(), { models: ['haiku', 'sonnet', 'opus'], default: 'sonnet' });
+  process.env.CHAT_MODELS = 'haiku, bad model!,opus';
+  assert.deepStrictEqual(chat.chatModels(), { models: ['haiku', 'opus'], default: 'haiku' });
+  delete process.env.CHAT_MODELS;
+});
+
+test('buildClaudeArgs adds --model only for an allowed model', () => {
+  const a = buildClaudeArgs({ model: 'haiku' });
+  assert.strictEqual(a[a.indexOf('--model') + 1], 'haiku');
+  assert.ok(!buildClaudeArgs({}).includes('--model'));
+  for (const m of ['--help', 'gpt-4', 'haiku,opus']) assert.throws(() => buildClaudeArgs({ model: m }), /bad model/);
+});
+
+test('handleChat rejects unknown model with 400', async () => {
+  assert.strictEqual((await run({ body: { message: 'ok', model: '--help' } })).status, 400);
+});
+
+test('handleChat passes the chosen model, default sonnet', async () => {
+  const argvOf = async (body) => JSON.parse((await run({ body })).events.find((e) => e.text).text).argv;
+  const a = await argvOf({ message: 'ok', model: 'haiku' });
+  assert.strictEqual(a[a.indexOf('--model') + 1], 'haiku');
+  const b = await argvOf({ message: 'ok' });
+  assert.strictEqual(b[b.indexOf('--model') + 1], 'sonnet');
+});
