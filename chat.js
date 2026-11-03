@@ -3,6 +3,7 @@
 // per-user sandbox folder that only symlinks the projects the user may see.
 const fs = require('fs');
 const path = require('path');
+const { spawn, execFileSync } = require('child_process');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -72,4 +73,100 @@ function createLimiter({ perHour = 20, now = Date.now } = {}) {
   };
 }
 
-module.exports = { buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
+const limiter = createLimiter({ perHour: 20 });
+const MAX_MESSAGE = 4000;
+let warnedNonRoot = false;
+
+function reject(res, status, error) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify({ error }));
+}
+
+function chatIds(user) {
+  if (process.getuid && process.getuid() !== 0) {
+    if (!warnedNonRoot) { warnedNonRoot = true; console.warn('[chat] not running as root: claude runs as the current user, not ' + user); }
+    return {};
+  }
+  const id = (flag) => parseInt(execFileSync('id', [flag, user], { encoding: 'utf8' }).trim(), 10);
+  return { uid: id('-u'), gid: id('-g') };
+}
+
+// body: parsed JSON { message, sessionId? }. projects: names this user may see (already filtered).
+// Resolves when the stream is finished or the client left.
+async function handleChat({ req, res, session, body, projects, log }) {
+  if (!session || !session.admin) return reject(res, 403, 'Admin required');
+  const message = body && body.message;
+  if (typeof message !== 'string' || !message.trim() || message.length > MAX_MESSAGE) return reject(res, 400, 'Message must be 1-' + MAX_MESSAGE + ' characters');
+  const sessionId = body.sessionId;
+  let args;
+  try { args = buildClaudeArgs({ sessionId }); } catch { return reject(res, 400, 'Bad session id'); }
+  const slot = limiter.acquire(session.user);
+  if (!slot.ok) return reject(res, slot.status, slot.error);
+
+  const user = process.env.CHAT_USER || 'claude-ro';
+  let child;
+  try {
+    const cwd = buildSandbox(process.env.CHAT_SANDBOX_DIR || '/tmp/vpsmon-chat', session.user, projects, process.env.SCAN_DIR || '/var/www');
+    const env = { PATH: process.env.PATH, HOME: process.env.CHAT_HOME || process.env.HOME };
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], ...chatIds(user) });
+  } catch (e) {
+    slot.release();
+    console.error('[chat] setup failed:', e.message);
+    return reject(res, 500, 'Chat is not available');
+  }
+  log(session.user, 'chat.ask', '', message.slice(0, 200));
+
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+  return new Promise((resolve) => {
+    let settled = false;
+    let gotResult = false;
+    let buf = '';
+    let errTail = '';
+    const emit = (o) => { if (!settled) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
+    const finish = (error) => {
+      if (settled) return;
+      if (error) emit({ error });
+      emit({ done: true });
+      settled = true;
+      clearTimeout(timer);
+      slot.release();
+      res.end();
+      resolve();
+    };
+    const handleLine = (line) => {
+      const ev = parseStreamLine(line);
+      if (!ev) return;
+      if (ev.text) emit({ text: ev.text });
+      if (ev.sessionId) emit({ sessionId: ev.sessionId });
+      if (ev.done) gotResult = true;
+      if (ev.error) emit({ error: ev.error });
+    };
+    const timer = setTimeout(() => { child.kill('SIGKILL'); finish('Timed out'); }, parseInt(process.env.CHAT_TIMEOUT_MS, 10) || 120_000);
+
+    res.on('close', () => { // client left (or response already ended)
+      if (settled) return;
+      child.kill('SIGKILL');
+      settled = true;
+      clearTimeout(timer);
+      slot.release();
+      resolve();
+    });
+    child.on('error', (e) => finish(e.code === 'ENOENT' ? 'Claude CLI not found' : 'Could not start Claude'));
+    child.stdin.on('error', () => {});
+    child.stdin.end(message);
+    child.stderr.on('data', (d) => { errTail = (errTail + d).slice(-500); });
+    child.stdout.on('data', (d) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    });
+    child.on('close', (code) => {
+      if (buf) handleLine(buf);
+      if (code !== 0 && errTail) console.error('[chat] claude stderr:', errTail);
+      finish(gotResult || code === 0 ? null : 'Claude exited with code ' + code);
+    });
+  });
+}
+
+module.exports = { handleChat, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
