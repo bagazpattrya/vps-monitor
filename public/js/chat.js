@@ -424,7 +424,7 @@ renderChat(null);
     for (const x of m.models) modelSel.add(new Option(x, x));
     const saved = localStorage.getItem('chatModel');
     modelSel.value = m.models.includes(saved) ? saved : m.default;
-    if (m.shell || m.tinker) $('modeBadge').textContent = 'read-only · ' + (m.shell && m.tinker ? 'commands & tinker' : m.shell ? 'commands' : 'tinker') + ' need approval';
+    if (m.shell || m.tinker) $('modeBadge').textContent = 'read-only · ' + (m.shell && m.tinker ? 'commands & tinker need approval' : m.shell ? 'commands need approval' : 'tinker needs approval');
     const list = await loadList();
     const last = localStorage.getItem('chatCurrent');
     const id = list.some((c) => c.id === last) ? last : '';
