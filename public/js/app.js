@@ -1095,6 +1095,7 @@ async function deleteErrorRows(ids) {
   }
 }
 
+let errorSig = '';
 async function errors(force = false, quiet = false) {
   if (!isAdmin) return;
   if (!quiet && $('errorList')) $('errorList').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:24px"><span class="spin"></span> Loading logs…</td></tr>';
@@ -1107,13 +1108,21 @@ async function errors(force = false, quiet = false) {
       if (t) qs += `&to=${t}`;
     }
     const d = await j(`/api/logs/errors?${qs}${force ? '&force=1' : ''}`);
+    // Polling otomatis: kalau data sama, jangan render ulang (hindari kedip / reset scroll & seleksi).
+    const sig = JSON.stringify((d.entries || []).map(e => e.id));
+    if (quiet && errorData && sig === errorSig) return;
+    errorSig = sig;
     errorData = d;
     const counts = errorProjectCounts();
     errorSorted = (d.entries || []).slice().sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
-    errorSelected.clear();
+    if (quiet) {
+      const alive = new Set(errorSorted.map(e => e.id));
+      for (const id of [...errorSelected]) if (!alive.has(id)) errorSelected.delete(id);
+    } else errorSelected.clear();
     renderErrorProjects();
     renderErrors();
   } catch (e) {
+    if (quiet && errorData) return;
     if ($('errorList')) $('errorList').innerHTML = `<tr><td colspan="6" style="color:var(--bad)">${escHtml(e.message || 'Failed loading logs')}</td></tr>`;
   }
 }
@@ -3235,7 +3244,7 @@ setInterval(() => {
   else if (v === 'git') { gitProjects(); }
   else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
-  else if (v === 'errors') { errors(); }
+  else if (v === 'errors') { errors(false, true); }
 }, 15000);
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif
