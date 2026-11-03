@@ -35,12 +35,6 @@ let rawProcs = [];
 let procSort = 'cpu';
 let rawSpikes = [];
 let procMeta = { intervalMs: 5000, cores: 0, spikeThreshold: 70, sampledAt: 0 };
-let errorData = null;
-let errorViewEntries = [];
-let errorLevel = 'all';
-let errorSorted = [];
-let errorShowLimit = 100;
-const errorSelected = new Set();
 
 async function j(u) {
   const r = await fetch(u);
@@ -74,10 +68,9 @@ j('/api/me').then(m => {
     if ($('mysqlQueryCard')) $('mysqlQueryCard').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites', 'errors'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
-  if (m.admin && currentView() === 'errors') errors(false, true);
-  if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
+    if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
 
@@ -940,211 +933,6 @@ async function mysqlQueries() {
   } catch (e) {}
 }
 
-// ---- Error logs ----
-function errorProjectCounts() {
-  const counts = new Map();
-  for (const s of (errorData && errorData.sources) || []) {
-    if (!s.project) continue;
-    counts.set(s.project, (counts.get(s.project) || 0) + ((s.counts && s.counts.total) || 0));
-  }
-  return counts;
-}
-
-function renderErrorProjects() {
-  const sel = $('errorProject');
-  if (!sel || !errorData) return;
-  const cur = sel.value;
-  const counts = errorProjectCounts();
-  const projects = [...counts.keys()].sort((a, b) => (counts.get(b) - counts.get(a)) || a.localeCompare(b));
-  const total = [...counts.values()].reduce((a, b) => a + b, 0);
-  sel.innerHTML = `<option value="">All projects (${total})</option>` + projects.map(p =>
-    `<option value="${escHtml(p)}">${escHtml(p)} (${counts.get(p)})</option>`
-  ).join('');
-  if (cur && projects.includes(cur)) sel.value = cur;
-}
-
-function syncErrorSelection() {
-  const bar = $('errorSelectionBar');
-  if (!bar) return;
-  const count = $('errorSelectedCount');
-  if (count) count.textContent = errorSelected.size;
-  bar.hidden = errorSelected.size === 0;
-  const all = $('errorSelectAll');
-  if (!all) return;
-  const boxes = [...$('errorList').querySelectorAll('input[data-error-ids]')];
-  const checked = boxes.filter(b => b.checked).length;
-  all.checked = boxes.length > 0 && checked === boxes.length;
-  all.indeterminate = checked > 0 && checked < boxes.length;
-}
-
-function errorGroupKey(e) {
-  const norm = String(e.message || '')
-    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '#')
-    .replace(/0x[0-9a-f]+/gi, '#')
-    .replace(/\d+/g, '#')
-    .replace(/\s+/g, ' ').trim().slice(0, 200);
-  return e.level + '|' + norm;
-}
-
-function renderErrors() {
-  if (!errorData) return;
-  const q = ($('errorSearch').value || '').trim().toLowerCase();
-  const project = $('errorProject').value;
-  const entries = errorSorted.filter(e => {
-    if (project && e.project !== project) return false;
-    if (errorLevel === 'critical' && !e.critical) return false;
-    if (errorLevel === 'error' && e.level !== 'ERROR') return false;
-    if (errorLevel === 'warning' && e.level !== 'WARNING') return false;
-    if (q && ![e.message, e.project, e.source, e.level].some(v => String(v || '').toLowerCase().includes(q))) return false;
-    return true;
-  });
-  $('errorBack').hidden = !project;
-  $('errorTitle').textContent = project || 'Error Logs';
-  $('errorHeadProjects').hidden = !!project;
-  $('errorHeadGroups').hidden = !project;
-  const list = $('errorList');
-  const empty = '<tr><td colspan="6" style="color:var(--mut)">No errors match the current filter.</td></tr>';
-
-  if (!project) {
-    // Overview: satu baris per project.
-    const byProject = new Map();
-    for (const e of entries) {
-      let p = byProject.get(e.project);
-      if (!p) byProject.set(e.project, p = { name: e.project, critical: 0, error: 0, warning: 0, total: 0, last: 0 });
-      p.total++;
-      if (e.critical) p.critical++;
-      if (e.level === 'ERROR') p.error++;
-      else if (e.level === 'WARNING') p.warning++;
-      if (e.t > p.last) p.last = e.t;
-    }
-    const rows = [...byProject.values()].sort((a, b) => (b.critical - a.critical) || (b.total - a.total) || a.name.localeCompare(b.name));
-    errorViewEntries = [];
-    $('errorBadge').textContent = `${rows.length} projects · ${entries.length} entries`;
-    list.innerHTML = rows.length ? rows.map(p => `<tr class="${p.critical ? 'err-row-crit' : ''}" data-error-project="${escHtml(p.name)}" style="cursor:pointer">
-      <td><span class="err-project-pill">${escHtml(p.name)}</span></td>
-      <td>${p.critical ? `<span class="pill down">${p.critical}</span>` : '<span style="color:var(--mut)">0</span>'}</td>
-      <td>${p.error}</td>
-      <td>${p.warning}</td>
-      <td><strong>${p.total}</strong></td>
-      <td style="color:var(--mut);white-space:nowrap">${p.last ? escHtml(new Date(p.last).toLocaleString([])) : '—'}</td>
-    </tr>`).join('') : empty;
-    syncErrorSelection();
-    return;
-  }
-
-  // Detail project: error yang sama (angka/uuid diabaikan) digabung + dihitung.
-  const map = new Map();
-  for (const e of entries) {
-    const k = errorGroupKey(e);
-    let g = map.get(k);
-    if (!g) map.set(k, g = { latest: e, count: 0, first: e.t, last: e.t, ids: [], sources: new Set() });
-    g.count++;
-    g.ids.push(e.id);
-    g.sources.add(e.source);
-    if (e.t >= g.last) { g.last = e.t; g.latest = e; }
-    if (e.t < g.first) g.first = e.t;
-  }
-  const groups = [...map.values()].sort((a, b) => (b.latest.critical - a.latest.critical) || (b.count - a.count) || (b.last - a.last));
-  errorViewEntries = groups;
-  $('errorBadge').textContent = `${groups.length} groups · ${entries.length} entries`;
-  if (!groups.length) { list.innerHTML = empty; syncErrorSelection(); return; }
-
-  const shown = groups.slice(0, errorShowLimit);
-  const more = groups.length > shown.length
-    ? `<tr><td colspan="6" style="text-align:center"><button class="btn-sm" id="errorShowMore">Tampilkan lebih banyak (${shown.length} / ${groups.length})</button></td></tr>` : '';
-  list.innerHTML = shown.map((g, i) => {
-    const e = g.latest;
-    const lvl = e.level === 'WARNING' ? 'warn' : e.critical ? 'down' : 'warn';
-    const ids = g.ids.join(',');
-    const checked = g.ids.every(id => errorSelected.has(id));
-    return `<tr class="${e.critical ? 'err-row-crit' : ''}">
-      <td><input type="checkbox" data-error-ids="${ids}" aria-label="Pilih grup error" ${checked ? 'checked' : ''} /></td>
-      <td><span class="pill ${lvl}">${escHtml(e.level)}</span></td>
-      <td><strong>×${g.count}</strong></td>
-      <td style="color:var(--mut);white-space:nowrap">${escHtml(new Date(g.last).toLocaleString([]))}<div style="font-size:10px;font-family:var(--font-mono)">${escHtml([...g.sources].slice(0, 2).join(', '))}</div></td>
-      <td class="err-msg-cell">${escHtml(e.message || '(empty)')}</td>
-      <td style="text-align:right"><span class="err-row-actions">
-        <button class="btn-sm" data-error-index="${i}">Detail</button>
-        <button class="btn-sm danger" data-error-delete="${ids}" title="Hapus semua baris log di grup ini" aria-label="Hapus grup log ini">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-        </button>
-      </span></td>
-    </tr>`;
-  }).join('') + more;
-  syncErrorSelection();
-}
-
-async function deleteErrorRows(ids) {
-  ids = [...new Set(ids.filter(Boolean))];
-  if (!ids.length) return;
-  const label = ids.length === 1 ? 'baris log ini' : `${ids.length} baris log terpilih`;
-  if (!confirm(`Hapus ${label}?\n\nBaris akan dihapus permanen dari file log asli di server dan tidak bisa dikembalikan.`)) return;
-  try {
-    const d = await api('POST', '/api/logs/errors/delete', { ids });
-    errorSelected.clear();
-    await errors(true);
-    if (d.failed && d.failed.length) {
-      openModalText(
-        `Hapus log: ${d.deleted || 0} terhapus, ${d.failed.length} gagal`,
-        d.failed.map(f => `${f.source}: ${f.error}`).join('\n'),
-        false
-      );
-    }
-  } catch (e) {
-    openModalText('Hapus log gagal', e.message || 'Request gagal', false);
-  }
-}
-
-let errorSig = '';
-async function errors(force = false, quiet = false) {
-  if (!isAdmin) return;
-  if (!quiet && $('errorList')) $('errorList').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:24px"><span class="spin"></span> Loading logs…</td></tr>';
-  try {
-    const hours = $('errorWindow') ? ($('errorWindow').value || '24') : '24';
-    let qs = `hours=${encodeURIComponent(hours === 'custom' ? 0 : hours)}`;
-    if (hours === 'custom') {
-      const f = Date.parse($('errorFrom').value), t = Date.parse($('errorTo').value);
-      if (f) qs += `&from=${f}`;
-      if (t) qs += `&to=${t}`;
-    }
-    const d = await j(`/api/logs/errors?${qs}${force ? '&force=1' : ''}`);
-    // Polling otomatis: kalau data sama, jangan render ulang (hindari kedip / reset scroll & seleksi).
-    const sig = JSON.stringify((d.entries || []).map(e => e.id));
-    if (quiet && errorData && sig === errorSig) return;
-    errorSig = sig;
-    errorData = d;
-    const counts = errorProjectCounts();
-    errorSorted = (d.entries || []).slice().sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
-    if (quiet) {
-      const alive = new Set(errorSorted.map(e => e.id));
-      for (const id of [...errorSelected]) if (!alive.has(id)) errorSelected.delete(id);
-    } else errorSelected.clear();
-    renderErrorProjects();
-    renderErrors();
-  } catch (e) {
-    if (quiet && errorData) return;
-    if ($('errorList')) $('errorList').innerHTML = `<tr><td colspan="6" style="color:var(--bad)">${escHtml(e.message || 'Failed loading logs')}</td></tr>`;
-  }
-}
-
-function showErrorDetail(index) {
-  const g = errorViewEntries[index];
-  if (!g) return;
-  const e = g.latest;
-  const lines = [
-    `Occurrences: ${g.count} (first ${new Date(g.first).toLocaleString([])}, last ${new Date(g.last).toLocaleString([])})`,
-    `Project: ${e.project}`,
-    `Source: ${e.source}`,
-    `Level: ${e.level}${e.critical ? ' (critical)' : ''}`,
-    `Time: ${e.t ? new Date(e.t).toLocaleString([]) : '—'}`,
-    '',
-    e.message || '(empty)',
-    '',
-    e.detail || '',
-  ];
-  openModalText(`${e.level} · ${e.project}`, lines.join('\n'), e.critical ? false : undefined);
-}
-
 async function storage(force = false) {
   try {
     const btn = $('storageRefresh');
@@ -1392,63 +1180,6 @@ if ($('procSpikeList')) {
   $('procSpikeList').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-spike-index]');
     if (btn) showSpikeDetail(parseInt(btn.dataset.spikeIndex, 10));
-  });
-}
-
-let errorSearchTimer;
-const rerenderErrors = () => { errorShowLimit = 100; renderErrors(); };
-if ($('errorSearch')) $('errorSearch').addEventListener('input', () => { clearTimeout(errorSearchTimer); errorSearchTimer = setTimeout(rerenderErrors, 200); });
-if ($('errorProject')) $('errorProject').addEventListener('change', rerenderErrors);
-if ($('errorBack')) $('errorBack').addEventListener('click', () => { $('errorProject').value = ''; rerenderErrors(); });
-if ($('errorWindow')) $('errorWindow').addEventListener('change', () => {
-  const custom = $('errorWindow').value === 'custom';
-  $('errorFrom').hidden = $('errorTo').hidden = !custom;
-  errors();
-});
-['errorFrom', 'errorTo'].forEach(id => { if ($(id)) $(id).addEventListener('change', () => errors()); });
-if ($('errorRefresh')) $('errorRefresh').addEventListener('click', () => errors(true));
-if ($('errorLevelTabs')) {
-  $('errorLevelTabs').addEventListener('click', (e) => {
-    const btn = e.target.closest('.tab');
-    if (!btn) return;
-    document.querySelectorAll('#errorLevelTabs .tab').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    errorLevel = btn.dataset.level || 'all';
-    rerenderErrors();
-  });
-}
-if ($('errorList')) {
-  $('errorList').addEventListener('click', (e) => {
-    if (e.target.closest('#errorShowMore')) { errorShowLimit += 200; renderErrors(); return; }
-    const del = e.target.closest('[data-error-delete]');
-    if (del) { deleteErrorRows(del.dataset.errorDelete.split(',')); return; }
-    const row = e.target.closest('[data-error-project]');
-    if (row) { $('errorProject').value = row.dataset.errorProject; rerenderErrors(); return; }
-    const btn = e.target.closest('[data-error-index]');
-    if (btn) showErrorDetail(parseInt(btn.dataset.errorIndex, 10));
-  });
-  $('errorList').addEventListener('change', (e) => {
-    const box = e.target.closest('input[data-error-ids]');
-    if (!box) return;
-    for (const id of box.dataset.errorIds.split(',')) box.checked ? errorSelected.add(id) : errorSelected.delete(id);
-    syncErrorSelection();
-  });
-}
-if ($('errorSelectAll')) {
-  $('errorSelectAll').addEventListener('change', (e) => {
-    const check = e.target.checked;
-    $('errorList').querySelectorAll('input[data-error-ids]').forEach(box => {
-      box.checked = check;
-      for (const id of box.dataset.errorIds.split(',')) check ? errorSelected.add(id) : errorSelected.delete(id);
-    });
-    syncErrorSelection();
-  });
-}
-if ($('errorDeleteSelected')) $('errorDeleteSelected').addEventListener('click', () => deleteErrorRows([...errorSelected]));
-if ($('errorClearSelection')) {
-  $('errorClearSelection').addEventListener('click', () => {
-    errorSelected.clear();
-    renderErrors();
   });
 }
 
@@ -2113,7 +1844,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites', 'errors'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -2142,7 +1873,6 @@ function navigateView(name, refresh = true) {
     if (view === 'workers') workers();
     if (view === 'git') gitProjects();
     if (view === 'processes') { procs(); mysqlQueries(); }
-    if (view === 'errors') errors();
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
@@ -3245,7 +2975,6 @@ setInterval(() => {
   else if (v === 'git') { gitProjects(); }
   else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
-  else if (v === 'errors') { errors(false, true); }
 }, 15000);
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif

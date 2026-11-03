@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Error Logs · VPS Monitor</title>
+<link rel="stylesheet" href="/css/style.css"/>
+</head>
+<body>
+
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <div class="brand">VPS Monitor</div>
+    <button class="sidebar-close" id="sidebarClose" title="Close menu">✕</button>
+  </div>
+  <div id="navSearch" class="input nav-search" contenteditable="plaintext-only" role="searchbox" aria-label="Cari menu" data-placeholder="Cari menu..." spellcheck="false"></div>
+  <a href="/#/overview" class="nav-link" data-view="overview" style="--c:59,130,246"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></span>Overview</a>
+  <a href="/#/storage" class="nav-link" data-view="storage" style="--c:168,85,247"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg></span>Storage</a>
+  <a href="/#/workers" class="nav-link" data-view="workers" style="--c:245,158,11"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>Workers &amp; Cron</a>
+  <a href="/errors" class="nav-link active" id="navLinkErrors" data-view="errors" style="display:none;--c:239,68,68"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Error Logs</a>
+  <a href="/#/git" class="nav-link" data-view="git" style="--c:249,115,22"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>Git Deployments</a>
+  <a href="/#/processes" class="nav-link" data-view="processes" style="--c:16,185,129"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg></span>Processes</a>
+  <a href="/#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none;--c:20,184,166"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>Backups</a>
+  <a href="/#/sites" class="nav-link" id="navLinkSites" data-view="sites" style="display:none;--c:14,165,233"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span>Hosted Sites</a>
+  <a href="/#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none;--c:234,179,8"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span>File Explorer</a>
+  <a href="/#/users" class="nav-link" id="navLinkUsers" data-view="users" style="display:none;--c:236,72,153"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>User Management</a>
+  <a href="/#/activity" class="nav-link" id="navLinkActivity" data-view="activity" style="display:none;--c:239,68,68"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg></span>Activity Log</a>
+  <a href="/#/deploy" class="nav-link" id="navLinkDeploy" data-view="deploy" style="display:none;--c:99,102,241"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg></span>Auto Deploy</a>
+  <button class="nav-action" id="pm2RestartBtn" style="display:none" title="Restart aplikasi ini via pm2"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></span><span class="nav-action-label">PM2 Restart</span></button>
+  <div class="nav-foot">
+    <div class="side-user" id="sideUser" style="display:none">
+      <div class="side-user-avatar" id="sideUserAvatar">?</div>
+      <div class="side-user-info">
+        <div class="side-user-name" id="sideUserName">—</div>
+        <div class="side-user-role" id="sideUserRole"></div>
+      </div>
+      <button class="side-user-logout" id="sideLogout" title="Sign out">⏻</button>
+    </div>
+    Microspace VPS Monitor
+  </div>
+</aside>
+
+<header>
+  <div class="header-left">
+    <button class="brand-btn" id="vpsMonitorBtn" title="Toggle Navigation Menu">
+      <span style="font-size:12px;opacity:0.7">☰</span>
+      <span>VPS Monitor</span>
+    </button>
+    <div class="meta-pills">
+      <span class="badge" id="hostBox">
+        <span style="opacity:0.6">🖥</span>
+        <span id="host"><strong>—</strong></span>
+        <span id="os" style="opacity:0.75;font-size:11px"></span>
+      </span>
+      <span class="badge" id="uptimeBox">
+        <span style="opacity:0.6">⏱</span>
+        <span id="uptime">up —</span>
+      </span>
+      <span class="badge" id="timeBox">
+        <span id="time">—</span>
+      </span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="user-badge" id="who">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.7"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <strong>—</strong>
+    </div>
+    <button class="btn btn-logout" id="logout" title="Sign out from dashboard">Logout</button>
+  </div>
+</header>
+
+<main class="container">
+  <!-- VIEW: OVERVIEW -->
+  <!-- VIEW: ERROR LOGS -->
+  <div class="view-pane active" id="view-errors">
+    <div class="card c12" id="errorLogs">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <button class="btn-sm" id="errorBack" hidden>← Back</button>
+          <span id="errorTitle">Error Logs</span>
+          <span class="badge" id="errorBadge">—</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="errorSearch" class="input" placeholder="Search message, project, source..." />
+          <select id="errorWindow" class="input" title="Time window">
+            <option value="1">Last 1h</option>
+            <option value="24" selected>Last 24h</option>
+            <option value="168">Last 7d</option>
+            <option value="0">All available</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          <input type="datetime-local" id="errorFrom" class="input" title="From" hidden />
+          <input type="datetime-local" id="errorTo" class="input" title="To" hidden />
+          <select id="errorProject" class="input" title="Filter project" hidden>
+            <option value="">All projects</option>
+          </select>
+          <button class="btn-sm" id="errorRefresh" title="Re-scan logs now">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="tabs" id="errorLevelTabs" style="margin-bottom:10px">
+        <button class="tab active" data-level="all">All</button>
+        <button class="tab" data-level="critical">Critical</button>
+        <button class="tab" data-level="error">Errors</button>
+        <button class="tab" data-level="warning">Warnings</button>
+      </div>
+      <div class="err-actions" id="errorSelectionBar" hidden>
+        <span class="err-actions-count"><strong id="errorSelectedCount">0</strong> dipilih</span>
+        <button class="btn-sm danger" id="errorDeleteSelected">Hapus terpilih</button>
+        <button class="btn-sm" id="errorClearSelection">Batal</button>
+        <span class="err-actions-note">Baris dihapus permanen dari file log asli.</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead id="errorHeadProjects">
+            <tr>
+              <th>Project</th>
+              <th style="width:90px">Critical</th>
+              <th style="width:90px">Errors</th>
+              <th style="width:90px">Warnings</th>
+              <th style="width:90px">Total</th>
+              <th style="width:170px">Last seen</th>
+            </tr>
+          </thead>
+          <thead id="errorHeadGroups" hidden>
+            <tr>
+              <th style="width:34px"><input type="checkbox" id="errorSelectAll" aria-label="Pilih semua baris error yang tampil" /></th>
+              <th style="width:90px">Level</th>
+              <th style="width:70px">Count</th>
+              <th style="width:170px">Last seen / Source</th>
+              <th>Message</th>
+              <th style="width:120px;text-align:right">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="errorList"></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-errors -->
+</main>
+
+<div class="modal-backdrop" id="gitModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="gitModalTitle">Project Update Output</span>
+      <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<script defer src="/js/errors.js"></script>
+</body>
+</html>
