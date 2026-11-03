@@ -203,7 +203,8 @@ body.fullscreen-focus .chart-box {
   box-shadow: 4px 0 24px rgba(0,0,0,0.4);
 }
 .sidebar::-webkit-scrollbar { display: none; }
-.nav-search { margin: 4px 0 6px; width: 100%; }
+.nav-search { margin: 4px 0 6px; width: 100%; box-sizing: border-box; min-width: 0; flex-shrink: 0; height: 32px; line-height: 20px; white-space: nowrap; overflow: hidden; cursor: text; }
+.nav-search:empty::before { content: attr(data-placeholder); color: var(--mut); }
 .nav-link.nav-hide { display: none !important; }
 .sidebar.open { transform: translateX(0); }
 .sidebar .sidebar-head {
