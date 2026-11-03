@@ -83,36 +83,97 @@ $('navSearch').addEventListener('input', (e) => {
 // ---- Chat ----
 const MAX_IMAGES = 4, MAX_BYTES = 5 * 1024 * 1024;
 const msgs = $('msgs'), input = $('input'), modelSel = $('model');
+const EXAMPLES = ['Which projects do I have?', 'Summarize the recent errors in my logs', 'Explain how this project is structured'];
 let currentId = '';
 let busy = false;
 let pending = []; // [{ dataUrl }]
+let stick = true; // follow new output only while the user is at the bottom
 
 const imgUrl = (id, name) => `/api/chats/${id}/img/${name}`;
+const nearBottom = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
+const scrollDown = (force) => { if (force || stick) msgs.scrollTop = msgs.scrollHeight; };
+msgs.addEventListener('scroll', () => { stick = nearBottom(); $('toBottom').hidden = stick; });
+$('toBottom').onclick = () => { stick = true; msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' }); };
 
-function bubble(cls, text, images) {
+function row(cls) {
+  $('empty') && $('empty').remove();
   const d = document.createElement('div');
-  d.className = 'chat-msg ' + cls;
+  d.className = 'chat-row ' + cls;
+  msgs.appendChild(d);
+  return d;
+}
+
+function addUser(text, images) {
+  const r = row('user');
+  const box = document.createElement('div');
+  box.className = 'ubox';
   for (const src of images || []) {
     const a = document.createElement('a');
     a.href = src; a.target = '_blank'; a.rel = 'noopener';
     const im = document.createElement('img');
     im.src = src; im.loading = 'lazy';
-    a.appendChild(im); d.appendChild(a);
+    a.appendChild(im); box.appendChild(a);
   }
   const t = document.createElement('div');
-  t.textContent = text; // textContent only: replies may contain HTML-like text from logs/files
-  d.appendChild(t);
+  t.textContent = text; // user text is plain
+  box.appendChild(t);
+  r.appendChild(box);
+  scrollDown(true);
+}
+
+function addBot(model) {
+  const r = row('bot');
+  const head = document.createElement('div');
+  head.className = 'bot-head';
+  const av = document.createElement('span');
+  av.className = 'bot-av'; av.textContent = '✦';
+  const name = document.createElement('b');
+  name.textContent = 'Claude';
+  const mod = document.createElement('span');
+  mod.textContent = model || '';
+  head.append(av, name, mod);
+  const body = document.createElement('div');
+  body.className = 'md-body';
+  r.append(head, body);
+  return { row: r, body };
+}
+
+function addErr(text) {
+  row('err').textContent = text;
+  scrollDown(true);
+}
+
+const setBot = (body, text) => body.replaceChildren(renderMarkdown(text));
+
+function showEmpty() {
+  const d = document.createElement('div');
+  d.className = 'chat-empty';
+  d.id = 'empty';
+  const h = document.createElement('h2');
+  h.textContent = 'How can I help?';
+  const p = document.createElement('p');
+  p.textContent = 'Ask about your projects, code or error logs.';
+  d.append(h, p);
+  for (const t of EXAMPLES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = t;
+    b.onclick = () => { if (!busy) submitText(t); };
+    d.appendChild(b);
+  }
   msgs.appendChild(d);
-  msgs.scrollTop = msgs.scrollHeight;
-  return t;
 }
 
 function renderChat(chat) {
   msgs.textContent = '';
   $('chatTitle').textContent = chat ? chat.title : 'AI Chat';
+  if (!chat || !chat.messages.length) showEmpty();
   for (const m of chat ? chat.messages : []) {
-    bubble(m.error ? 'err' : m.role === 'user' ? 'user' : 'bot', m.text, (m.images || []).map((n) => imgUrl(chat.id, n)));
+    if (m.role === 'user') addUser(m.text, (m.images || []).map((n) => imgUrl(chat.id, n)));
+    else if (m.error) addErr(m.text);
+    else setBot(addBot(chat.model).body, m.text);
   }
+  stick = true;
+  scrollDown(true);
 }
 
 async function openChat(id) {
@@ -129,14 +190,28 @@ function markActive() {
   document.querySelectorAll('.chat-item').forEach((el) => el.classList.toggle('active', el.dataset.id === currentId));
 }
 
+function dayGroup(t) {
+  const n = new Date();
+  const today = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  return t >= today ? 'Today' : t >= today - 86400000 ? 'Yesterday' : 'Earlier';
+}
+
 async function loadList() {
   const list = await j('/api/chats');
   const box = $('chats');
   box.textContent = '';
+  let lastGroup = '';
   for (const c of list) {
-    const row = document.createElement('div');
-    row.className = 'chat-item';
-    row.dataset.id = c.id;
+    const g = dayGroup(c.updatedAt);
+    if (g !== lastGroup) {
+      const lab = document.createElement('div');
+      lab.className = 'chat-group'; lab.textContent = g;
+      box.appendChild(lab);
+      lastGroup = g;
+    }
+    const rowEl = document.createElement('div');
+    rowEl.className = 'chat-item';
+    rowEl.dataset.id = c.id;
     const title = document.createElement('span');
     title.className = 'chat-item-title';
     title.textContent = c.title;
@@ -156,8 +231,8 @@ async function loadList() {
       if (c.id === currentId) newChat();
       loadList();
     };
-    row.append(title, ren, del);
-    box.appendChild(row);
+    rowEl.append(title, ren, del);
+    box.appendChild(rowEl);
   }
   markActive();
   return list;
@@ -171,6 +246,7 @@ function newChat() {
   renderChat(null);
   markActive();
   $('chatList').classList.remove('open');
+  input.focus();
 }
 
 // ---- attachments ----
@@ -192,9 +268,9 @@ function renderThumbs() {
 
 function addFiles(files) {
   for (const f of files) {
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { bubble('err', 'Unsupported file: ' + f.name + ' (use PNG, JPEG, WebP or GIF)'); continue; }
-    if (f.size > MAX_BYTES) { bubble('err', f.name + ' is larger than 5 MB'); continue; }
-    if (pending.length >= MAX_IMAGES) { bubble('err', 'Max ' + MAX_IMAGES + ' images per message'); break; }
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { addErr('Unsupported file: ' + f.name + ' (use PNG, JPEG, WebP or GIF)'); continue; }
+    if (f.size > MAX_BYTES) { addErr(f.name + ' is larger than 5 MB'); continue; }
+    if (pending.length >= MAX_IMAGES) { addErr('Max ' + MAX_IMAGES + ' images per message'); break; }
     const r = new FileReader();
     r.onload = () => { if (pending.length < MAX_IMAGES) { pending.push({ dataUrl: r.result }); renderThumbs(); } };
     r.readAsDataURL(f);
@@ -210,13 +286,18 @@ const card = document.querySelector('.chat-card');
 card.addEventListener('dragover', (e) => e.preventDefault());
 card.addEventListener('drop', (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
 
+// ---- composer ----
+const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
+input.addEventListener('input', autosize);
+
 // ---- send ----
 async function sendMessage(message, images) {
   busy = true;
   $('send').disabled = true;
-  bubble('user', message, images);
-  const reply = bubble('bot', '');
-  const replyBox = reply.parentElement;
+  stick = true;
+  addUser(message, images);
+  const bot = addBot(modelSel.value);
+  let replyText = '';
   // Status "Claude is thinking… 12s" with bouncing dots; stays until the whole answer is done.
   const status = document.createElement('div');
   status.className = 'think';
@@ -230,15 +311,14 @@ async function sendMessage(message, images) {
   tick();
   const timer = setInterval(tick, 1000);
   status.append(dots, label);
-  replyBox.appendChild(status);
-  msgs.scrollTop = msgs.scrollHeight;
+  bot.row.appendChild(status);
+  scrollDown(true);
   try {
     const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId: currentId || undefined, model: modelSel.value || undefined, images: images.length ? images : undefined }) });
     if (r.status === 401) { location.href = '/login'; return; }
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      replyBox.className = 'chat-msg err';
-      reply.textContent = d.error || 'Request failed';
+      addErr(d.error || 'Request failed');
       if (r.status === 404) { currentId = ''; localStorage.removeItem('chatCurrent'); }
       return;
     }
@@ -257,17 +337,16 @@ async function sendMessage(message, images) {
         let ev; try { ev = JSON.parse(line.slice(6)); } catch { continue; }
         if (ev.chatId) { currentId = ev.chatId; localStorage.setItem('chatCurrent', currentId); }
         if (ev.tool) { what = ev.tool + '…'; tick(); }
-        if (ev.text) reply.textContent += (reply.textContent ? '\n\n' : '') + ev.text;
-        if (ev.error) bubble('err', ev.error);
-        msgs.scrollTop = msgs.scrollHeight;
+        if (ev.text) { replyText += (replyText ? '\n\n' : '') + ev.text; setBot(bot.body, replyText); scrollDown(); }
+        if (ev.error) addErr(ev.error);
       }
     }
   } catch (e) {
-    bubble('err', 'Connection lost');
+    addErr('Connection lost');
   } finally {
     clearInterval(timer);
     status.remove();
-    if (!reply.textContent) replyBox.remove();
+    if (!replyText) bot.row.remove();
     busy = false;
     $('send').disabled = false;
     input.focus();
@@ -275,22 +354,24 @@ async function sendMessage(message, images) {
   }
 }
 
-$('chatForm').addEventListener('submit', (e) => {
-  e.preventDefault();
+function submitText(text) {
   if (busy) return;
-  const text = input.value.trim();
-  if (!text && !pending.length) return;
+  const t = text.trim();
+  if (!t && !pending.length) return;
   const images = pending.map((p) => p.dataUrl);
   pending = []; renderThumbs();
-  input.value = '';
-  sendMessage(text || 'Please look at the attached image(s).', images);
-});
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('chatForm').requestSubmit(); } });
+  input.value = ''; autosize();
+  sendMessage(t || 'Please look at the attached image(s).', images);
+}
+
+$('chatForm').addEventListener('submit', (e) => { e.preventDefault(); submitText(input.value); });
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('chatForm').requestSubmit(); } });
 $('newChat').onclick = newChat;
 $('toggleList').onclick = () => $('chatList').classList.toggle('open');
 modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
 
 // ---- start ----
+renderChat(null);
 (async () => {
   try {
     const m = await j('/api/chat/models');

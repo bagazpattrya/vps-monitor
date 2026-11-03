@@ -77,30 +77,37 @@
   <div class="view-pane active" id="view-chat">
     <div class="chat-layout">
       <aside class="chat-list" id="chatList">
-        <button class="btn-sm" id="newChat">+ New chat</button>
+        <button class="chat-new" id="newChat" type="button">+ New chat</button>
         <div id="chats"></div>
       </aside>
-      <div class="card chat-card">
-        <div class="sec-head">
-          <h3 class="sec-title">
-            <button class="btn-sm chat-toggle" id="toggleList" type="button" title="Chats">☰</button>
-            <span id="chatTitle">AI Chat</span> <span class="badge">read-only</span>
-          </h3>
-          <div class="proc-controls"><select id="model" class="input" title="Model"></select></div>
+      <section class="card chat-card">
+        <div class="chat-top">
+          <button class="btn-sm chat-toggle" id="toggleList" type="button" title="Chats">☰</button>
+          <div class="chat-top-title"><span id="chatTitle">AI Chat</span><span class="badge">read-only</span></div>
+          <select id="model" class="input" title="Model"></select>
         </div>
-        <div class="chat-msgs" id="msgs"></div>
-        <div class="chat-thumbs" id="thumbs"></div>
-        <form class="chat-form" id="chatForm">
-          <button class="btn-sm" id="attach" type="button" title="Attach image (or paste / drop)">📎</button>
-          <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
-          <textarea id="input" class="input" rows="2" maxlength="4000" placeholder="Ask about the code or the server… (Enter to send, Shift+Enter for new line)"></textarea>
-          <button class="btn-sm" id="send" type="submit">Send</button>
-        </form>
-      </div>
+        <div class="chat-scroll">
+          <div class="chat-msgs" id="msgs"></div>
+          <button class="to-bottom" id="toBottom" type="button" hidden title="Scroll to latest">↓</button>
+        </div>
+        <div class="composer-wrap">
+          <form class="composer" id="chatForm">
+            <div class="chat-thumbs" id="thumbs"></div>
+            <textarea id="input" rows="1" maxlength="4000" placeholder="Ask about the code or the server…"></textarea>
+            <div class="composer-bar">
+              <button class="icon-btn" id="attach" type="button" title="Attach image (or paste / drop)">📎</button>
+              <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+              <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+              <button class="send-btn" id="send" type="submit" title="Send">↑</button>
+            </div>
+          </form>
+        </div>
+      </section>
     </div>
   </div>
 </main>
 
+<script defer src="/js/md.js"></script>
 <script defer src="/js/chat.js"></script>
 </body>
 </html>
