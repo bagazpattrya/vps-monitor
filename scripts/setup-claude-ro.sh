@@ -32,6 +32,9 @@ Next, by hand:
   2. Set in the monitor environment (pm2 / ecosystem.config.js, not in git):
        CLAUDE_BIN=$DEST  CHAT_USER=$CHAT_USER  CHAT_HOME=/home/$CHAT_USER
        CLAUDE_CODE_OAUTH_TOKEN=<token>  SCAN_DIR=<folder with your projects>
+     Optional: CHAT_EXTRA_DIRS=/var/log,/home/zae   (more folders for superadmin; see docs/ai-chat-setup.md)
+               CHAT_SHELL=1                          (commands with approval; needs bubblewrap)
+     To read system logs: sudo usermod -aG adm $CHAT_USER
      then: pm2 restart vps-monitor --update-env
   3. Apply the 'location /api/chat' block from nginx-monitor.conf to the live nginx config,
      then: sudo nginx -t && sudo systemctl reload nginx

@@ -143,6 +143,39 @@ function addErr(text) {
   scrollDown(true);
 }
 
+// Card asking the user to approve a command Claude wants to run.
+function showConfirm(parent, c, before) {
+  const card = document.createElement('div');
+  card.className = 'confirm';
+  const title = document.createElement('div');
+  title.className = 'confirm-title';
+  title.textContent = 'Claude wants to run a command';
+  const pre = document.createElement('pre');
+  pre.textContent = c.command;
+  card.append(title, pre);
+  if (c.description) { const d = document.createElement('div'); d.className = 'confirm-desc'; d.textContent = c.description; card.appendChild(d); }
+  const bar = document.createElement('div');
+  bar.className = 'confirm-bar';
+  const ok = document.createElement('button'), no = document.createElement('button');
+  ok.type = no.type = 'button';
+  ok.className = 'confirm-ok'; ok.textContent = 'Approve';
+  no.className = 'confirm-no'; no.textContent = 'Deny';
+  const answer = async (allow) => {
+    ok.disabled = no.disabled = true;
+    const res = document.createElement('span');
+    res.className = 'confirm-result';
+    try { await api('POST', '/api/chat/confirm', { id: c.id, allow }); res.textContent = allow ? 'Approved' : 'Denied'; }
+    catch (e) { res.textContent = 'Could not send: ' + e.message; }
+    bar.replaceChildren(res);
+  };
+  ok.onclick = () => answer(true);
+  no.onclick = () => answer(false);
+  bar.append(ok, no);
+  card.appendChild(bar);
+  parent.insertBefore(card, before || null);
+  scrollDown(true);
+}
+
 const setBot = (body, text) => body.replaceChildren(renderMarkdown(text));
 
 function showEmpty() {
@@ -298,6 +331,7 @@ async function sendMessage(message, images) {
   addUser(message, images);
   const bot = addBot(modelSel.value);
   let replyText = '';
+  let segText = ''; // text since the last confirmation card, so later text renders below the card
   // Status "Claude is thinking… 12s" with bouncing dots; stays until the whole answer is done.
   const status = document.createElement('div');
   status.className = 'think';
@@ -336,8 +370,16 @@ async function sendMessage(message, images) {
         if (!line.startsWith('data: ')) continue;
         let ev; try { ev = JSON.parse(line.slice(6)); } catch { continue; }
         if (ev.chatId) { currentId = ev.chatId; localStorage.setItem('chatCurrent', currentId); }
+        if (ev.confirm) {
+          showConfirm(bot.row, ev.confirm, status);
+          const nb = document.createElement('div');
+          nb.className = 'md-body';
+          bot.row.insertBefore(nb, status);
+          bot.body = nb;
+          segText = '';
+        }
         if (ev.tool) { what = ev.tool + '…'; tick(); }
-        if (ev.text) { replyText += (replyText ? '\n\n' : '') + ev.text; setBot(bot.body, replyText); scrollDown(); }
+        if (ev.text) { replyText += (replyText ? '\n\n' : '') + ev.text; segText += (segText ? '\n\n' : '') + ev.text; setBot(bot.body, segText); scrollDown(); }
         if (ev.error) addErr(ev.error);
       }
     }
@@ -378,6 +420,7 @@ renderChat(null);
     for (const x of m.models) modelSel.add(new Option(x, x));
     const saved = localStorage.getItem('chatModel');
     modelSel.value = m.models.includes(saved) ? saved : m.default;
+    if (m.shell) $('modeBadge').textContent = 'read-only · commands need approval';
     const list = await loadList();
     const last = localStorage.getItem('chatCurrent');
     const id = list.some((c) => c.id === last) ? last : '';

@@ -1052,3 +1052,15 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
   scrollbar-color: var(--border-light) transparent;
 }
 .chat-msgs { scrollbar-gutter: stable; }
+
+/* AI Chat: command confirmation card */
+.confirm { border: 1px solid var(--warn); background: rgba(245, 158, 11, 0.07); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+.confirm-title { font-weight: 600; font-size: 13px; color: var(--warn); }
+.confirm pre { margin: 8px 0; padding: 8px 10px; background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap; word-break: break-all; }
+.confirm-desc { color: var(--mut); font-size: 12.5px; margin-bottom: 8px; }
+.confirm-bar { display: flex; gap: 8px; align-items: center; }
+.confirm-bar button { padding: 6px 16px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-elev); color: var(--tx); font: inherit; cursor: pointer; }
+.confirm-ok { border-color: var(--ok) !important; color: var(--ok) !important; }
+.confirm-no:hover { border-color: var(--bad) !important; color: var(--bad); }
+.confirm-bar button:disabled { opacity: 0.5; cursor: default; }
+.confirm-result { color: var(--mut); font-size: 12.5px; }

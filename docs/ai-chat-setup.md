@@ -19,7 +19,7 @@ The monitor must run as root (as it does under pm2). When it is not root, `claud
 
 5. **Lock down permissions.** `claude-ro` must be able to read the projects admins may see, and nothing else:
    - Project files readable (`o+r`), and not writable by `claude-ro`.
-   - Hidden projects, `/root`, and the monitor's `data/` directory not readable by `claude-ro`. Because hidden projects are decided per user by keywords, any project that must stay hidden from some admins cannot be readable by `claude-ro` by path guessing alone. The sandbox only links visible projects, so this step is the second barrier.
+   - Hidden projects, `/root`, and the monitor's `data/` directory not readable by `claude-ro`. Because hidden projects are decided per user by keywords, any project that must stay hidden from some admins cannot be readable by `claude-ro` by path guessing alone. Claude is only given the folders of projects the user may see, so this step is the second barrier.
    Check: `sudo -u claude-ro touch /var/www/<project>/x` fails; `sudo -u claude-ro cat /root/.bashrc` fails; `sudo -u claude-ro ls /path/to/vps-monitor/data` fails.
 
 6. **End-to-end check.** In the chat page ask "what files are in project X?" and expect an answer. Ask it to edit a file and expect a refusal with the file unchanged. As an admin with `hiddenKeywords`, ask about a hidden project and expect that it is not found.
@@ -31,4 +31,18 @@ If a check in step 5 or 6 fails, do not enable the chat for users until it is fi
 - Conversations are stored per user in `data/chats/<user>/` (JSON files, plus an `img/` folder per chat for attached images). They are private to each user and are not removed when a user is deleted. Back up or clean that folder as you see fit.
 - `claude-ro` must not read `data/` (`chmod o-rwx data`, done by the script). Images are copied into the chat sandbox only for the message that sends them.
 - nginx: copy the `location /api/chat` block from `nginx-monitor.conf` into the live site config. Without it, images larger than 1 MB are rejected (413) and long answers are cut after 30 s (504). Then `sudo nginx -t && sudo systemctl reload nginx`.
-- `SCAN_DIR` must point to the folder that holds your projects, otherwise the sandbox is empty and Claude finds no files.
+- `SCAN_DIR` must point to the folder that holds your projects, otherwise Claude has no folder to search.
+
+## Search scope
+
+- A superadmin's Claude can search all of `SCAN_DIR` plus the folders in `CHAT_EXTRA_DIRS` (for example `/var/log,/home/zae`). Other admins only get the projects they may see.
+- What Claude can really read is decided by the OS permissions of `claude-ro`. To let it read system logs such as `/var/log/nginx`, add it to the right group, for example `sudo usermod -aG adm claude-ro`, then restart the monitor. Only add what you are willing to show in the chat.
+- `Grep` and `Glob` skip files ignored by `.gitignore`, which includes most Laravel `storage/logs/*.log`. Claude is told to find the log with `Glob` and then pass the exact file path to `Grep` (or use `Read`).
+
+## Commands with approval (optional, superadmin only)
+
+1. Install bubblewrap if it is missing: `sudo apt install bubblewrap`.
+2. Set `CHAT_SHELL=1` in the monitor environment (and `CHAT_NODE=/usr/bin/node` if the node that runs the monitor is not executable by `claude-ro`), then `pm2 restart vps-monitor --update-env`.
+3. The chat header then says "read-only · commands need approval". When Claude wants to run a command that can change something, a card shows the exact command with **Approve** and **Deny**. No answer within 5 minutes means deny. Clearly read-only commands (such as `ls`, `cat`, `echo`) are run by Claude Code without asking. Every decision is written to the Activity Log as `chat.run`.
+4. The whole Claude process runs inside `bwrap` with a read-only filesystem (only a private `/tmp` and the home of `claude-ro` are writable), so an approved command cannot change your files. The network is not blocked: read the command before approving, especially anything with `curl` or `wget`.
+5. It switches itself off (the chat stays read-only) if `CHAT_SHELL` is not `1`, the user is not a superadmin, `bwrap` is missing, or the monitor does not run as root.
