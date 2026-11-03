@@ -127,6 +127,19 @@ process.stdin.on('data', (d) => (msg += d)).on('end', () => {
     });
     rq.end(body);
   }
+  else if (msg.startsWith('tinker:')) {
+    const t = JSON.parse(msg.slice(7));
+    const cfg = JSON.parse(process.argv[process.argv.indexOf('--mcp-config') + 1]).mcpServers.vpsmon;
+    const u = new URL(cfg.env.VPSMON_APPROVAL_URL);
+    const body = JSON.stringify({ token: cfg.env.VPSMON_APPROVAL_TOKEN, project: t.project, code: t.repeat ? 'x'.repeat(t.repeat) : t.code });
+    const rq = require('http').request({ hostname: u.hostname, port: u.port, path: '/tinker', method: 'POST' }, (rs) => {
+      let d = ''; rs.on('data', (c) => (d += c)).on('end', () => {
+        line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ status: rs.statusCode, body: d ? JSON.parse(d) : null }) }] } });
+        line({ type: 'result', session_id: 'S', is_error: false });
+      });
+    });
+    rq.end(body);
+  }
   else if (msg === 'sleep') { require('fs').writeFileSync('pid', String(process.pid)); setTimeout(() => {}, 20000); }
 });
 `, { mode: 0o755 });
@@ -361,7 +374,7 @@ async function withShell(fn, { root = true, shell = '1', bwrap = FAKE_BWRAP } = 
     delete process.env.CHAT_APPROVAL_MS;
   }
 }
-const answer = (session, id, allow) => { const out = { status: 0 }; chat.handleConfirm({ res: { writeHead(s) { out.status = s; }, end() {} }, session, body: { id, allow } }); return out.status; };
+const answer = (session, id, allow, mode) => { const out = { status: 0 }; chat.handleConfirm({ res: { writeHead(s) { out.status = s; }, end() {} }, session, body: { id, allow, mode } }); return out.status; };
 const shellText = (r) => JSON.parse(r.events.find((e) => e.text).text);
 
 test('shell: approve runs the command, argv has the MCP flags, decision is logged', () => withShell(async () => {
@@ -451,3 +464,156 @@ spawn(a[i + 1], a.slice(i + 2), { stdio: 'inherit' }).on('exit', (c) => process.
   for (const f of ['--die-with-parent', '--unshare-pid', '--tmpfs']) assert.ok(a.includes(f), f);
   assert.strictEqual(a[a.indexOf('--') + 1], FAKE);
 }));
+
+// ---- tinker (run by the monitor after the user approves the exact PHP) ----
+const STUB_DIR = fs.mkdtempSync(path.join(tmp, 'php-'));
+const STUB_PHP = path.join(STUB_DIR, 'php');
+const LAST = path.join(STUB_DIR, 'last.json');
+fs.writeFileSync(STUB_PHP, `#!/usr/bin/env node
+const fs = require('fs');
+const a = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(LAST)}, JSON.stringify({ argv: a, cwd: process.cwd(), env: Object.keys(process.env) }));
+const code = a[2] || '';
+if (code.includes('SLEEP')) setTimeout(() => console.log('late'), 3000);
+else if (code.includes('SLOW')) setTimeout(() => console.log('slow done'), 700);
+else if (code.includes('BIGOUT')) process.stdout.write('y'.repeat(50000));
+else console.log('ran ok');
+`, { mode: 0o755 });
+fs.mkdirSync(path.join(tmp, 'laravelA'), { recursive: true });
+fs.writeFileSync(path.join(tmp, 'laravelA', 'artisan'), '<?php');
+fs.mkdirSync(path.join(tmp, 'plainproj'), { recursive: true });
+
+async function withTinker(fn, { root = true, tinker = '1', shell = '' } = {}) {
+  const keys = ['CHAT_TINKER', 'CHAT_PHP', 'CHAT_USER', 'CHAT_TINKER_USER', 'CHAT_SHELL', 'CHAT_BWRAP'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  const me = os.userInfo().username;
+  if (tinker) process.env.CHAT_TINKER = tinker; else delete process.env.CHAT_TINKER;
+  if (shell) { process.env.CHAT_SHELL = shell; process.env.CHAT_BWRAP = FAKE_BWRAP; } else delete process.env.CHAT_SHELL;
+  Object.assign(process.env, { CHAT_PHP: STUB_PHP, CHAT_USER: me, CHAT_TINKER_USER: me });
+  chat._test.setIsRoot(() => root);
+  fs.rmSync(LAST, { force: true });
+  try { return await fn(); } finally {
+    chat._test.setIsRoot(() => typeof process.getuid === 'function' && process.getuid() === 0);
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    delete process.env.CHAT_TINKER_MS; delete process.env.CHAT_APPROVAL_MS;
+  }
+}
+const ask = (user, payload, reply, extra = {}) => run({ superadmin: true, user, body: { message: 'tinker:' + JSON.stringify(payload) }, onEvent: (ev, session) => { if (ev.confirm && reply) reply(ev, session); }, ...extra });
+const result = (r) => JSON.parse(r.events.find((e) => e.text).text);
+const lastRun = () => JSON.parse(fs.readFileSync(LAST, 'utf8'));
+
+test('tinker: approve with rollback wraps the code in a transaction that is rolled back', () => withTinker(async () => {
+  const code = 'echo \\App\\Models\\User::count();';
+  const r = await ask('tk1', { project: 'laravelA', code }, (ev, s) => {
+    assert.strictEqual(ev.confirm.tool, 'tinker');
+    assert.strictEqual(ev.confirm.project, 'laravelA');
+    assert.strictEqual(ev.confirm.code, code);
+    assert.deepStrictEqual(ev.confirm.modes, ['rollback', 'keep']);
+    assert.strictEqual(answer(s, ev.confirm.id, true, 'rollback'), 200);
+  });
+  const t = result(r);
+  assert.strictEqual(t.body.ok, true);
+  assert.ok(t.body.output.includes('ran ok'));
+  const l = lastRun();
+  assert.deepStrictEqual(l.argv.slice(0, 2), ['artisan', 'tinker']);
+  assert.ok(l.argv[2].startsWith('--execute='));
+  assert.ok(l.argv[2].includes('DB::beginTransaction()') && l.argv[2].includes('DB::rollBack()') && l.argv[2].includes(code));
+  assert.strictEqual(fs.realpathSync(l.cwd), fs.realpathSync(path.join(tmp, 'laravelA')));
+  assert.deepStrictEqual(r.logs.find((x) => x[1] === 'chat.tinker').slice(0, 4), ['tk1', 'chat.tinker', 'laravelA: ' + code, 'rollback approved']);
+}));
+
+test('tinker: approve and keep runs exactly the code, nothing added', () => withTinker(async () => {
+  await ask('tk2', { project: 'laravelA', code: 'echo 1;' }, (ev, s) => answer(s, ev.confirm.id, true, 'keep'));
+  assert.strictEqual(lastRun().argv[2], '--execute=echo 1;');
+}));
+
+test('tinker: no mode means rollback (the safe default)', () => withTinker(async () => {
+  await ask('tk3', { project: 'laravelA', code: 'echo 1;' }, (ev, s) => answer(s, ev.confirm.id, true));
+  assert.ok(lastRun().argv[2].includes('DB::rollBack()'));
+}));
+
+test('tinker: deny does not run anything and is logged', () => withTinker(async () => {
+  const r = await ask('tk4', { project: 'laravelA', code: 'echo 1;' }, (ev, s) => answer(s, ev.confirm.id, false));
+  assert.strictEqual(result(r).body.ok, false);
+  assert.ok(!fs.existsSync(LAST));
+  assert.strictEqual(r.logs.find((x) => x[1] === 'chat.tinker')[3], 'denied');
+}));
+
+test('tinker: bad project names or projects without artisan are refused before asking', () => withTinker(async () => {
+  for (const project of ['../laravelA', 'nope', 'plainproj', '.hidden', '', 'a/b', 'laravelA/..']) {
+    const r = await ask('tk5', { project, code: 'echo 1;' });
+    assert.ok(!r.events.some((e) => e.confirm), project);
+    assert.strictEqual(result(r).body.ok, false, project);
+  }
+  assert.ok(!fs.existsSync(LAST));
+}));
+
+test('tinker: empty or over-long code is refused before asking', () => withTinker(async () => {
+  for (const payload of [{ project: 'laravelA', code: '   ' }, { project: 'laravelA', repeat: 9000 }]) {
+    const r = await ask('tk6', payload);
+    assert.ok(!r.events.some((e) => e.confirm));
+    assert.strictEqual(result(r).body.ok, false);
+  }
+}));
+
+test('tinker: shell metacharacters stay literal (no shell, code goes in one argv entry)', () => withTinker(async () => {
+  const code = 'echo "a"; $(whoami) `id` ; rm -rf / \'x\' && echo $HOME';
+  await ask('tk7', { project: 'laravelA', code }, (ev, s) => answer(s, ev.confirm.id, true, 'keep'));
+  assert.strictEqual(lastRun().argv[2], '--execute=' + code);
+  assert.strictEqual(lastRun().argv.length, 3);
+}));
+
+test('tinker: child gets a minimal environment', () => withTinker(async () => {
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = 'must-not-leak';
+  try { await ask('tk8', { project: 'laravelA', code: 'echo 1;' }, (ev, s) => answer(s, ev.confirm.id, true, 'keep')); } finally { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok'; }
+  for (const k of lastRun().env) assert.ok(['PATH', 'HOME'].includes(k), k);
+}));
+
+test('tinker: output is capped', () => withTinker(async () => {
+  const r = await ask('tk9', { project: 'laravelA', code: 'BIGOUT' }, (ev, s) => answer(s, ev.confirm.id, true, 'keep'));
+  const out = result(r).body.output;
+  assert.ok(out.length < 21000 && out.includes('truncated'));
+}));
+
+test('tinker: a run that takes too long is killed and reported', () => withTinker(async () => {
+  process.env.CHAT_TINKER_MS = '300';
+  const r = await ask('tk10', { project: 'laravelA', code: 'SLEEP' }, (ev, s) => answer(s, ev.confirm.id, true, 'keep'));
+  const b = result(r).body;
+  assert.strictEqual(b.ok, false);
+  assert.ok(/timed out/i.test(b.output));
+}));
+
+test('tinker: the chat run timeout does not fire while tinker is running', () => withTinker(async () => {
+  const r = await ask('tk11', { project: 'laravelA', code: 'SLOW' }, (ev, s) => answer(s, ev.confirm.id, true, 'keep'), { timeoutMs: 250 });
+  assert.ok(result(r).body.output.includes('slow done'));
+  assert.ok(!r.events.some((e) => e.error), JSON.stringify(r.events));
+}));
+
+test('tinker: only superadmin, with CHAT_TINKER=1, as root; flags and prompt reflect it', async () => {
+  const argvOf = async (opts) => shellText(await run({ body: { message: 'ok' }, ...opts })).argv;
+  const allowed = (a) => a[a.indexOf('--allowedTools') + 1];
+  const prompt = (a) => a[a.indexOf('--append-system-prompt') + 1];
+  await withTinker(async () => {
+    const a = await argvOf({ superadmin: true });
+    assert.ok(allowed(a).split(',').includes('mcp__vpsmon__tinker'));
+    assert.ok(a.includes('--mcp-config') && a.includes('--strict-mcp-config'));
+    assert.ok(!a.includes('--permission-prompt-tool'));
+    assert.strictEqual(a[a.indexOf('--permission-mode') + 1], 'dontAsk');
+    assert.ok(/tinker/i.test(prompt(a)));
+    assert.strictEqual(chat.tinkerAvailable({ superadmin: true }), true);
+  });
+  for (const [opts, session] of [[{}, { superadmin: false }], [{ tinker: '' }, { superadmin: true }], [{ root: false }, { superadmin: true }]]) {
+    await withTinker(async () => {
+      const a = await argvOf({ superadmin: session.superadmin });
+      assert.ok(!a.includes('--mcp-config') && !allowed(a).includes('tinker'));
+      assert.strictEqual(chat.tinkerAvailable(session), false);
+    }, opts);
+  }
+});
+
+test('tinker and shell together: both tools, approval prompt tool still present', () => withTinker(async () => {
+  const a = shellText(await run({ superadmin: true, user: 'tk12', body: { message: 'ok' } })).argv;
+  assert.ok(a[a.indexOf('--allowedTools') + 1].split(',').includes('mcp__vpsmon__tinker'));
+  assert.ok(a.includes('--permission-prompt-tool'));
+  assert.strictEqual(a[a.indexOf('--permission-mode') + 1], 'default');
+}, { shell: '1' }));

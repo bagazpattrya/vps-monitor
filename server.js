@@ -3852,7 +3852,7 @@ const server = http.createServer(async (req, res) => {
     if (chats.handleChatsApi({ req, res, session, pathname: p, body })) return;
     return send(res, 404, JSON.stringify({ error: 'Not found' }));
   }
-  if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify({ ...chat.chatModels(), shell: chat.shellAvailable(session) }));
+  if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify({ ...chat.chatModels(), shell: chat.shellAvailable(session), tinker: chat.tinkerAvailable(session) }));
   if (p === '/api/chat/confirm' && req.method === 'POST') {
     let body;
     try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }

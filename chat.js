@@ -24,19 +24,26 @@ const SHELL_PROMPT = 'You are an assistant for a VPS monitor that investigates p
   + 'Grep and Glob skip files listed in .gitignore, which includes most application logs (for example Laravel storage/logs/*.log). '
   + 'To search a log, find it with Glob, then call Grep with that exact file path (or use Read with offset and limit for big files).';
 
+const TINKER_NOTE = ' You also have a tool named tinker (mcp__vpsmon__tinker): it runs PHP in a Laravel project through "php artisan tinker", '
+  + 'but only after the user approves the exact code shown to them. Pass the project folder name and complete PHP statements that print what you need (echo, print_r, dump). '
+  + 'Use fully qualified class names (for example \\App\\Models\\User) and no "use" statements. Prefer read-only queries (count, find, select); '
+  + 'never write code that changes data unless the user asked for that.';
+
 // Model aliases the user may pick. Override with CHAT_MODELS=haiku,sonnet (comma separated).
 function chatModels() {
   const models = (process.env.CHAT_MODELS || 'haiku,sonnet,opus').split(',').map((x) => x.trim()).filter((x) => /^[a-z0-9.-]+$/i.test(x));
   return { models, default: models.includes('sonnet') ? 'sonnet' : models[0] };
 }
 
-// shell: { mcpConfig } turns on "commands with confirmation": Bash is no longer denied, and anything
-// not pre-allowed is sent to our MCP approve tool (permission mode `default`, not `dontAsk`).
-function buildClaudeArgs({ sessionId, model, addDirs = [], shell = null } = {}) {
+// shell: "commands with confirmation": Bash is no longer denied, and anything not pre-allowed is sent to our
+// MCP approve tool (permission mode `default`, not `dontAsk`). tinker: the MCP tool that runs Laravel tinker
+// after the user approves it. mcpConfig is the --mcp-config JSON for chat-mcp.js (needed for either).
+function buildClaudeArgs({ sessionId, model, addDirs = [], mcpConfig = '', shell = false, tinker = false } = {}) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', shell ? 'default' : 'dontAsk',
-    '--allowedTools', 'Read,Grep,Glob', '--disallowedTools', shell ? DENY_SHELL : DENY,
-    '--setting-sources', 'user', '--append-system-prompt', shell ? SHELL_PROMPT : SYSTEM_PROMPT];
-  if (shell) args.push('--mcp-config', shell.mcpConfig, '--strict-mcp-config', '--permission-prompt-tool', 'mcp__vpsmon__approve');
+    '--allowedTools', 'Read,Grep,Glob' + (tinker ? ',mcp__vpsmon__tinker' : ''), '--disallowedTools', shell ? DENY_SHELL : DENY,
+    '--setting-sources', 'user', '--append-system-prompt', (shell ? SHELL_PROMPT : SYSTEM_PROMPT) + (tinker ? TINKER_NOTE : '')];
+  if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+  if (shell) args.push('--permission-prompt-tool', 'mcp__vpsmon__approve');
   if (model !== undefined) {
     if (typeof model !== 'string' || !chatModels().models.includes(model)) throw new Error('bad model');
     args.push('--model', model);
@@ -158,8 +165,13 @@ function shellAvailable(session) {
   return process.env.CHAT_SHELL === '1' && !!(session && session.superadmin) && isRoot() && !!bwrapPath();
 }
 
+// Superadmin only and opt-in. The monitor itself runs tinker as CHAT_TINKER_USER, which needs root.
+function tinkerAvailable(session) {
+  return process.env.CHAT_TINKER === '1' && !!(session && session.superadmin) && isRoot();
+}
+
 const APPROVAL_WAIT_MS = () => parseInt(process.env.CHAT_APPROVAL_MS, 10) || 300_000;
-const runs = new Map(); // token -> { user, emit, log, pending: Map(id -> done(allow, message)) }
+const runs = new Map(); // token -> { user, emit, log(action, target, detail), busy, pending: Map(id -> done(allow, message, mode)) }
 let approvalPort = null;
 
 // Internal HTTP server for chat-mcp.js. Separate port on 127.0.0.1 so nginx never exposes it;
@@ -168,7 +180,7 @@ function ensureApprovalServer() {
   if (approvalPort) return approvalPort;
   approvalPort = new Promise((resolve, reject) => {
     const srv = http.createServer((req, res) => {
-      if (req.method !== 'POST' || req.url !== '/approve') { res.writeHead(404); return res.end(); }
+      if (req.method !== 'POST' || (req.url !== '/approve' && req.url !== '/tinker')) { res.writeHead(404); return res.end(); }
       let body = '';
       req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
       req.on('end', async () => {
@@ -176,7 +188,7 @@ function ensureApprovalServer() {
         try { j = JSON.parse(body); } catch { res.writeHead(400); return res.end(); }
         const run = j && typeof j.token === 'string' ? runs.get(j.token) : undefined;
         if (!run) { res.writeHead(403); return res.end(); }
-        const decision = await askUser(run, j.tool_name, j.input);
+        const decision = req.url === '/approve' ? await askUser(run, j.tool_name, j.input) : await tinker(run, j);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(decision));
       });
@@ -194,7 +206,7 @@ function askUser(run, tool, input) {
     const done = (allow, message) => {
       clearTimeout(timer);
       run.pending.delete(id);
-      run.log(input.command, allow);
+      run.log('chat.run', input.command.slice(0, 200), allow ? 'approved' : 'denied');
       resolve(allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: message || 'The user denied this command' });
     };
     const timer = setTimeout(() => done(false, 'No answer from the user in time'), APPROVAL_WAIT_MS());
@@ -203,14 +215,73 @@ function askUser(run, tool, input) {
   });
 }
 
-// POST /api/chat/confirm { id, allow } from the browser. Only the owner of the running chat can answer.
+// ---- tinker: the monitor runs it, after the user approves the exact code ----
+const TINKER_MAX_CODE = 8000;
+const TINKER_MAX_OUT = 20000;
+
+// rollback mode: the code runs inside a database transaction that is always rolled back.
+// Covers normal INSERT/UPDATE/DELETE only (not DDL, cache/Redis, files, mail, queues or API calls).
+function wrapCode(code, mode) {
+  if (mode !== 'rollback') return code;
+  let c = code.trim();
+  if (!/[;}]$/.test(c)) c += ';';
+  return '\\Illuminate\\Support\\Facades\\DB::beginTransaction(); try { ' + c + ' } finally { \\Illuminate\\Support\\Facades\\DB::rollBack(); }';
+}
+
+function execTinker(dir, code, mode) {
+  return new Promise((resolve) => {
+    const user = process.env.CHAT_TINKER_USER || 'www-data';
+    let ids;
+    try { ids = chatIds(user); } catch { return resolve({ ok: false, output: 'Cannot switch to user ' + user }); }
+    // No shell: the code is a single argv entry. Minimal environment: no tokens or other secrets.
+    const child = spawn(process.env.CHAT_PHP || 'php', ['artisan', 'tinker', '--execute=' + wrapCode(code, mode)], { cwd: dir, env: { PATH: process.env.PATH, HOME: '/tmp' }, stdio: ['ignore', 'pipe', 'pipe'], ...ids });
+    let out = '';
+    let over = false;
+    let timedOut = false;
+    const add = (d) => { out += d; if (out.length > TINKER_MAX_OUT) { out = out.slice(0, TINKER_MAX_OUT); over = true; } };
+    child.stdout.on('data', add);
+    child.stderr.on('data', add);
+    const ms = parseInt(process.env.CHAT_TINKER_MS, 10) || 60_000;
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, ms);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, output: 'Could not start php: ' + e.code }); });
+    child.on('close', (exit) => {
+      clearTimeout(timer);
+      if (over) out += '\n[output truncated]';
+      if (timedOut) return resolve({ ok: false, output: out + '\n[timed out after ' + Math.round(ms / 1000) + 's]' });
+      resolve({ ok: exit === 0, output: out || '(no output)' });
+    });
+  });
+}
+
+async function tinker(run, input) {
+  const fail = (output) => ({ ok: false, output });
+  const project = input && input.project;
+  const code = input && input.code;
+  if (typeof project !== 'string' || !NAME_RE.test(project) || project.startsWith('.')) return fail('Invalid project name');
+  const dir = path.join(process.env.SCAN_DIR || '/var/www', project);
+  if (!isDir(dir) || !fs.existsSync(path.join(dir, 'artisan'))) return fail('Project not found, or it is not a Laravel project');
+  if (typeof code !== 'string' || !code.trim() || code.length > TINKER_MAX_CODE) return fail('Code must be 1-' + TINKER_MAX_CODE + ' characters');
+  const mode = await new Promise((resolve) => {
+    const id = crypto.randomBytes(8).toString('hex');
+    const done = (allow, _message, m) => { clearTimeout(timer); run.pending.delete(id); resolve(allow ? (m === 'keep' ? 'keep' : 'rollback') : ''); };
+    const timer = setTimeout(() => done(false), APPROVAL_WAIT_MS());
+    run.pending.set(id, done);
+    run.emit({ confirm: { id, tool: 'tinker', project, code, modes: ['rollback', 'keep'] } });
+  });
+  run.log('chat.tinker', project + ': ' + code.slice(0, 180), mode ? mode + ' approved' : 'denied');
+  if (!mode) return fail('The user denied this request');
+  run.busy++;
+  try { return await execTinker(dir, code, mode); } finally { run.busy--; }
+}
+
+// POST /api/chat/confirm { id, allow, mode? } from the browser (mode: 'rollback' | 'keep', tinker only). Only the owner of the running chat can answer.
 function handleConfirm({ res, session, body }) {
   if (!session || !session.superadmin) return reject(res, 403, 'Superadmin required');
   const id = body && body.id;
   if (typeof id === 'string') {
     for (const run of runs.values()) {
       if (run.user === session.user && run.pending.has(id)) {
-        run.pending.get(id)(body.allow === true);
+        run.pending.get(id)(body.allow === true, undefined, body.mode);
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         return res.end('{"ok":true}');
       }
@@ -244,14 +315,16 @@ async function handleChat({ req, res, session, body, projects, log }) {
   let child;
   let prompt = message;
   const shell = shellAvailable(session);
-  const token = shell ? crypto.randomBytes(32).toString('hex') : '';
+  const withTinker = tinkerAvailable(session);
+  const mcp = shell || withTinker;
+  const token = mcp ? crypto.randomBytes(32).toString('hex') : '';
   try {
-    let shellOpt = null;
-    if (shell) {
+    let mcpConfig = '';
+    if (mcp) {
       const port = await ensureApprovalServer();
-      shellOpt = { mcpConfig: JSON.stringify({ mcpServers: { vpsmon: { command: process.env.CHAT_NODE || process.execPath, args: [path.join(__dirname, 'chat-mcp.js')], env: { VPSMON_APPROVAL_URL: 'http://127.0.0.1:' + port + '/approve', VPSMON_APPROVAL_TOKEN: token } } } }) };
+      mcpConfig = JSON.stringify({ mcpServers: { vpsmon: { command: process.env.CHAT_NODE || process.execPath, args: [path.join(__dirname, 'chat-mcp.js')], env: { VPSMON_APPROVAL_URL: 'http://127.0.0.1:' + port + '/approve', VPSMON_APPROVAL_TOKEN: token } } } });
     }
-    const args = buildClaudeArgs({ sessionId, model, addDirs, shell: shellOpt });
+    const args = buildClaudeArgs({ sessionId, model, addDirs, mcpConfig, shell, tinker: withTinker });
     if (!chat) chat = chats.createChat(session.user, { message, model });
     const names = chats.saveImages(session.user, chat.id, imgs);
     chats.updateChat(session.user, chat.id, (c) => { c.model = model; c.messages.push({ role: 'user', text: message, images: names, t: Date.now() }); });
@@ -283,7 +356,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     let newSession = '';
     let resultError = '';
     const emit = (o) => { if (!settled) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
-    const run = shell ? { user: session.user, emit, pending: new Map(), log: (cmd, allow) => log(session.user, 'chat.run', cmd.slice(0, 200), allow ? 'approved' : 'denied') } : null;
+    const run = mcp ? { user: session.user, emit, pending: new Map(), busy: 0, log: (action, target, detail) => log(session.user, action, target, detail) } : null;
     if (run) runs.set(token, run);
     // Always called when the chat ends: stops timers, denies anything still waiting, forgets the token.
     const cleanup = () => {
@@ -319,8 +392,8 @@ async function handleChat({ req, res, session, body, projects, log }) {
       if (ev.done) gotResult = true;
       if (ev.error) resultError = ev.error;
     };
-    // Run timeout; it does not fire while the user is being asked to confirm a command.
-    const onTimeout = () => { if (run && run.pending.size) { timer = setTimeout(onTimeout, 1000); return; } child.kill('SIGKILL'); finish('Timed out'); };
+    // Run timeout; it does not fire while the user is being asked to confirm something or tinker is running.
+    const onTimeout = () => { if (run && (run.pending.size || run.busy)) { timer = setTimeout(onTimeout, 1000); return; } child.kill('SIGKILL'); finish('Timed out'); };
     let timer = setTimeout(onTimeout, parseInt(process.env.CHAT_TIMEOUT_MS, 10) || 120_000);
 
     res.on('close', () => { // client left (or response already ended)
@@ -350,5 +423,5 @@ async function handleChat({ req, res, session, body, projects, log }) {
   });
 }
 
-module.exports = { handleChat, handleConfirm, shellAvailable, chatModels, addUploads, scopeDirs, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
+module.exports = { handleChat, handleConfirm, shellAvailable, tinkerAvailable, chatModels, addUploads, scopeDirs, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
 module.exports._test = { setIsRoot: (fn) => { isRoot = fn; } };

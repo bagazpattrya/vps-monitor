@@ -1064,3 +1064,4 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .confirm-no:hover { border-color: var(--bad) !important; color: var(--bad); }
 .confirm-bar button:disabled { opacity: 0.5; cursor: default; }
 .confirm-result { color: var(--mut); font-size: 12.5px; }
+.confirm-keep { border-color: var(--warn) !important; color: var(--warn) !important; }

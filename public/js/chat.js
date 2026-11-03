@@ -143,34 +143,38 @@ function addErr(text) {
   scrollDown(true);
 }
 
-// Card asking the user to approve a command Claude wants to run.
+// Card asking the user to approve a command or tinker code Claude wants to run.
 function showConfirm(parent, c, before) {
+  const isTinker = c.tool === 'tinker';
   const card = document.createElement('div');
   card.className = 'confirm';
   const title = document.createElement('div');
   title.className = 'confirm-title';
-  title.textContent = 'Claude wants to run a command';
+  title.textContent = isTinker ? 'Claude wants to run PHP (tinker) in ' + c.project : 'Claude wants to run a command';
   const pre = document.createElement('pre');
-  pre.textContent = c.command;
+  pre.textContent = isTinker ? c.code : c.command;
   card.append(title, pre);
-  if (c.description) { const d = document.createElement('div'); d.className = 'confirm-desc'; d.textContent = c.description; card.appendChild(d); }
+  const note = isTinker ? 'Roll back only undoes normal database writes (not table changes, cache, files, mail or queues). Read the code before approving.' : c.description;
+  if (note) { const d = document.createElement('div'); d.className = 'confirm-desc'; d.textContent = note; card.appendChild(d); }
   const bar = document.createElement('div');
   bar.className = 'confirm-bar';
-  const ok = document.createElement('button'), no = document.createElement('button');
-  ok.type = no.type = 'button';
-  ok.className = 'confirm-ok'; ok.textContent = 'Approve';
-  no.className = 'confirm-no'; no.textContent = 'Deny';
-  const answer = async (allow) => {
-    ok.disabled = no.disabled = true;
+  const mk = (cls, text, onclick) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = onclick; return b; };
+  const answer = async (allow, mode) => {
+    bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
     const res = document.createElement('span');
     res.className = 'confirm-result';
-    try { await api('POST', '/api/chat/confirm', { id: c.id, allow }); res.textContent = allow ? 'Approved' : 'Denied'; }
-    catch (e) { res.textContent = 'Could not send: ' + e.message; }
+    try {
+      await api('POST', '/api/chat/confirm', { id: c.id, allow, mode });
+      res.textContent = !allow ? 'Denied' : isTinker ? (mode === 'keep' ? 'Approved (changes kept)' : 'Approved (changes rolled back)') : 'Approved';
+    } catch (e) { res.textContent = 'Could not send: ' + e.message; }
     bar.replaceChildren(res);
   };
-  ok.onclick = () => answer(true);
-  no.onclick = () => answer(false);
-  bar.append(ok, no);
+  if (isTinker) {
+    bar.append(mk('confirm-ok', 'Run (roll back DB changes)', () => answer(true, 'rollback')), mk('confirm-keep', 'Run and keep changes', () => answer(true, 'keep')));
+  } else {
+    bar.append(mk('confirm-ok', 'Approve', () => answer(true)));
+  }
+  bar.append(mk('confirm-no', 'Deny', () => answer(false)));
   card.appendChild(bar);
   parent.insertBefore(card, before || null);
   scrollDown(true);
@@ -420,7 +424,7 @@ renderChat(null);
     for (const x of m.models) modelSel.add(new Option(x, x));
     const saved = localStorage.getItem('chatModel');
     modelSel.value = m.models.includes(saved) ? saved : m.default;
-    if (m.shell) $('modeBadge').textContent = 'read-only · commands need approval';
+    if (m.shell || m.tinker) $('modeBadge').textContent = 'read-only · ' + (m.shell && m.tinker ? 'commands & tinker' : m.shell ? 'commands' : 'tinker') + ' need approval';
     const list = await loadList();
     const last = localStorage.getItem('chatCurrent');
     const id = list.some((c) => c.id === last) ? last : '';

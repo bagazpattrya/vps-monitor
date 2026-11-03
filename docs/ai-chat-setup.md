@@ -46,3 +46,13 @@ If a check in step 5 or 6 fails, do not enable the chat for users until it is fi
 3. The chat header then says "read-only · commands need approval". When Claude wants to run a command that can change something, a card shows the exact command with **Approve** and **Deny**. No answer within 5 minutes means deny. Clearly read-only commands (such as `ls`, `cat`, `echo`) are run by Claude Code without asking. Every decision is written to the Activity Log as `chat.run`.
 4. The whole Claude process runs inside `bwrap` with a read-only filesystem (only a private `/tmp` and the home of `claude-ro` are writable), so an approved command cannot change your files. The network is not blocked: read the command before approving, especially anything with `curl` or `wget`.
 5. It switches itself off (the chat stays read-only) if `CHAT_SHELL` is not `1`, the user is not a superadmin, `bwrap` is missing, or the monitor does not run as root.
+
+## Tinker with approval (optional, superadmin only)
+
+Claude cannot run `php artisan tinker` itself (it has no database credentials and its disk is read-only). Instead it gets a `tinker` tool, and the **monitor** runs it for it, after you approve the exact PHP code.
+
+1. In the monitor `.env`: `CHAT_TINKER=1` (optional: `CHAT_TINKER_USER=www-data`, the user the web app runs as, and `CHAT_PHP=/usr/bin/php`). The monitor must run as root. Then `pm2 restart vps-monitor`.
+2. The chat header then says "... tinker need approval". When Claude wants to run PHP, a card shows the project and the code with three buttons: **Run (roll back DB changes)**, **Run and keep changes**, **Deny**. No answer within 5 minutes means deny.
+3. Rolling back wraps the code in a database transaction that is always rolled back. It only undoes normal INSERT/UPDATE/DELETE on the default connection. It does not undo table changes, cache/Redis, files, mail, queued jobs or API calls, so read the code before approving, especially "Run and keep changes".
+4. The code runs with `php artisan tinker --execute=...` inside the project folder as `CHAT_TINKER_USER`, with no shell, a 60 s limit, and the output cut at 20 KB. Only folders in `SCAN_DIR` that contain an `artisan` file are accepted. Each decision is written to the Activity Log as `chat.tinker`.
+5. Text in logs or data can try to trick Claude into proposing harmful code. The card is the only safeguard, so always read it.
