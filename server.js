@@ -3854,6 +3854,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify(chat.chatModels()));
   if (p === '/api/chat' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' })); // sebelum membaca body besar
     let body;
     // 4 gambar x 5 MB sebagai base64 + teks; route lain tetap pakai batas kecil.
     try { body = JSON.parse(await readBody(req, 28 * 1024 * 1024)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
