@@ -1,6 +1,6 @@
 # AI Chat: VPS setup
 
-The chat page (`/chat`, admins and superadmins) runs the `claude` CLI as an unprivileged Linux user so Claude can read project files but cannot change anything. These steps are manual and run once on the VPS. Spec: `docs/superpowers/specs/2026-11-03-ai-chat-design.md`.
+The chat page (`/chat`, admins and superadmins) runs the `claude` CLI as an unprivileged Linux user so Claude can read project files but cannot change anything. These steps run once on the VPS. `scripts/setup-claude-ro.sh` does steps 1, 2 and the `data/` part of step 5 (run it with `--dry-run` first); the rest is manual. Spec: `docs/superpowers/specs/2026-11-03-ai-chat-design.md`.
 
 The monitor must run as root (as it does under pm2). When it is not root, `claude` runs as the same user as the monitor, and the monitor logs a warning. Do not use that mode in production.
 
@@ -25,3 +25,10 @@ The monitor must run as root (as it does under pm2). When it is not root, `claud
 6. **End-to-end check.** In the chat page ask "what files are in project X?" and expect an answer. Ask it to edit a file and expect a refusal with the file unchanged. As an admin with `hiddenKeywords`, ask about a hidden project and expect that it is not found.
 
 If a check in step 5 or 6 fails, do not enable the chat for users until it is fixed.
+
+## Saved chats and images
+
+- Conversations are stored per user in `data/chats/<user>/` (JSON files, plus an `img/` folder per chat for attached images). They are private to each user and are not removed when a user is deleted. Back up or clean that folder as you see fit.
+- `claude-ro` must not read `data/` (`chmod o-rwx data`, done by the script). Images are copied into the chat sandbox only for the message that sends them.
+- nginx: copy the `location /api/chat` block from `nginx-monitor.conf` into the live site config. Without it, images larger than 1 MB are rejected (413) and long answers are cut after 30 s (504). Then `sudo nginx -t && sudo systemctl reload nginx`.
+- `SCAN_DIR` must point to the folder that holds your projects, otherwise the sandbox is empty and Claude finds no files.
