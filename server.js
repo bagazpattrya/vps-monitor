@@ -10,6 +10,7 @@ const crypto = require('crypto');
 // Node tidak membaca .env otomatis; loadEnvFile tidak menimpa env yang sudah di-set (mis. pm2).
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 const auth = require('./auth');
+const chat = require('./chat');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -3844,6 +3845,13 @@ const server = http.createServer(async (req, res) => {
 
   const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
 
+  if (p === '/api/chat' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse(await readBody(req, 8192)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    let projects = [];
+    try { projects = fs.readdirSync(SCAN_ROOT).filter((n) => !isHidden(session, n)); } catch {}
+    return chat.handleChat({ req, res, session, body, projects, log: logActivity });
+  }
   if (p === '/api/me') {
     const { hiddenKeywords: _hk, ...me } = session; // keyword tidak perlu sampai ke browser
     return send(res, 200, JSON.stringify({ ...me, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
@@ -4690,7 +4698,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
-  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p;
+  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
   serveFile(req, res, file);
 });
