@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
+const chats = require('./chats');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -56,13 +57,22 @@ function buildSandbox(baseDir, user, names, root) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
   fs.chmodSync(dir, 0o755);
   for (const n of names) {
-    if (typeof n !== 'string' || !NAME_RE.test(n) || n.startsWith('.')) continue;
+    if (typeof n !== 'string' || !NAME_RE.test(n) || n.startsWith('.') || n === '_uploads') continue;
     try {
       if (!fs.statSync(path.join(root, n)).isDirectory()) continue;
       fs.symlinkSync(path.join(root, n), path.join(dir, n));
     } catch {}
   }
   return dir;
+}
+
+// Salin gambar pesan ini ke <sandbox>/_uploads supaya claude-ro bisa membacanya (folder data/ tidak terbaca).
+function addUploads(dir, files) {
+  if (!files.length) return;
+  const up = path.join(dir, '_uploads');
+  fs.mkdirSync(up, { recursive: true, mode: 0o755 });
+  fs.chmodSync(up, 0o755);
+  for (const f of files) fs.writeFileSync(path.join(up, f.name), f.buf, { mode: 0o644 });
 }
 
 // One running chat per user and `perHour` starts per rolling hour.
@@ -107,17 +117,30 @@ async function handleChat({ req, res, session, body, projects, log }) {
   if (!session || !session.admin) return reject(res, 403, 'Admin required');
   const message = body && body.message;
   if (typeof message !== 'string' || !message.trim() || message.length > MAX_MESSAGE) return reject(res, 400, 'Message must be 1-' + MAX_MESSAGE + ' characters');
-  const sessionId = body.sessionId;
-  const model = body.model === undefined || body.model === '' ? chatModels().default : body.model;
+  let imgs;
+  try { imgs = chats.decodeImages(body.images); } catch (e) { return reject(res, 400, e.message); }
+  let chat = null;
+  if (body.chatId !== undefined && body.chatId !== '') {
+    chat = chats.getChat(session.user, body.chatId);
+    if (!chat) return reject(res, 404, 'Chat not found');
+  }
+  const model = body.model === undefined || body.model === '' ? (chat && chat.model) || chatModels().default : body.model;
+  const sessionId = chat && UUID_RE.test(chat.claudeSessionId) ? chat.claudeSessionId : undefined;
   let args;
-  try { args = buildClaudeArgs({ sessionId, model }); } catch (e) { return reject(res, 400, e.message === 'bad model' ? 'Unknown model' : 'Bad session id'); }
+  try { args = buildClaudeArgs({ sessionId, model }); } catch (e) { return reject(res, 400, e.message === 'bad model' ? 'Unknown model' : 'Bad request'); }
   const slot = limiter.acquire(session.user);
   if (!slot.ok) return reject(res, slot.status, slot.error);
 
   const user = process.env.CHAT_USER || 'claude-ro';
   let child;
+  let prompt = message;
   try {
+    if (!chat) chat = chats.createChat(session.user, { message, model });
+    const names = chats.saveImages(session.user, chat.id, imgs);
+    chats.updateChat(session.user, chat.id, (c) => { c.model = model; c.messages.push({ role: 'user', text: message, images: names, t: Date.now() }); });
+    if (names.length) prompt += '\n\nAttached images (read them with the Read tool):\n' + names.map((n) => '_uploads/' + n).join('\n');
     const cwd = buildSandbox(process.env.CHAT_SANDBOX_DIR || '/tmp/vpsmon-chat', session.user, projects, process.env.SCAN_DIR || '/var/www');
+    addUploads(cwd, names.map((name, i) => ({ name, buf: imgs[i].buf })));
     const env = { PATH: process.env.PATH, HOME: process.env.CHAT_HOME || process.env.HOME };
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], ...chatIds(user) });
@@ -134,9 +157,20 @@ async function handleChat({ req, res, session, body, projects, log }) {
     let gotResult = false;
     let buf = '';
     let errTail = '';
+    const parts = [];
+    let newSession = '';
+    let resultError = '';
     const emit = (o) => { if (!settled) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
+    // Simpan jawaban (juga yang sebagian) ke file chat; diam-diam dilewati bila chat sudah dihapus.
+    const persist = (error) => chats.updateChat(session.user, chat.id, (c) => {
+      if (parts.length) c.messages.push({ role: 'assistant', text: parts.join('\n\n'), t: Date.now() });
+      if (error) c.messages.push({ role: 'assistant', text: error, error: true, t: Date.now() });
+      if (newSession) c.claudeSessionId = newSession;
+    });
     const finish = (error) => {
       if (settled) return;
+      error = error || resultError;
+      persist(error);
       if (error) emit({ error });
       emit({ done: true });
       settled = true;
@@ -148,24 +182,26 @@ async function handleChat({ req, res, session, body, projects, log }) {
     const handleLine = (line) => {
       const ev = parseStreamLine(line);
       if (!ev) return;
-      if (ev.text) emit({ text: ev.text });
-      if (ev.sessionId) emit({ sessionId: ev.sessionId });
+      if (ev.text) { parts.push(ev.text); emit({ text: ev.text }); }
+      if (ev.sessionId) { newSession = ev.sessionId; emit({ sessionId: ev.sessionId }); }
       if (ev.done) gotResult = true;
-      if (ev.error) emit({ error: ev.error });
+      if (ev.error) resultError = ev.error;
     };
     const timer = setTimeout(() => { child.kill('SIGKILL'); finish('Timed out'); }, parseInt(process.env.CHAT_TIMEOUT_MS, 10) || 120_000);
 
     res.on('close', () => { // client left (or response already ended)
       if (settled) return;
       child.kill('SIGKILL');
+      persist('');
       settled = true;
       clearTimeout(timer);
       slot.release();
       resolve();
     });
+    emit({ chatId: chat.id });
     child.on('error', (e) => finish(e.code === 'ENOENT' ? 'Claude CLI not found' : 'Could not start Claude'));
     child.stdin.on('error', () => {});
-    child.stdin.end(message);
+    child.stdin.end(prompt);
     child.stderr.on('data', (d) => { errTail = (errTail + d).slice(-500); });
     child.stdout.on('data', (d) => {
       buf += d;
@@ -180,4 +216,4 @@ async function handleChat({ req, res, session, body, projects, log }) {
   });
 }
 
-module.exports = { handleChat, chatModels, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
+module.exports = { handleChat, chatModels, addUploads, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };

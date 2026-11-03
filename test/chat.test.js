@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 const chat = require('../chat.js');
+const chats = require('../chats.js');
 const { buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter } = chat;
 
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
@@ -81,10 +82,24 @@ process.stdin.on('data', (d) => (msg += d)).on('end', () => {
     line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ argv: process.argv.slice(2), msg, env: Object.keys(process.env) }) }] } });
     line({ type: 'result', session_id: 'S', is_error: false });
   } else if (msg === 'fail') { console.log('garbage'); process.exit(1); }
+  else if (msg === 'uuid') {
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'first' }] } });
+    line({ type: 'result', session_id: '123e4567-e89b-12d3-a456-426614174000', is_error: false });
+  } else if (msg === 'again') {
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify(process.argv.slice(2)) }] } });
+    line({ type: 'result', session_id: '123e4567-e89b-12d3-a456-426614174000', is_error: false });
+  } else if (msg === 'partial') {
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'part' }] } });
+    setTimeout(() => {}, 20000);
+  } else if (msg.startsWith('img')) {
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ msg, files: require('fs').readdirSync('_uploads') }) }] } });
+    line({ type: 'result', session_id: 'S', is_error: false });
+  }
   else if (msg === 'sleep') { require('fs').writeFileSync('pid', String(process.pid)); setTimeout(() => {}, 20000); }
 });
 `, { mode: 0o755 });
 process.env.CLAUDE_BIN = FAKE;
+process.env.CHAT_DATA_DIR = path.join(tmp, 'chats');
 process.env.CHAT_SANDBOX_DIR = path.join(tmp, 'sb');
 process.env.SCAN_DIR = tmp;
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok';
@@ -112,8 +127,16 @@ test('handleChat rejects bad messages with 400', async () => {
   for (const m of ['', 123, 'x'.repeat(4001)]) assert.strictEqual((await run({ body: { message: m } })).status, 400);
 });
 
-test('handleChat rejects bad sessionId with 400', async () => {
-  assert.strictEqual((await run({ body: { message: 'ok', sessionId: '--help' } })).status, 400);
+test('handleChat rejects unknown or malformed chatId with 404', async () => {
+  for (const id of ['--help', '../../x', 'a'.repeat(24)]) assert.strictEqual((await run({ body: { message: 'ok', chatId: id } })).status, 404, id);
+});
+
+test('handleChat rejects bad images with 400 and creates no chat', async () => {
+  const user = 'imgbad';
+  for (const images of [['bm90IGFuIGltYWdl'], Array(5).fill('x'), 'x']) {
+    assert.strictEqual((await run({ user, body: { message: 'ok', images } })).status, 400);
+  }
+  assert.deepStrictEqual(chats.listChats(user), []);
 });
 
 test('handleChat streams text, session id, done; env and argv are safe', async () => {
@@ -173,4 +196,72 @@ test('handleChat passes the chosen model, default sonnet', async () => {
   assert.strictEqual(a[a.indexOf('--model') + 1], 'haiku');
   const b = await argvOf({ message: 'ok' });
   assert.strictEqual(b[b.indexOf('--model') + 1], 'sonnet');
+});
+
+// ---- persistence and images ----
+const PNG64 = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]).toString('base64');
+
+test('handleChat saves the conversation and returns chatId first', async () => {
+  const user = 'persist';
+  const r = await run({ user, body: { message: 'ok', model: 'haiku' } });
+  assert.ok(chats.isChatId(r.events[0].chatId));
+  const c = chats.getChat(user, r.events[0].chatId);
+  assert.strictEqual(c.model, 'haiku');
+  assert.strictEqual(c.title, 'ok');
+  assert.deepStrictEqual(c.messages.map((m) => m.role), ['user', 'assistant']);
+  assert.strictEqual(c.messages[0].text, 'ok');
+  assert.ok(c.messages[1].text.includes('"msg":"ok"'));
+  assert.strictEqual(c.claudeSessionId, 'S');
+});
+
+test('handleChat keeps the user message and an error message when claude fails', async () => {
+  const user = 'failsave';
+  const r = await run({ user, body: { message: 'fail' } });
+  const c = chats.getChat(user, r.events[0].chatId);
+  assert.strictEqual(c.messages[0].text, 'fail');
+  const last = c.messages[c.messages.length - 1];
+  assert.strictEqual(last.error, true);
+});
+
+test('handleChat saves partial text when the client disconnects', async () => {
+  const user = 'partial';
+  const created = chats.createChat(user, { message: 'x', model: 'sonnet' });
+  await run({ user, body: { message: 'partial', chatId: created.id }, close: 700 });
+  const c = chats.getChat(user, created.id);
+  assert.strictEqual(c.messages[c.messages.length - 1].text, 'part');
+});
+
+test('handleChat resumes with the stored session id only when it is a UUID', async () => {
+  const user = 'resume';
+  const first = await run({ user, body: { message: 'uuid' } });
+  const id = first.events[0].chatId;
+  const argvOf = async () => JSON.parse((await run({ user, body: { message: 'again', chatId: id } })).events.find((e) => e.text).text);
+  const a = await argvOf();
+  assert.strictEqual(a[a.indexOf('--resume') + 1], UUID);
+  chats.updateChat(user, id, (c) => { c.claudeSessionId = '--help'; });
+  assert.ok(!(await argvOf()).includes('--resume'));
+});
+
+test('handleChat stores images, copies them to _uploads and names them in the prompt', async () => {
+  const user = 'withimg';
+  const r = await run({ user, body: { message: 'img please', images: ['data:image/png;base64,' + PNG64] } });
+  const t = JSON.parse(r.events.find((e) => e.text).text);
+  assert.strictEqual(t.files.length, 1);
+  assert.ok(t.msg.startsWith('img please'));
+  assert.ok(t.msg.includes('_uploads/' + t.files[0]));
+  const c = chats.getChat(user, r.events[0].chatId);
+  assert.strictEqual(c.messages[0].text, 'img please');
+  assert.strictEqual(c.messages[0].images.length, 1);
+  assert.ok(fs.existsSync(path.join(chats.userDir(user), c.id, 'img', c.messages[0].images[0])));
+});
+
+test('handleChat does not recreate a chat deleted while it streams', async () => {
+  const user = 'deleted';
+  const created = chats.createChat(user, { message: 'x', model: 'sonnet' });
+  const p = run({ user, body: { message: 'sleep', chatId: created.id }, timeoutMs: 800 });
+  await new Promise((r) => setTimeout(r, 400));
+  chats.deleteChat(user, created.id);
+  await p;
+  assert.strictEqual(chats.getChat(user, created.id), null);
+  assert.ok(!fs.existsSync(path.join(chats.userDir(user), created.id + '.json')));
 });
