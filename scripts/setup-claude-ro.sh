@@ -29,13 +29,13 @@ cat <<MSG
 
 Next, by hand:
   1. sudo -u $CHAT_USER -H $DEST setup-token       (prints a token; keep it secret)
-  2. Set in the monitor environment (pm2 / ecosystem.config.js, not in git):
+  2. Put these in /var/www/vps-monitor/.env (first: chown root:root .env && chmod 600 .env; git-ignored):
        CLAUDE_BIN=$DEST  CHAT_USER=$CHAT_USER  CHAT_HOME=/home/$CHAT_USER
        CLAUDE_CODE_OAUTH_TOKEN=<token>  SCAN_DIR=<folder with your projects>
      Optional: CHAT_EXTRA_DIRS=/var/log,/home/zae   (more folders for superadmin; see docs/ai-chat-setup.md)
                CHAT_SHELL=1                          (commands with approval; needs bubblewrap)
      To read system logs: sudo usermod -aG adm $CHAT_USER
-     then: pm2 restart vps-monitor --update-env
+     then: pm2 restart vps-monitor
   3. Apply the 'location /api/chat' block from nginx-monitor.conf to the live nginx config,
      then: sudo nginx -t && sudo systemctl reload nginx
   4. Verify (each command must FAIL):
