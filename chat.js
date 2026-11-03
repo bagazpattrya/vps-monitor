@@ -33,13 +33,25 @@ function buildClaudeArgs({ sessionId, model } = {}) {
   return args;
 }
 
+// Short "Name detail" label for the live status line, e.g. "Read projA/laravel.log".
+function toolLabel(b) {
+  const i = b.input || {};
+  const detail = String(i.file_path || i.command || i.pattern || i.path || i.description || '').replace(/\s+/g, ' ').trim();
+  return (String(b.name || 'tool') + ' ' + detail).trim().slice(0, 100);
+}
+
 function parseStreamLine(line) {
   let o;
   try { o = JSON.parse(line); } catch { return null; }
   if (!o || typeof o !== 'object') return null;
   if (o.type === 'assistant' && o.message && Array.isArray(o.message.content)) {
-    const text = o.message.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('');
-    return text ? { text } : null;
+    const blocks = o.message.content.filter(Boolean);
+    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const tu = blocks.find((b) => b.type === 'tool_use');
+    const r = {};
+    if (text) r.text = text;
+    if (tu) r.tool = toolLabel(tu);
+    return text || tu ? r : null;
   }
   if (o.type === 'result') {
     const r = { sessionId: o.session_id, done: true };
@@ -182,6 +194,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     const handleLine = (line) => {
       const ev = parseStreamLine(line);
       if (!ev) return;
+      if (ev.tool) emit({ tool: ev.tool });
       if (ev.text) { parts.push(ev.text); emit({ text: ev.text }); }
       if (ev.sessionId) { newSession = ev.sessionId; emit({ sessionId: ev.sessionId }); }
       if (ev.done) gotResult = true;

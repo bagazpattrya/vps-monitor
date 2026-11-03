@@ -217,6 +217,21 @@ async function sendMessage(message, images) {
   bubble('user', message, images);
   const reply = bubble('bot', '');
   const replyBox = reply.parentElement;
+  // Status "Claude is thinking… 12s" with bouncing dots; stays until the whole answer is done.
+  const status = document.createElement('div');
+  status.className = 'think';
+  const dots = document.createElement('span');
+  dots.className = 'dots';
+  dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+  const label = document.createElement('span');
+  let what = 'Claude is thinking…';
+  const t0 = Date.now();
+  const tick = () => { label.textContent = what + ' · ' + Math.floor((Date.now() - t0) / 1000) + 's'; };
+  tick();
+  const timer = setInterval(tick, 1000);
+  status.append(dots, label);
+  replyBox.appendChild(status);
+  msgs.scrollTop = msgs.scrollHeight;
   try {
     const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId: currentId || undefined, model: modelSel.value || undefined, images: images.length ? images : undefined }) });
     if (r.status === 401) { location.href = '/login'; return; }
@@ -241,6 +256,7 @@ async function sendMessage(message, images) {
         if (!line.startsWith('data: ')) continue;
         let ev; try { ev = JSON.parse(line.slice(6)); } catch { continue; }
         if (ev.chatId) { currentId = ev.chatId; localStorage.setItem('chatCurrent', currentId); }
+        if (ev.tool) { what = ev.tool + '…'; tick(); }
         if (ev.text) reply.textContent += (reply.textContent ? '\n\n' : '') + ev.text;
         if (ev.error) bubble('err', ev.error);
         msgs.scrollTop = msgs.scrollHeight;
@@ -249,6 +265,8 @@ async function sendMessage(message, images) {
   } catch (e) {
     bubble('err', 'Connection lost');
   } finally {
+    clearInterval(timer);
+    status.remove();
     if (!reply.textContent) replyBox.remove();
     busy = false;
     $('send').disabled = false;

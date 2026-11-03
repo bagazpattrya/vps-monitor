@@ -95,6 +95,11 @@ process.stdin.on('data', (d) => (msg += d)).on('end', () => {
     line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ msg, files: require('fs').readdirSync('_uploads') }) }] } });
     line({ type: 'result', session_id: 'S', is_error: false });
   }
+  else if (msg === 'tool') {
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Grep', input: { pattern: 'ERROR', path: 'projA/laravel.log' } }] } });
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } });
+    line({ type: 'result', session_id: 'S', is_error: false });
+  }
   else if (msg === 'sleep') { require('fs').writeFileSync('pid', String(process.pid)); setTimeout(() => {}, 20000); }
 });
 `, { mode: 0o755 });
@@ -264,4 +269,27 @@ test('handleChat does not recreate a chat deleted while it streams', async () =>
   await p;
   assert.strictEqual(chats.getChat(user, created.id), null);
   assert.ok(!fs.existsSync(path.join(chats.userDir(user), created.id + '.json')));
+});
+
+// ---- tool activity ----
+test('parseStreamLine reports tool use with a short detail', () => {
+  const tu = (name, input) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
+  assert.deepStrictEqual(parseStreamLine(tu('Read', { file_path: 'projA/a.log' })), { tool: 'Read projA/a.log' });
+  assert.deepStrictEqual(parseStreamLine(tu('Grep', { pattern: 'ERROR' })), { tool: 'Grep ERROR' });
+  assert.deepStrictEqual(parseStreamLine(tu('Bash', { command: 'tail -n 50 x.log' })), { tool: 'Bash tail -n 50 x.log' });
+  assert.deepStrictEqual(parseStreamLine(tu('Glob', {})), { tool: 'Glob' });
+  assert.strictEqual(parseStreamLine(tu('Bash', { command: 'x'.repeat(500) })).tool.length, 100);
+});
+
+test('parseStreamLine returns text and tool together', () => {
+  const l = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'looking' }, { type: 'tool_use', name: 'Grep', input: { pattern: 'E' } }] } });
+  assert.deepStrictEqual(parseStreamLine(l), { text: 'looking', tool: 'Grep E' });
+});
+
+test('handleChat streams tool events and does not save them', async () => {
+  const user = 'toolev';
+  const r = await run({ user, body: { message: 'tool' } });
+  assert.ok(r.events.some((e) => e.tool === 'Grep ERROR'));
+  const c = chats.getChat(user, r.events[0].chatId);
+  assert.deepStrictEqual(c.messages.map((m) => m.text), ['tool', 'done']);
 });
