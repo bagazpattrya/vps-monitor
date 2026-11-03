@@ -7,4 +7,5 @@ data/*.log
 data/removed-sites/
 data/removed-dbs/
 .opencode/
-.envdata/chats/
+.env
+data/chats/
