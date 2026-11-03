@@ -922,9 +922,10 @@ function laravelLogPaths() {
 }
 
 // ---- aggregated project + system error logs ----
-const LOG_TAIL_BYTES = 256 * 1024;
+const LOG_TAIL_BYTES = 1024 * 1024;
 const LOG_MAX_SOURCES = 40;
-const LOG_MAX_ENTRIES = 2000;
+const LOG_MAX_ENTRIES = 20000;
+const LOG_REPORT_PER_PROJECT = 500;
 const LOG_MAX_ENTRIES_PER_SOURCE = 400;
 const LOG_CACHE_MS = 30_000;
 let errorLogsCache = { time: 0, data: null };
@@ -1216,6 +1217,16 @@ function scrubLogText(text) {
   return s;
 }
 
+// Batasi per project (bukan global) supaya log project yang ramai tidak menggeser error project lain.
+function capPerProject(entries, max) {
+  const n = new Map();
+  return entries.filter((e) => {
+    const c = (n.get(e.project) || 0) + 1;
+    n.set(e.project, c);
+    return c <= max;
+  });
+}
+
 function buildErrorReport(hours, force = false, session = null, from = 0, to = 0) {
   const data = collectErrorLogs(force);
   const custom = from > 0 || to > 0;
@@ -1256,7 +1267,7 @@ function buildErrorReport(hours, force = false, session = null, from = 0, to = 0
     scannedSources: visibleSources.length,
     summary,
     sources,
-    entries: entries.slice(0, 500).map((e) => ({
+    entries: capPerProject(entries, LOG_REPORT_PER_PROJECT).map((e) => ({
       id: errorEntryId(e),
       sourceId: e.sourceId,
       t: e.t,
