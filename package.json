@@ -4,7 +4,8 @@
   "description": "Lightweight VPS usage monitor (zero dependencies)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
