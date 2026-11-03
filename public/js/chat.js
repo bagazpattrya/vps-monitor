@@ -81,37 +81,152 @@ $('navSearch').addEventListener('input', (e) => {
 });
 
 // ---- Chat ----
-const msgs = $('msgs');
-const input = $('input');
-let sessionId = sessionStorage.getItem('chatSession') || '';
+const MAX_IMAGES = 4, MAX_BYTES = 5 * 1024 * 1024;
+const msgs = $('msgs'), input = $('input'), modelSel = $('model');
+let currentId = '';
 let busy = false;
+let pending = []; // [{ dataUrl }]
 
-const modelSel = $('model');
-j('/api/chat/models').then((m) => {
-  for (const x of m.models) modelSel.add(new Option(x, x));
-  const saved = localStorage.getItem('chatModel');
-  modelSel.value = m.models.includes(saved) ? saved : m.default;
-}).catch(() => {});
-modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
+const imgUrl = (id, name) => `/api/chats/${id}/img/${name}`;
 
-function bubble(cls, text) {
+function bubble(cls, text, images) {
   const d = document.createElement('div');
   d.className = 'chat-msg ' + cls;
-  d.textContent = text; // textContent only: replies may contain HTML-like text from logs/files
+  for (const src of images || []) {
+    const a = document.createElement('a');
+    a.href = src; a.target = '_blank'; a.rel = 'noopener';
+    const im = document.createElement('img');
+    im.src = src; im.loading = 'lazy';
+    a.appendChild(im); d.appendChild(a);
+  }
+  const t = document.createElement('div');
+  t.textContent = text; // textContent only: replies may contain HTML-like text from logs/files
+  d.appendChild(t);
   msgs.appendChild(d);
   msgs.scrollTop = msgs.scrollHeight;
-  return d;
+  return t;
 }
 
-async function sendMessage(message) {
+function renderChat(chat) {
+  msgs.textContent = '';
+  $('chatTitle').textContent = chat ? chat.title : 'AI Chat';
+  for (const m of chat ? chat.messages : []) {
+    bubble(m.error ? 'err' : m.role === 'user' ? 'user' : 'bot', m.text, (m.images || []).map((n) => imgUrl(chat.id, n)));
+  }
+}
+
+async function openChat(id) {
+  const chat = await j('/api/chats/' + id);
+  currentId = id;
+  localStorage.setItem('chatCurrent', id);
+  if ([...modelSel.options].some((o) => o.value === chat.model)) modelSel.value = chat.model;
+  renderChat(chat);
+  markActive();
+  $('chatList').classList.remove('open');
+}
+
+function markActive() {
+  document.querySelectorAll('.chat-item').forEach((el) => el.classList.toggle('active', el.dataset.id === currentId));
+}
+
+async function loadList() {
+  const list = await j('/api/chats');
+  const box = $('chats');
+  box.textContent = '';
+  for (const c of list) {
+    const row = document.createElement('div');
+    row.className = 'chat-item';
+    row.dataset.id = c.id;
+    const title = document.createElement('span');
+    title.className = 'chat-item-title';
+    title.textContent = c.title;
+    title.title = new Date(c.updatedAt).toLocaleString();
+    title.onclick = () => { if (!busy) openChat(c.id); };
+    const ren = document.createElement('button');
+    ren.className = 'chat-item-btn'; ren.textContent = '✎'; ren.title = 'Rename';
+    ren.onclick = async () => {
+      const t = prompt('Rename chat', c.title);
+      if (t && t.trim()) { await api('PATCH', '/api/chats/' + c.id, { title: t.trim() }); loadList(); if (c.id === currentId) $('chatTitle').textContent = t.trim().slice(0, 80); }
+    };
+    const del = document.createElement('button');
+    del.className = 'chat-item-btn'; del.textContent = '✕'; del.title = 'Delete';
+    del.onclick = async () => {
+      if (busy || !confirm('Delete this chat permanently?')) return;
+      await api('DELETE', '/api/chats/' + c.id);
+      if (c.id === currentId) newChat();
+      loadList();
+    };
+    row.append(title, ren, del);
+    box.appendChild(row);
+  }
+  markActive();
+  return list;
+}
+
+function newChat() {
+  if (busy) return;
+  currentId = '';
+  localStorage.removeItem('chatCurrent');
+  pending = []; renderThumbs();
+  renderChat(null);
+  markActive();
+  $('chatList').classList.remove('open');
+}
+
+// ---- attachments ----
+function renderThumbs() {
+  const box = $('thumbs');
+  box.textContent = '';
+  pending.forEach((p, i) => {
+    const w = document.createElement('div');
+    w.className = 'thumb';
+    const im = document.createElement('img');
+    im.src = p.dataUrl;
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = '✕'; x.title = 'Remove';
+    x.onclick = () => { pending.splice(i, 1); renderThumbs(); };
+    w.append(im, x);
+    box.appendChild(w);
+  });
+}
+
+function addFiles(files) {
+  for (const f of files) {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { bubble('err', 'Unsupported file: ' + f.name + ' (use PNG, JPEG, WebP or GIF)'); continue; }
+    if (f.size > MAX_BYTES) { bubble('err', f.name + ' is larger than 5 MB'); continue; }
+    if (pending.length >= MAX_IMAGES) { bubble('err', 'Max ' + MAX_IMAGES + ' images per message'); break; }
+    const r = new FileReader();
+    r.onload = () => { if (pending.length < MAX_IMAGES) { pending.push({ dataUrl: r.result }); renderThumbs(); } };
+    r.readAsDataURL(f);
+  }
+}
+$('attach').onclick = () => $('file').click();
+$('file').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
+input.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])];
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+const card = document.querySelector('.chat-card');
+card.addEventListener('dragover', (e) => e.preventDefault());
+card.addEventListener('drop', (e) => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+
+// ---- send ----
+async function sendMessage(message, images) {
   busy = true;
   $('send').disabled = true;
-  bubble('user', message);
+  bubble('user', message, images);
   const reply = bubble('bot', '');
+  const replyBox = reply.parentElement;
   try {
-    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId: sessionId || undefined, model: modelSel.value || undefined }) });
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId: currentId || undefined, model: modelSel.value || undefined, images: images.length ? images : undefined }) });
     if (r.status === 401) { location.href = '/login'; return; }
-    if (!r.ok) { reply.className = 'chat-msg err'; reply.textContent = (await r.json().catch(() => ({}))).error || 'Request failed'; return; }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      replyBox.className = 'chat-msg err';
+      reply.textContent = d.error || 'Request failed';
+      if (r.status === 404) { currentId = ''; localStorage.removeItem('chatCurrent'); }
+      return;
+    }
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -125,8 +240,8 @@ async function sendMessage(message) {
         buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         let ev; try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        if (ev.chatId) { currentId = ev.chatId; localStorage.setItem('chatCurrent', currentId); }
         if (ev.text) reply.textContent += (reply.textContent ? '\n\n' : '') + ev.text;
-        if (ev.sessionId) { sessionId = ev.sessionId; sessionStorage.setItem('chatSession', sessionId); }
         if (ev.error) bubble('err', ev.error);
         msgs.scrollTop = msgs.scrollHeight;
       }
@@ -134,24 +249,39 @@ async function sendMessage(message) {
   } catch (e) {
     bubble('err', 'Connection lost');
   } finally {
-    if (!reply.textContent) reply.remove();
+    if (!reply.textContent) replyBox.remove();
     busy = false;
     $('send').disabled = false;
     input.focus();
+    loadList().catch(() => {});
   }
 }
 
 $('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  const m = input.value.trim();
-  if (!m || busy) return;
+  if (busy) return;
+  const text = input.value.trim();
+  if (!text && !pending.length) return;
+  const images = pending.map((p) => p.dataUrl);
+  pending = []; renderThumbs();
   input.value = '';
-  sendMessage(m);
+  sendMessage(text || 'Please look at the attached image(s).', images);
 });
 input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('chatForm').requestSubmit(); } });
-$('newChat').addEventListener('click', () => {
-  if (busy) return;
-  sessionId = '';
-  sessionStorage.removeItem('chatSession');
-  msgs.textContent = '';
-});
+$('newChat').onclick = newChat;
+$('toggleList').onclick = () => $('chatList').classList.toggle('open');
+modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
+
+// ---- start ----
+(async () => {
+  try {
+    const m = await j('/api/chat/models');
+    for (const x of m.models) modelSel.add(new Option(x, x));
+    const saved = localStorage.getItem('chatModel');
+    modelSel.value = m.models.includes(saved) ? saved : m.default;
+    const list = await loadList();
+    const last = localStorage.getItem('chatCurrent');
+    const id = list.some((c) => c.id === last) ? last : '';
+    if (id) await openChat(id);
+  } catch (e) {}
+})();
