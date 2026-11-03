@@ -115,6 +115,18 @@ process.stdin.on('data', (d) => (msg += d)).on('end', () => {
     line({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } });
     line({ type: 'result', session_id: 'S', is_error: false });
   }
+  else if (msg === 'shell' || msg === 'shellwrite' || msg === 'badtoken') {
+    const cfg = JSON.parse(process.argv[process.argv.indexOf('--mcp-config') + 1]).mcpServers.vpsmon;
+    const body = JSON.stringify({ token: msg === 'badtoken' ? 'wrong' : cfg.env.VPSMON_APPROVAL_TOKEN, tool_name: msg === 'shellwrite' ? 'Write' : 'Bash', input: { command: 'tail -n 5 x.log', description: 'last lines' } });
+    const u = new URL(cfg.env.VPSMON_APPROVAL_URL);
+    const rq = require('http').request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST' }, (rs) => {
+      let d = ''; rs.on('data', (c) => (d += c)).on('end', () => {
+        line({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify({ status: rs.statusCode, decision: d ? JSON.parse(d) : null, argv: process.argv.slice(2) }) }] } });
+        line({ type: 'result', session_id: 'S', is_error: false });
+      });
+    });
+    rq.end(body);
+  }
   else if (msg === 'sleep') { require('fs').writeFileSync('pid', String(process.pid)); setTimeout(() => {}, 20000); }
 });
 `, { mode: 0o755 });
@@ -125,13 +137,13 @@ process.env.SCAN_DIR = tmp;
 process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok';
 
 let n = 0;
-function run({ admin = true, superadmin = false, projects = [], body, user, close, timeoutMs } = {}) {
+function run({ admin = true, superadmin = false, projects = [], body, user, close, timeoutMs, onEvent } = {}) {
   if (timeoutMs) process.env.CHAT_TIMEOUT_MS = String(timeoutMs); else delete process.env.CHAT_TIMEOUT_MS;
   const req = new EventEmitter();
-  const out = { status: 0, chunks: [] };
-  const res = Object.assign(new EventEmitter(), { writeHead(s) { out.status = s; }, write(c) { out.chunks.push(String(c)); }, end(c) { if (c) out.chunks.push(String(c)); } });
+  const out = { status: 0, chunks: [], logs: [] };
+  const res = Object.assign(new EventEmitter(), { writeHead(s) { out.status = s; }, write(c) { out.chunks.push(String(c)); if (onEvent && String(c).startsWith('data: ')) onEvent(JSON.parse(String(c).slice(6)), session); }, end(c) { if (c) out.chunks.push(String(c)); } });
   const session = { user: user || 'u' + (++n), admin, superadmin };
-  const p = chat.handleChat({ req, res, session, body, projects, log: () => {} }).then(() => {
+  const p = chat.handleChat({ req, res, session, body, projects, log: (...a) => out.logs.push(a) }).then(() => {
     out.events = out.chunks.join('').split('\n\n').filter((x) => x.startsWith('data: ')).map((x) => JSON.parse(x.slice(6)));
     return out;
   });
@@ -327,3 +339,115 @@ test('system prompt tells Claude how to search gitignored logs', () => {
   assert.ok(prompt.includes('.gitignore'));
   assert.ok(prompt.includes('exact file path'));
 });
+
+// ---- commands with confirmation ----
+const FAKE_BWRAP = path.join(tmp, 'fake-bwrap.js');
+fs.writeFileSync(FAKE_BWRAP, `#!/usr/bin/env node
+const { spawn } = require('child_process');
+const a = process.argv.slice(2);
+const i = a.indexOf('--');
+spawn(a[i + 1], a.slice(i + 2), { stdio: 'inherit' }).on('exit', (c) => process.exit(c == null ? 1 : c));
+`, { mode: 0o755 });
+
+async function withShell(fn, { root = true, shell = '1', bwrap = FAKE_BWRAP } = {}) {
+  const saved = { CHAT_SHELL: process.env.CHAT_SHELL, CHAT_BWRAP: process.env.CHAT_BWRAP, CHAT_USER: process.env.CHAT_USER };
+  if (shell) process.env.CHAT_SHELL = shell; else delete process.env.CHAT_SHELL;
+  process.env.CHAT_BWRAP = bwrap;
+  process.env.CHAT_USER = os.userInfo().username;
+  chat._test.setIsRoot(() => root);
+  try { return await fn(); } finally {
+    chat._test.setIsRoot(() => typeof process.getuid === 'function' && process.getuid() === 0);
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    delete process.env.CHAT_APPROVAL_MS;
+  }
+}
+const answer = (session, id, allow) => { const out = { status: 0 }; chat.handleConfirm({ res: { writeHead(s) { out.status = s; }, end() {} }, session, body: { id, allow } }); return out.status; };
+const shellText = (r) => JSON.parse(r.events.find((e) => e.text).text);
+
+test('shell: approve runs the command, argv has the MCP flags, decision is logged', () => withShell(async () => {
+  const r = await run({ superadmin: true, user: 'sh1', body: { message: 'shell' }, onEvent: (ev, session) => { if (ev.confirm) assert.strictEqual(answer(session, ev.confirm.id, true), 200); } });
+  const c = r.events.find((e) => e.confirm).confirm;
+  assert.strictEqual(c.tool, 'Bash');
+  assert.strictEqual(c.command, 'tail -n 5 x.log');
+  const t = shellText(r);
+  assert.strictEqual(t.decision.behavior, 'allow');
+  assert.ok(t.argv.includes('--permission-prompt-tool') && t.argv.includes('--strict-mcp-config'));
+  assert.strictEqual(t.argv[t.argv.indexOf('--permission-mode') + 1], 'default');
+  assert.ok(!t.argv[t.argv.indexOf('--disallowedTools') + 1].split(',').includes('Bash'));
+  assert.ok(t.argv[t.argv.indexOf('--disallowedTools') + 1].split(',').includes('Write'));
+  assert.deepStrictEqual(r.logs.find((l) => l[1] === 'chat.run').slice(0, 4), ['sh1', 'chat.run', 'tail -n 5 x.log', 'approved']);
+}));
+
+test('shell: deny is passed to Claude and logged', () => withShell(async () => {
+  const r = await run({ superadmin: true, user: 'sh2', body: { message: 'shell' }, onEvent: (ev, session) => { if (ev.confirm) answer(session, ev.confirm.id, false); } });
+  assert.strictEqual(shellText(r).decision.behavior, 'deny');
+  assert.strictEqual(r.logs.find((l) => l[1] === 'chat.run')[3], 'denied');
+}));
+
+test('shell: another user cannot answer; the owner still can', () => withShell(async () => {
+  let intruder = 0;
+  await run({ superadmin: true, user: 'sh3', body: { message: 'shell' }, onEvent: (ev, session) => {
+    if (!ev.confirm) return;
+    intruder = answer({ user: 'someone-else', superadmin: true }, ev.confirm.id, true);
+    assert.strictEqual(answer({ user: 'sh3', admin: true, superadmin: false }, ev.confirm.id, true), 403);
+    answer(session, ev.confirm.id, true);
+  } });
+  assert.strictEqual(intruder, 404);
+}));
+
+test('shell: only Bash can be approved; unknown token gets 403', () => withShell(async () => {
+  const w = await run({ superadmin: true, user: 'sh4', body: { message: 'shellwrite' } });
+  assert.ok(!w.events.some((e) => e.confirm));
+  assert.strictEqual(shellText(w).decision.behavior, 'deny');
+  const b = await run({ superadmin: true, user: 'sh5', body: { message: 'badtoken' } });
+  assert.strictEqual(shellText(b).status, 403);
+}));
+
+test('shell: no answer means deny, and the run timeout does not fire while waiting', () => withShell(async () => {
+  process.env.CHAT_APPROVAL_MS = '700';
+  const r = await run({ superadmin: true, user: 'sh6', body: { message: 'shell' }, timeoutMs: 250 });
+  assert.strictEqual(shellText(r).decision.behavior, 'deny');
+  assert.ok(!r.events.some((e) => e.error), JSON.stringify(r.events));
+}));
+
+test('shell: client disconnect while a confirmation is pending frees everything', () => withShell(async () => {
+  let id = '';
+  await run({ superadmin: true, user: 'sh7', body: { message: 'shell' }, close: 400, onEvent: (ev) => { if (ev.confirm) id = ev.confirm.id; } });
+  assert.ok(id);
+  assert.strictEqual(answer({ user: 'sh7', superadmin: true }, id, true), 404);
+  assert.strictEqual((await run({ user: 'sh7', body: { message: 'ok' } })).status, 200);
+}));
+
+test('shell stays off for admin, without CHAT_SHELL, without bwrap, or when not root', async () => {
+  const argvOf = async (opts) => shellText(await run({ body: { message: 'ok' }, ...opts })).argv;
+  const off = (a) => !a.includes('--mcp-config') && a[a.indexOf('--permission-mode') + 1] === 'dontAsk';
+  await withShell(async () => assert.ok(off(await argvOf({ superadmin: false }))));
+  await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { shell: '' });
+  await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { bwrap: '/no/such/bwrap' });
+  await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { root: false });
+});
+
+test('shellAvailable matches the same rule (used for the header badge)', async () => {
+  await withShell(async () => {
+    assert.strictEqual(chat.shellAvailable({ superadmin: true }), true);
+    assert.strictEqual(chat.shellAvailable({ superadmin: false }), false);
+  });
+  assert.strictEqual(chat.shellAvailable({ superadmin: true }), false);
+});
+
+test('shell: claude is started through bwrap with a read-only root', () => withShell(async () => {
+  const seen = path.join(tmp, 'bwrap-args.json');
+  const spy = path.join(tmp, 'spy-bwrap.js');
+  fs.writeFileSync(spy, `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.argv.slice(2)));
+const { spawn } = require('child_process');
+const a = process.argv.slice(2); const i = a.indexOf('--');
+spawn(a[i + 1], a.slice(i + 2), { stdio: 'inherit' }).on('exit', (c) => process.exit(c == null ? 1 : c));
+`, { mode: 0o755 });
+  process.env.CHAT_BWRAP = spy;
+  await run({ superadmin: true, user: 'sh8', body: { message: 'ok' } });
+  const a = JSON.parse(fs.readFileSync(seen, 'utf8'));
+  assert.deepStrictEqual(a.slice(0, 3), ['--ro-bind', '/', '/']);
+  for (const f of ['--die-with-parent', '--unshare-pid', '--tmpfs']) assert.ok(a.includes(f), f);
+  assert.strictEqual(a[a.indexOf('--') + 1], FAKE);
+}));
