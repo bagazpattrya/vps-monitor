@@ -401,8 +401,8 @@ test('shell: another user cannot answer; the owner still can', () => withShell(a
   let intruder = 0;
   await run({ superadmin: true, user: 'sh3', body: { message: 'shell' }, onEvent: (ev, session) => {
     if (!ev.confirm) return;
-    intruder = answer({ user: 'someone-else', superadmin: true }, ev.confirm.id, true);
-    assert.strictEqual(answer({ user: 'sh3', admin: true, superadmin: false }, ev.confirm.id, true), 403);
+    intruder = answer({ user: 'someone-else', admin: true, superadmin: true }, ev.confirm.id, true);
+    assert.strictEqual(answer({ user: 'sh3', admin: false, superadmin: false }, ev.confirm.id, true), 403); // a viewer cannot answer
     answer(session, ev.confirm.id, true);
   } });
   assert.strictEqual(intruder, 404);
@@ -427,14 +427,13 @@ test('shell: client disconnect while a confirmation is pending frees everything'
   let id = '';
   await run({ superadmin: true, user: 'sh7', body: { message: 'shell' }, close: 400, onEvent: (ev) => { if (ev.confirm) id = ev.confirm.id; } });
   assert.ok(id);
-  assert.strictEqual(answer({ user: 'sh7', superadmin: true }, id, true), 404);
+  assert.strictEqual(answer({ user: 'sh7', admin: true, superadmin: true }, id, true), 404);
   assert.strictEqual((await run({ user: 'sh7', body: { message: 'ok' } })).status, 200);
 }));
 
-test('shell stays off for admin, without CHAT_SHELL, without bwrap, or when not root', async () => {
+test('shell stays off without CHAT_SHELL, without bwrap, or when not root', async () => {
   const argvOf = async (opts) => shellText(await run({ body: { message: 'ok' }, ...opts })).argv;
   const off = (a) => !a.includes('--mcp-config') && a[a.indexOf('--permission-mode') + 1] === 'dontAsk';
-  await withShell(async () => assert.ok(off(await argvOf({ superadmin: false }))));
   await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { shell: '' });
   await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { bwrap: '/no/such/bwrap' });
   await withShell(async () => assert.ok(off(await argvOf({ superadmin: true }))), { root: false });
@@ -442,10 +441,12 @@ test('shell stays off for admin, without CHAT_SHELL, without bwrap, or when not 
 
 test('shellAvailable matches the same rule (used for the header badge)', async () => {
   await withShell(async () => {
-    assert.strictEqual(chat.shellAvailable({ superadmin: true }), true);
-    assert.strictEqual(chat.shellAvailable({ superadmin: false }), false);
+    assert.strictEqual(chat.shellAvailable({ admin: true, superadmin: true }), true);
+    assert.strictEqual(chat.shellAvailable({ admin: true, superadmin: false }), true); // admins too
+    assert.strictEqual(chat.shellAvailable({ admin: false }), false); // viewers never
+    assert.strictEqual(chat.shellAvailable(null), false);
   });
-  assert.strictEqual(chat.shellAvailable({ superadmin: true }), false);
+  assert.strictEqual(chat.shellAvailable({ admin: true, superadmin: true }), false);
 });
 
 test('shell: claude is started through bwrap with a read-only root', () => withShell(async () => {
@@ -498,7 +499,7 @@ async function withTinker(fn, { root = true, tinker = '1', shell = '' } = {}) {
     delete process.env.CHAT_TINKER_MS; delete process.env.CHAT_APPROVAL_MS;
   }
 }
-const ask = (user, payload, reply, extra = {}) => run({ superadmin: true, user, body: { message: 'tinker:' + JSON.stringify(payload) }, onEvent: (ev, session) => { if (ev.confirm && reply) reply(ev, session); }, ...extra });
+const ask = (user, payload, reply, extra = {}) => run({ superadmin: true, projects: ['laravelA'], user, body: { message: 'tinker:' + JSON.stringify(payload) }, onEvent: (ev, session) => { if (ev.confirm && reply) reply(ev, session); }, ...extra });
 const result = (r) => JSON.parse(r.events.find((e) => e.text).text);
 const lastRun = () => JSON.parse(fs.readFileSync(LAST, 'utf8'));
 
@@ -589,7 +590,7 @@ test('tinker: the chat run timeout does not fire while tinker is running', () =>
   assert.ok(!r.events.some((e) => e.error), JSON.stringify(r.events));
 }));
 
-test('tinker: only superadmin, with CHAT_TINKER=1, as root; flags and prompt reflect it', async () => {
+test('tinker: only admins, with CHAT_TINKER=1, as root; flags and prompt reflect it', async () => {
   const argvOf = async (opts) => shellText(await run({ body: { message: 'ok' }, ...opts })).argv;
   const allowed = (a) => a[a.indexOf('--allowedTools') + 1];
   const prompt = (a) => a[a.indexOf('--append-system-prompt') + 1];
@@ -600,9 +601,11 @@ test('tinker: only superadmin, with CHAT_TINKER=1, as root; flags and prompt ref
     assert.ok(!a.includes('--permission-prompt-tool'));
     assert.strictEqual(a[a.indexOf('--permission-mode') + 1], 'dontAsk');
     assert.ok(/tinker/i.test(prompt(a)));
-    assert.strictEqual(chat.tinkerAvailable({ superadmin: true }), true);
+    assert.strictEqual(chat.tinkerAvailable({ admin: true, superadmin: true }), true);
+    assert.strictEqual(chat.tinkerAvailable({ admin: true, superadmin: false }), true);
+    assert.strictEqual(chat.tinkerAvailable({ admin: false }), false);
   });
-  for (const [opts, session] of [[{}, { superadmin: false }], [{ tinker: '' }, { superadmin: true }], [{ root: false }, { superadmin: true }]]) {
+  for (const [opts, session] of [[{ tinker: '' }, { admin: true, superadmin: true }], [{ root: false }, { admin: true, superadmin: true }]]) {
     await withTinker(async () => {
       const a = await argvOf({ superadmin: session.superadmin });
       assert.ok(!a.includes('--mcp-config') && !allowed(a).includes('tinker'));
@@ -617,3 +620,55 @@ test('tinker and shell together: both tools, approval prompt tool still present'
   assert.ok(a.includes('--permission-prompt-tool'));
   assert.strictEqual(a[a.indexOf('--permission-mode') + 1], 'default');
 }, { shell: '1' }));
+
+// ---- admins (not only superadmin) get shell and tinker, but stay inside what they may see ----
+fs.mkdirSync(path.join(tmp, 'laravelB'), { recursive: true });
+fs.writeFileSync(path.join(tmp, 'laravelB', 'artisan'), '<?php');
+
+test('admin (not superadmin) can run approved commands', () => withShell(async () => {
+  const r = await run({ superadmin: false, user: 'ad1', body: { message: 'shell' }, onEvent: (ev, s) => { if (ev.confirm) assert.strictEqual(answer(s, ev.confirm.id, true), 200); } });
+  assert.strictEqual(shellText(r).decision.behavior, 'allow');
+  assert.ok(shellText(r).argv.includes('--permission-prompt-tool'));
+}));
+
+test('admin tinker is limited to projects the admin may see', () => withTinker(async () => {
+  const hidden = await run({ superadmin: false, projects: ['laravelA'], user: 'ad2', body: { message: 'tinker:' + JSON.stringify({ project: 'laravelB', code: 'echo 1;' }) } });
+  assert.ok(!hidden.events.some((e) => e.confirm));
+  assert.strictEqual(result(hidden).body.ok, false);
+  assert.ok(!fs.existsSync(LAST));
+  const ok = await run({ superadmin: false, projects: ['laravelA'], user: 'ad2', body: { message: 'tinker:' + JSON.stringify({ project: 'laravelA', code: 'echo 1;' }) }, onEvent: (ev, s) => { if (ev.confirm) answer(s, ev.confirm.id, true, 'keep'); } });
+  assert.strictEqual(result(ok).body.ok, true);
+}));
+
+test('shell for a non-superadmin hides the projects and extra folders they may not see', () => withShell(async () => {
+  const seen = path.join(tmp, 'mask-args.json');
+  const spy = path.join(tmp, 'mask-bwrap.js');
+  fs.writeFileSync(spy, `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.argv.slice(2)));
+const { spawn } = require('child_process');
+const a = process.argv.slice(2); const i = a.indexOf('--');
+spawn(a[i + 1], a.slice(i + 2), { stdio: 'inherit' }).on('exit', (c) => process.exit(c == null ? 1 : c));
+`, { mode: 0o755 });
+  process.env.CHAT_BWRAP = spy;
+  const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'maskextra-'));
+  process.env.CHAT_EXTRA_DIRS = extra;
+  const masked = () => { const a = JSON.parse(fs.readFileSync(seen, 'utf8')); return a.flatMap((x, i) => (x === '--tmpfs' ? [a[i + 1]] : [])); };
+  try {
+    await run({ superadmin: false, projects: ['laravelA'], user: 'ad3', body: { message: 'ok' } });
+    const m = masked();
+    assert.ok(m.includes(path.join(tmp, 'laravelB')) && m.includes(path.join(tmp, 'plainproj')), m.join(','));
+    assert.ok(!m.includes(path.join(tmp, 'laravelA')));
+    assert.ok(m.includes(extra));
+    const a = JSON.parse(fs.readFileSync(seen, 'utf8'));
+    assert.ok(a.indexOf(path.join(tmp, 'laravelB')) < a.indexOf('--ro-bind', 4), 'masks come before the later binds');
+    await run({ superadmin: true, projects: ['laravelA', 'laravelB', 'plainproj'], user: 'ad4', body: { message: 'ok' } });
+    const m2 = masked();
+    assert.ok(!m2.includes(path.join(tmp, 'laravelB')) && !m2.includes(extra));
+  } finally { delete process.env.CHAT_EXTRA_DIRS; }
+}));
+
+test('viewer cannot answer a confirmation', () => {
+  const out = { status: 0 };
+  chat.handleConfirm({ res: { writeHead(s) { out.status = s; }, end() {} }, session: { user: 'v', admin: false }, body: { id: 'x', allow: true } });
+  assert.strictEqual(out.status, 403);
+});

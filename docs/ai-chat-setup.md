@@ -39,20 +39,21 @@ If a check in step 5 or 6 fails, do not enable the chat for users until it is fi
 - What Claude can really read is decided by the OS permissions of `claude-ro`. To let it read system logs such as `/var/log/nginx`, add it to the right group, for example `sudo usermod -aG adm claude-ro`, then restart the monitor. Only add what you are willing to show in the chat.
 - `Grep` and `Glob` skip files ignored by `.gitignore`, which includes most Laravel `storage/logs/*.log`. Claude is told to find the log with `Glob` and then pass the exact file path to `Grep` (or use `Read`).
 
-## Commands with approval (optional, superadmin only)
+## Commands with approval (optional, admins and superadmins)
 
 1. Install bubblewrap if it is missing: `sudo apt install bubblewrap`.
 2. Set `CHAT_SHELL=1` in the monitor environment (and `CHAT_NODE=/usr/bin/node` if the node that runs the monitor is not executable by `claude-ro`), then `pm2 restart vps-monitor --update-env`.
 3. The chat header then says "read-only · commands need approval". When Claude wants to run a command that can change something, a card shows the exact command with **Approve** and **Deny**. No answer within 5 minutes means deny. Clearly read-only commands (such as `ls`, `cat`, `echo`) are run by Claude Code without asking. Every decision is written to the Activity Log as `chat.run`.
 4. The whole Claude process runs inside `bwrap` with a read-only filesystem (only a private `/tmp` and the home of `claude-ro` are writable), so an approved command cannot change your files. The network is not blocked: read the command before approving, especially anything with `curl` or `wget`.
-5. It switches itself off (the chat stays read-only) if `CHAT_SHELL` is not `1`, the user is not a superadmin, `bwrap` is missing, or the monitor does not run as root.
+5. It switches itself off (the chat stays read-only) if `CHAT_SHELL` is not `1`, the user is not an admin or superadmin, `bwrap` is missing, or the monitor does not run as root. Viewers never get it.
+6. For an admin who is not a superadmin, the folders in `SCAN_DIR` they may not see (`hiddenKeywords`) and the `CHAT_EXTRA_DIRS` folders are covered by empty mounts inside `bwrap`, so an approved command sees them as empty. Anything else that `claude-ro` can read (for example other folders outside `SCAN_DIR`) is still readable by an approved command, so only give this to admins you trust.
 
-## Tinker with approval (optional, superadmin only)
+## Tinker with approval (optional, admins and superadmins)
 
 Claude cannot run `php artisan tinker` itself (it has no database credentials and its disk is read-only). Instead it gets a `tinker` tool, and the **monitor** runs it for it, after you approve the exact PHP code.
 
 1. In the monitor `.env`: `CHAT_TINKER=1` (optional: `CHAT_TINKER_USER=www-data`, the user the web app runs as, and `CHAT_PHP=/usr/bin/php`). The monitor must run as root. Then `pm2 restart vps-monitor`.
 2. The chat header then says "... tinker need approval". When Claude wants to run PHP, a card shows the project and the code with three buttons: **Run (roll back DB changes)**, **Run and keep changes**, **Deny**. No answer within 5 minutes means deny.
 3. Rolling back wraps the code in a database transaction that is always rolled back. It only undoes normal INSERT/UPDATE/DELETE on the default connection. It does not undo table changes, cache/Redis, files, mail, queued jobs or API calls, so read the code before approving, especially "Run and keep changes".
-4. The code runs with `php artisan tinker --execute=...` inside the project folder as `CHAT_TINKER_USER`, with no shell, a 60 s limit, and the output cut at 20 KB. Only folders in `SCAN_DIR` that contain an `artisan` file are accepted. Each decision is written to the Activity Log as `chat.tinker`.
+4. The code runs with `php artisan tinker --execute=...` inside the project folder as `CHAT_TINKER_USER`, with no shell, a 60 s limit, and the output cut at 20 KB. Only folders in `SCAN_DIR` that contain an `artisan` file are accepted, and an admin who is not a superadmin can only use projects they may see. Each decision is written to the Activity Log as `chat.tinker`.
 5. Text in logs or data can try to trick Claude into proposing harmful code. The card is the only safeguard, so always read it.

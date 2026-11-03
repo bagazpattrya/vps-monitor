@@ -160,14 +160,23 @@ const bwrapPath = () => {
   try { fs.accessSync(p, fs.constants.X_OK); return p; } catch { return ''; }
 };
 
-// Superadmin only, opt-in, and only when Claude runs as the unprivileged user inside bwrap.
+// Admins (and superadmins), opt-in, and only when Claude runs as the unprivileged user inside bwrap.
 function shellAvailable(session) {
-  return process.env.CHAT_SHELL === '1' && !!(session && session.superadmin) && isRoot() && !!bwrapPath();
+  return process.env.CHAT_SHELL === '1' && !!(session && session.admin) && isRoot() && !!bwrapPath();
 }
 
-// Superadmin only and opt-in. The monitor itself runs tinker as CHAT_TINKER_USER, which needs root.
+// Admins (and superadmins) and opt-in. The monitor itself runs tinker as CHAT_TINKER_USER, which needs root.
 function tinkerAvailable(session) {
-  return process.env.CHAT_TINKER === '1' && !!(session && session.superadmin) && isRoot();
+  return process.env.CHAT_TINKER === '1' && !!(session && session.admin) && isRoot();
+}
+
+// Non-superadmins must not see what hiddenKeywords hides: inside bwrap, empty tmpfs mounts cover the project
+// folders they may not see and the extra folders (CHAT_EXTRA_DIRS). Anything else claude-ro can read stays readable.
+function maskDirs({ root, projects, extra }) {
+  const visible = new Set(projects);
+  let hidden = [];
+  try { hidden = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && !visible.has(e.name)).map((e) => path.join(root, e.name)); } catch {}
+  return [...hidden, ...extra.filter((d) => path.isAbsolute(d) && isDir(d))];
 }
 
 const APPROVAL_WAIT_MS = () => parseInt(process.env.CHAT_APPROVAL_MS, 10) || 300_000;
@@ -258,6 +267,7 @@ async function tinker(run, input) {
   const project = input && input.project;
   const code = input && input.code;
   if (typeof project !== 'string' || !NAME_RE.test(project) || project.startsWith('.')) return fail('Invalid project name');
+  if (run.projects && !run.projects.has(project)) return fail('Project not available');
   const dir = path.join(process.env.SCAN_DIR || '/var/www', project);
   if (!isDir(dir) || !fs.existsSync(path.join(dir, 'artisan'))) return fail('Project not found, or it is not a Laravel project');
   if (typeof code !== 'string' || !code.trim() || code.length > TINKER_MAX_CODE) return fail('Code must be 1-' + TINKER_MAX_CODE + ' characters');
@@ -276,7 +286,7 @@ async function tinker(run, input) {
 
 // POST /api/chat/confirm { id, allow, mode? } from the browser (mode: 'rollback' | 'keep', tinker only). Only the owner of the running chat can answer.
 function handleConfirm({ res, session, body }) {
-  if (!session || !session.superadmin) return reject(res, 403, 'Superadmin required');
+  if (!session || !session.admin) return reject(res, 403, 'Admin required');
   const id = body && body.id;
   if (typeof id === 'string') {
     for (const run of runs.values()) {
@@ -336,7 +346,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     const claudeBin = process.env.CLAUDE_BIN || 'claude';
     // Shell mode: the whole claude process sees a read-only filesystem (private /tmp, writable home only).
     const [cmd, cmdArgs] = shell
-      ? [bwrapPath(), ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--ro-bind', cwd, cwd, '--bind', env.HOME, env.HOME, '--unshare-pid', '--die-with-parent', '--', claudeBin, ...args]]
+      ? [bwrapPath(), ['--ro-bind', '/', '/', ...(session.superadmin ? [] : maskDirs({ root, projects, extra: extraDirs() }).flatMap((d) => ['--tmpfs', d])), '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--ro-bind', cwd, cwd, '--bind', env.HOME, env.HOME, '--unshare-pid', '--die-with-parent', '--', claudeBin, ...args]]
       : [claudeBin, args];
     child = spawn(cmd, cmdArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], ...chatIds(user) });
   } catch (e) {
@@ -356,7 +366,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     let newSession = '';
     let resultError = '';
     const emit = (o) => { if (!settled) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
-    const run = mcp ? { user: session.user, emit, pending: new Map(), busy: 0, log: (action, target, detail) => log(session.user, action, target, detail) } : null;
+    const run = mcp ? { user: session.user, projects: new Set(projects), emit, pending: new Map(), busy: 0, log: (action, target, detail) => log(session.user, action, target, detail) } : null;
     if (run) runs.set(token, run);
     // Always called when the chat ends: stops timers, denies anything still waiting, forgets the token.
     const cleanup = () => {
