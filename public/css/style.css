@@ -1045,3 +1045,10 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
   .composer-hint { display: none; }
   .composer-bar { justify-content: space-between; }
 }
+
+/* AI Chat scrollbars: thin and in the dark theme instead of the bright default */
+.chat-msgs, .chat-list, .md-codeblock pre, .md-table, .composer textarea {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-light) transparent;
+}
+.chat-msgs { scrollbar-gutter: stable; }
