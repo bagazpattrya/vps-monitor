@@ -950,3 +950,12 @@ tr.proc-row-spike:hover { background: rgba(239, 68, 68, 0.14) !important; }
 @keyframes xfer-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.35); } 50% { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); } }
 
 .spin { display:inline-block; width:14px; height:14px; margin-right:8px; vertical-align:-2px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:nav-spin .7s linear infinite; }
+
+/* AI Chat */
+.chat-msgs { height: calc(100vh - 290px); min-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 12px; }
+.chat-msg { max-width: 85%; padding: 9px 13px; border-radius: var(--radius); white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); }
+.chat-msg.user { align-self: flex-end; background: var(--bg-elev); }
+.chat-msg.bot { align-self: flex-start; background: var(--bg-card); }
+.chat-msg.err { align-self: flex-start; color: var(--bad); border-color: var(--bad); }
+.chat-form { display: flex; gap: 8px; align-items: flex-end; }
+.chat-form textarea { flex: 1; resize: vertical; font-family: inherit; }
