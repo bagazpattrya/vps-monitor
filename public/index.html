@@ -357,39 +357,11 @@
 
   <!-- VIEW: ERROR LOGS -->
   <div class="view-pane" id="view-errors">
-    <div class="card c3">
-      <div>
-        <div class="card-head"><span>Critical</span><span class="pill down" id="errorCriticalPill">—</span></div>
-        <div class="metric-row"><div class="big" id="errorCritical">0</div><div class="sub-val" id="errorCriticalSub">last 24h</div></div>
-      </div>
-      <div class="card-foot"><span>Emergency / fatal errors</span><strong id="errorCriticalFoot" style="color:var(--bad)">—</strong></div>
-    </div>
-    <div class="card c3">
-      <div>
-        <div class="card-head"><span>Errors</span><span class="pill warn" id="errorErrorsPill">—</span></div>
-        <div class="metric-row"><div class="big" id="errorErrors">0</div><div class="sub-val" id="errorErrorsSub">last 24h</div></div>
-      </div>
-      <div class="card-foot"><span>Error level entries</span><strong id="errorErrorsFoot" style="color:var(--warn)">—</strong></div>
-    </div>
-    <div class="card c3">
-      <div>
-        <div class="card-head"><span>Warnings</span><span class="pill ok" id="errorWarningsPill">—</span></div>
-        <div class="metric-row"><div class="big" id="errorWarnings">0</div><div class="sub-val" id="errorWarningsSub">last 24h</div></div>
-      </div>
-      <div class="card-foot"><span>Warning level entries</span><strong id="errorWarningsFoot">—</strong></div>
-    </div>
-    <div class="card c3">
-      <div>
-        <div class="card-head"><span>Sources</span><span class="badge accent" id="errorSourcesPill">—</span></div>
-        <div class="metric-row"><div class="big" id="errorSources">0</div><div class="sub-val" id="errorSourcesSub">logs with errors</div></div>
-      </div>
-      <div class="card-foot"><span>Scanned log files</span><strong id="errorScanned">—</strong></div>
-    </div>
-
     <div class="card c12" id="errorLogs">
       <div class="sec-head">
         <h3 class="sec-title">
-          <span>Project &amp; System Error Logs</span>
+          <button class="btn-sm" id="errorBack" hidden>← Back</button>
+          <span id="errorTitle">Error Logs</span>
           <span class="badge" id="errorBadge">—</span>
         </h3>
         <div class="proc-controls">
@@ -403,7 +375,7 @@
           </select>
           <input type="datetime-local" id="errorFrom" class="input" title="From" hidden />
           <input type="datetime-local" id="errorTo" class="input" title="To" hidden />
-          <select id="errorProject" class="input" title="Filter project">
+          <select id="errorProject" class="input" title="Filter project" hidden>
             <option value="">All projects</option>
           </select>
           <button class="btn-sm" id="errorRefresh" title="Re-scan logs now">↻ Refresh</button>
@@ -415,9 +387,6 @@
         <button class="tab" data-level="error">Errors</button>
         <button class="tab" data-level="warning">Warnings</button>
       </div>
-      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
-        Reads the tail of Laravel, project, nginx, PHP-FPM, MySQL, and supervisor logs. Paths are redacted.
-      </div>
       <div class="err-actions" id="errorSelectionBar" hidden>
         <span class="err-actions-count"><strong id="errorSelectedCount">0</strong> dipilih</span>
         <button class="btn-sm danger" id="errorDeleteSelected">Hapus terpilih</button>
@@ -426,12 +395,22 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead>
+          <thead id="errorHeadProjects">
+            <tr>
+              <th>Project</th>
+              <th style="width:90px">Critical</th>
+              <th style="width:90px">Errors</th>
+              <th style="width:90px">Warnings</th>
+              <th style="width:90px">Total</th>
+              <th style="width:170px">Last seen</th>
+            </tr>
+          </thead>
+          <thead id="errorHeadGroups" hidden>
             <tr>
               <th style="width:34px"><input type="checkbox" id="errorSelectAll" aria-label="Pilih semua baris error yang tampil" /></th>
               <th style="width:90px">Level</th>
-              <th style="width:150px">Time</th>
-              <th style="width:190px">Project / Source</th>
+              <th style="width:70px">Count</th>
+              <th style="width:170px">Last seen / Source</th>
               <th>Message</th>
               <th style="width:120px;text-align:right">Aksi</th>
             </tr>

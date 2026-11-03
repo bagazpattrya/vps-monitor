@@ -76,7 +76,7 @@ j('/api/me').then(m => {
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites', 'errors'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
-  if (m.admin && currentView() === 'errors') errors();
+  if (m.admin && currentView() === 'errors') errors(false, true);
   if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
@@ -941,32 +941,6 @@ async function mysqlQueries() {
 }
 
 // ---- Error logs ----
-function renderErrorKpis() {
-  if (!errorData) return;
-  const s = errorData.summary || {};
-  const h = Number(errorData.windowHours);
-  const windowLabel = (errorData.from || errorData.to) ? 'custom range' : h > 0 ? `last ${h}h` : 'all available';
-  $('errorCritical').textContent = s.critical || 0;
-  $('errorErrors').textContent = s.error || 0;
-  $('errorWarnings').textContent = s.warning || 0;
-  $('errorSources').textContent = s.activeSources || 0;
-  $('errorScanned').textContent = `${errorData.scannedSources || 0} files`;
-  $('errorCriticalSub').textContent = windowLabel;
-  $('errorErrorsSub').textContent = windowLabel;
-  $('errorWarningsSub').textContent = windowLabel;
-  $('errorSourcesSub').textContent = 'logs with errors';
-  $('errorCriticalFoot').textContent = `${s.critical || 0} critical`;
-  $('errorErrorsFoot').textContent = `${s.error || 0} errors`;
-  $('errorWarningsFoot').textContent = `${s.warning || 0} warnings`;
-  $('errorCriticalPill').className = 'pill ' + ((s.critical || 0) > 0 ? 'down' : 'ok');
-  $('errorCriticalPill').textContent = (s.critical || 0) > 0 ? 'ATTENTION' : 'CLEAR';
-  $('errorErrorsPill').className = 'pill ' + ((s.error || 0) > 0 ? 'warn' : 'ok');
-  $('errorErrorsPill').textContent = (s.error || 0) > 0 ? 'ACTIVE' : 'CLEAR';
-  $('errorWarningsPill').className = 'pill ok';
-  $('errorWarningsPill').textContent = 'INFO';
-  $('errorSourcesPill').textContent = `${errorData.scannedSources || 0} scanned`;
-}
-
 function errorProjectCounts() {
   const counts = new Map();
   for (const s of (errorData && errorData.sources) || []) {
@@ -997,10 +971,19 @@ function syncErrorSelection() {
   bar.hidden = errorSelected.size === 0;
   const all = $('errorSelectAll');
   if (!all) return;
-  const boxes = [...$('errorList').querySelectorAll('input[data-error-id]')];
+  const boxes = [...$('errorList').querySelectorAll('input[data-error-ids]')];
   const checked = boxes.filter(b => b.checked).length;
   all.checked = boxes.length > 0 && checked === boxes.length;
   all.indeterminate = checked > 0 && checked < boxes.length;
+}
+
+function errorGroupKey(e) {
+  const norm = String(e.message || '')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '#')
+    .replace(/0x[0-9a-f]+/gi, '#')
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ').trim().slice(0, 200);
+  return e.level + '|' + norm;
 }
 
 function renderErrors() {
@@ -1015,29 +998,74 @@ function renderErrors() {
     if (q && ![e.message, e.project, e.source, e.level].some(v => String(v || '').toLowerCase().includes(q))) return false;
     return true;
   });
-  errorViewEntries = entries;
-  $('errorBadge').textContent = `${entries.length} / ${(errorData.entries || []).length}`;
+  $('errorBack').hidden = !project;
+  $('errorTitle').textContent = project || 'Error Logs';
+  $('errorHeadProjects').hidden = !!project;
+  $('errorHeadGroups').hidden = !project;
+  const list = $('errorList');
+  const empty = '<tr><td colspan="6" style="color:var(--mut)">No errors match the current filter.</td></tr>';
 
-  if (!entries.length) {
-    $('errorList').innerHTML = '<tr><td colspan="6" style="color:var(--mut)">No errors match the current filter.</td></tr>';
+  if (!project) {
+    // Overview: satu baris per project.
+    const byProject = new Map();
+    for (const e of entries) {
+      let p = byProject.get(e.project);
+      if (!p) byProject.set(e.project, p = { name: e.project, critical: 0, error: 0, warning: 0, total: 0, last: 0 });
+      p.total++;
+      if (e.critical) p.critical++;
+      if (e.level === 'ERROR') p.error++;
+      else if (e.level === 'WARNING') p.warning++;
+      if (e.t > p.last) p.last = e.t;
+    }
+    const rows = [...byProject.values()].sort((a, b) => (b.critical - a.critical) || (b.total - a.total) || a.name.localeCompare(b.name));
+    errorViewEntries = [];
+    $('errorBadge').textContent = `${rows.length} projects · ${entries.length} entries`;
+    list.innerHTML = rows.length ? rows.map(p => `<tr class="${p.critical ? 'err-row-crit' : ''}" data-error-project="${escHtml(p.name)}" style="cursor:pointer">
+      <td><span class="err-project-pill">${escHtml(p.name)}</span></td>
+      <td>${p.critical ? `<span class="pill down">${p.critical}</span>` : '<span style="color:var(--mut)">0</span>'}</td>
+      <td>${p.error}</td>
+      <td>${p.warning}</td>
+      <td><strong>${p.total}</strong></td>
+      <td style="color:var(--mut);white-space:nowrap">${p.last ? escHtml(new Date(p.last).toLocaleString([])) : '—'}</td>
+    </tr>`).join('') : empty;
     syncErrorSelection();
     return;
   }
-  const shown = entries.slice(0, errorShowLimit);
-  const more = entries.length > shown.length
-    ? `<tr><td colspan="6" style="text-align:center"><button class="btn-sm" id="errorShowMore">Tampilkan lebih banyak (${shown.length} / ${entries.length})</button></td></tr>` : '';
-  $('errorList').innerHTML = shown.map((e, i) => {
+
+  // Detail project: error yang sama (angka/uuid diabaikan) digabung + dihitung.
+  const map = new Map();
+  for (const e of entries) {
+    const k = errorGroupKey(e);
+    let g = map.get(k);
+    if (!g) map.set(k, g = { latest: e, count: 0, first: e.t, last: e.t, ids: [], sources: new Set() });
+    g.count++;
+    g.ids.push(e.id);
+    g.sources.add(e.source);
+    if (e.t >= g.last) { g.last = e.t; g.latest = e; }
+    if (e.t < g.first) g.first = e.t;
+  }
+  const groups = [...map.values()].sort((a, b) => (b.latest.critical - a.latest.critical) || (b.count - a.count) || (b.last - a.last));
+  errorViewEntries = groups;
+  $('errorBadge').textContent = `${groups.length} groups · ${entries.length} entries`;
+  if (!groups.length) { list.innerHTML = empty; syncErrorSelection(); return; }
+
+  const shown = groups.slice(0, errorShowLimit);
+  const more = groups.length > shown.length
+    ? `<tr><td colspan="6" style="text-align:center"><button class="btn-sm" id="errorShowMore">Tampilkan lebih banyak (${shown.length} / ${groups.length})</button></td></tr>` : '';
+  list.innerHTML = shown.map((g, i) => {
+    const e = g.latest;
     const lvl = e.level === 'WARNING' ? 'warn' : e.critical ? 'down' : 'warn';
-    const when = e.t ? new Date(e.t).toLocaleString([]) : '—';
+    const ids = g.ids.join(',');
+    const checked = g.ids.every(id => errorSelected.has(id));
     return `<tr class="${e.critical ? 'err-row-crit' : ''}">
-      <td><input type="checkbox" data-error-id="${escHtml(e.id)}" aria-label="Pilih error ${escHtml(e.project)}" ${errorSelected.has(e.id) ? 'checked' : ''} /></td>
+      <td><input type="checkbox" data-error-ids="${ids}" aria-label="Pilih grup error" ${checked ? 'checked' : ''} /></td>
       <td><span class="pill ${lvl}">${escHtml(e.level)}</span></td>
-      <td style="color:var(--mut);white-space:nowrap">${escHtml(when)}</td>
-      <td><span class="err-project-pill">${escHtml(e.project)}</span><div style="font-size:10px;color:var(--mut);margin-top:3px;font-family:var(--font-mono)">${escHtml(e.source)}</div></td>
+      <td><strong>×${g.count}</strong></td>
+      <td style="color:var(--mut);white-space:nowrap">${escHtml(new Date(g.last).toLocaleString([]))}<div style="font-size:10px;font-family:var(--font-mono)">${escHtml([...g.sources].slice(0, 2).join(', '))}</div></td>
       <td class="err-msg-cell">${escHtml(e.message || '(empty)')}</td>
       <td style="text-align:right"><span class="err-row-actions">
         <button class="btn-sm" data-error-index="${i}">Detail</button>
-        <button class="btn-sm danger" data-error-delete="${escHtml(e.id)}" title="Hapus baris log ini" aria-label="Hapus baris log ini">
+        <button class="btn-sm danger" data-error-delete="${ids}" title="Hapus semua baris log di grup ini" aria-label="Hapus grup log ini">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
         </button>
       </span></td>
@@ -1067,8 +1095,9 @@ async function deleteErrorRows(ids) {
   }
 }
 
-async function errors(force = false) {
+async function errors(force = false, quiet = false) {
   if (!isAdmin) return;
+  if (!quiet && $('errorList')) $('errorList').innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:24px"><span class="spin"></span> Loading logs…</td></tr>';
   try {
     const hours = $('errorWindow') ? ($('errorWindow').value || '24') : '24';
     let qs = `hours=${encodeURIComponent(hours === 'custom' ? 0 : hours)}`;
@@ -1082,7 +1111,6 @@ async function errors(force = false) {
     const counts = errorProjectCounts();
     errorSorted = (d.entries || []).slice().sort((a, b) => ((counts.get(b.project) || 0) - (counts.get(a.project) || 0)) || (b.t - a.t));
     errorSelected.clear();
-    renderErrorKpis();
     renderErrorProjects();
     renderErrors();
   } catch (e) {
@@ -1091,9 +1119,11 @@ async function errors(force = false) {
 }
 
 function showErrorDetail(index) {
-  const e = errorViewEntries[index];
-  if (!e) return;
+  const g = errorViewEntries[index];
+  if (!g) return;
+  const e = g.latest;
   const lines = [
+    `Occurrences: ${g.count} (first ${new Date(g.first).toLocaleString([])}, last ${new Date(g.last).toLocaleString([])})`,
     `Project: ${e.project}`,
     `Source: ${e.source}`,
     `Level: ${e.level}${e.critical ? ' (critical)' : ''}`,
@@ -1360,6 +1390,7 @@ let errorSearchTimer;
 const rerenderErrors = () => { errorShowLimit = 100; renderErrors(); };
 if ($('errorSearch')) $('errorSearch').addEventListener('input', () => { clearTimeout(errorSearchTimer); errorSearchTimer = setTimeout(rerenderErrors, 200); });
 if ($('errorProject')) $('errorProject').addEventListener('change', rerenderErrors);
+if ($('errorBack')) $('errorBack').addEventListener('click', () => { $('errorProject').value = ''; rerenderErrors(); });
 if ($('errorWindow')) $('errorWindow').addEventListener('change', () => {
   const custom = $('errorWindow').value === 'custom';
   $('errorFrom').hidden = $('errorTo').hidden = !custom;
@@ -1381,25 +1412,25 @@ if ($('errorList')) {
   $('errorList').addEventListener('click', (e) => {
     if (e.target.closest('#errorShowMore')) { errorShowLimit += 200; renderErrors(); return; }
     const del = e.target.closest('[data-error-delete]');
-    if (del) { deleteErrorRows([del.dataset.errorDelete]); return; }
+    if (del) { deleteErrorRows(del.dataset.errorDelete.split(',')); return; }
+    const row = e.target.closest('[data-error-project]');
+    if (row) { $('errorProject').value = row.dataset.errorProject; rerenderErrors(); return; }
     const btn = e.target.closest('[data-error-index]');
     if (btn) showErrorDetail(parseInt(btn.dataset.errorIndex, 10));
   });
   $('errorList').addEventListener('change', (e) => {
-    const box = e.target.closest('input[data-error-id]');
+    const box = e.target.closest('input[data-error-ids]');
     if (!box) return;
-    if (box.checked) errorSelected.add(box.dataset.errorId);
-    else errorSelected.delete(box.dataset.errorId);
+    for (const id of box.dataset.errorIds.split(',')) box.checked ? errorSelected.add(id) : errorSelected.delete(id);
     syncErrorSelection();
   });
 }
 if ($('errorSelectAll')) {
   $('errorSelectAll').addEventListener('change', (e) => {
     const check = e.target.checked;
-    $('errorList').querySelectorAll('input[data-error-id]').forEach(box => {
+    $('errorList').querySelectorAll('input[data-error-ids]').forEach(box => {
       box.checked = check;
-      if (check) errorSelected.add(box.dataset.errorId);
-      else errorSelected.delete(box.dataset.errorId);
+      for (const id of box.dataset.errorIds.split(',')) check ? errorSelected.add(id) : errorSelected.delete(id);
     });
     syncErrorSelection();
   });

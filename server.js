@@ -928,6 +928,7 @@ const LOG_MAX_ENTRIES = 2000;
 const LOG_MAX_ENTRIES_PER_SOURCE = 400;
 const LOG_CACHE_MS = 30_000;
 let errorLogsCache = { time: 0, data: null };
+let logParseCache = new Map();
 
 const SYSTEM_LOG_FILES = [
   ['/var/log/nginx/error.log', 'nginx/error.log'],
@@ -953,14 +954,9 @@ function readLogTail(file, maxBytes = LOG_TAIL_BYTES) {
   } catch { return ''; }
 }
 
-// Hanya butuh path project; getGitProjects() menjalankan execSync git per repo (lambat, blokir event loop).
-let logProjectsCache = { time: 0, list: [] };
+// Pakai cache git (di-refresh tiap 5 menit di sampler); jangan scan ulang disk + jangan git per repo.
 function getLogProjects() {
-  const now = Date.now();
-  if (logProjectsCache.time && now - logProjectsCache.time < 30_000) return logProjectsCache.list;
-  const list = scanGitDirs(SCAN_ROOT, 6).map((d) => ({ name: path.basename(d), relPath: path.relative(SCAN_ROOT, d), path: d }));
-  logProjectsCache = { time: now, list };
-  return list;
+  return gitCache.time ? gitCache.projects : getGitProjects();
 }
 
 function discoverLogSources() {
@@ -1181,10 +1177,18 @@ function collectErrorLogs(force = false) {
 
   const sources = discoverLogSources();
   const entries = [];
+  const nextParsed = new Map();
   for (const source of sources) {
-    const text = readLogTail(source.path);
-    if (text) entries.push(...parseLogText(text, source));
+    // Log yang tidak berubah (mtime+size sama) tidak dibaca/diparse ulang.
+    let hit = logParseCache.get(source.path);
+    if (!hit || hit.mtime !== source.mtime || hit.bytes !== source.bytes) {
+      const text = readLogTail(source.path);
+      hit = { mtime: source.mtime, bytes: source.bytes, entries: text ? parseLogText(text, source) : [] };
+    }
+    nextParsed.set(source.path, hit);
+    for (const e of hit.entries) entries.push(e);
   }
+  logParseCache = nextParsed;
   entries.sort((a, b) => b.t - a.t);
 
   const data = {

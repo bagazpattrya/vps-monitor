@@ -947,3 +947,5 @@ tr.proc-row-spike:hover { background: rgba(239, 68, 68, 0.14) !important; }
 .xfer-bar span { display: block; width: 35%; height: 100%; background: var(--ok); border-radius: 3px; animation: xfer-slide 1.2s ease-in-out infinite; }
 @keyframes xfer-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(290%); } }
 @keyframes xfer-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.35); } 50% { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); } }
+
+.spin { display:inline-block; width:14px; height:14px; margin-right:8px; vertical-align:-2px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:nav-spin .7s linear infinite; }
