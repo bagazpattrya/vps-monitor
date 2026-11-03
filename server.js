@@ -11,6 +11,7 @@ const crypto = require('crypto');
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 const auth = require('./auth');
 const chat = require('./chat');
+const chats = require('./chats');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -3845,10 +3846,17 @@ const server = http.createServer(async (req, res) => {
 
   const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
 
+  if (p.startsWith('/api/chats')) {
+    let body;
+    if (req.method === 'PATCH') { try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); } }
+    if (chats.handleChatsApi({ req, res, session, pathname: p, body })) return;
+    return send(res, 404, JSON.stringify({ error: 'Not found' }));
+  }
   if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify(chat.chatModels()));
   if (p === '/api/chat' && req.method === 'POST') {
     let body;
-    try { body = JSON.parse(await readBody(req, 8192)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    // 4 gambar x 5 MB sebagai base64 + teks; route lain tetap pakai batas kecil.
+    try { body = JSON.parse(await readBody(req, 28 * 1024 * 1024)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     let projects = [];
     try { projects = fs.readdirSync(SCAN_ROOT).filter((n) => !isHidden(session, n)); } catch {}
     return chat.handleChat({ req, res, session, body, projects, log: logActivity });

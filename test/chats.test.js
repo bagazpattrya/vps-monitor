@@ -99,3 +99,53 @@ test('saveImages writes server-made names', () => {
     assert.deepStrictEqual(fs.readFileSync(path.join(chats.userDir('gina'), a.id, 'img', n)), PNG);
   }
 });
+
+// ---- HTTP API ----
+function call(user, method, pathname, body, admin = true) {
+  const out = { status: 0, headers: {}, body: Buffer.alloc(0) };
+  const res = { writeHead(s, h) { out.status = s; out.headers = h || {}; }, end(b) { if (b) out.body = Buffer.from(b); } };
+  out.handled = chats.handleChatsApi({ req: { method }, res, session: { user, admin }, pathname, body });
+  out.json = () => JSON.parse(out.body.toString());
+  return out;
+}
+
+test('api: owner can list, read (without session id), rename and delete', () => {
+  const c = chats.createChat('apiu', { message: 'hello', model: 'sonnet' });
+  chats.updateChat('apiu', c.id, (x) => { x.claudeSessionId = 'SECRET-SESSION'; });
+  assert.deepStrictEqual(call('apiu', 'GET', '/api/chats').json().map((x) => x.id), [c.id]);
+  const got = call('apiu', 'GET', '/api/chats/' + c.id);
+  assert.strictEqual(got.status, 200);
+  assert.ok(!('claudeSessionId' in got.json()));
+  assert.strictEqual(call('apiu', 'PATCH', '/api/chats/' + c.id, { title: 'new' }).json().title, 'new');
+  assert.strictEqual(call('apiu', 'PATCH', '/api/chats/' + c.id, { title: '  ' }).status, 400);
+  assert.strictEqual(call('apiu', 'DELETE', '/api/chats/' + c.id).status, 200);
+  assert.strictEqual(call('apiu', 'GET', '/api/chats/' + c.id).status, 404);
+});
+
+test('api: other users and bad ids get 404', () => {
+  const c = chats.createChat('owner1', { message: 'private', model: 'sonnet' });
+  const [name] = chats.saveImages('owner1', c.id, [{ buf: PNG, ext: 'png' }]);
+  assert.strictEqual(call('intruder', 'GET', '/api/chats/' + c.id).status, 404);
+  assert.strictEqual(call('intruder', 'DELETE', '/api/chats/' + c.id).status, 404);
+  assert.strictEqual(call('intruder', 'PATCH', '/api/chats/' + c.id, { title: 'x' }).status, 404);
+  assert.strictEqual(call('intruder', 'GET', `/api/chats/${c.id}/img/${name}`).status, 404);
+  assert.deepStrictEqual(call('intruder', 'GET', '/api/chats').json(), []);
+  for (const bad of ['..', '%2e%2e', 'a'.repeat(23)]) assert.strictEqual(call('owner1', 'GET', '/api/chats/' + bad).status, 404, bad);
+  assert.strictEqual(call('owner1', 'GET', `/api/chats/${c.id}/img/..%2Fx.png`).status, 404);
+  assert.strictEqual(call('owner1', 'GET', `/api/chats/${c.id}/img/notes.txt`).status, 404);
+});
+
+test('api: owner gets the image with safe headers', () => {
+  const c = chats.createChat('owner2', { message: 'm', model: 'sonnet' });
+  const [name] = chats.saveImages('owner2', c.id, [{ buf: PNG, ext: 'png' }]);
+  const r = call('owner2', 'GET', `/api/chats/${c.id}/img/${name}`);
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.headers['Content-Type'], 'image/png');
+  assert.strictEqual(r.headers['X-Content-Type-Options'], 'nosniff');
+  assert.deepStrictEqual(r.body, PNG);
+});
+
+test('api: viewer gets 403, unrelated path is not handled', () => {
+  assert.strictEqual(call('v', 'GET', '/api/chats', undefined, false).status, 403);
+  assert.strictEqual(call('v', 'GET', '/api/other').handled, false);
+});

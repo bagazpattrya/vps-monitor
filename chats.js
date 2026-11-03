@@ -112,7 +112,39 @@ function saveImages(user, id, imgs) {
   });
 }
 
+// ---- HTTP API (owner only). Returns true when the path belongs to /api/chats. ----
+const IMG_NAME_RE = /^[a-f0-9]{16}\.(png|jpg|webp|gif)$/;
+const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+
+function handleChatsApi({ req, res, session, pathname, body }) {
+  const m = /^\/api\/chats(?:\/([^/]+)(?:\/img\/([^/]+))?)?$/.exec(pathname);
+  if (!m) return false;
+  const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); return true; };
+  if (!session || !session.admin) return json(403, { error: 'Admin required' });
+  const user = session.user;
+  const [, id, img] = m;
+  if (!id) return req.method === 'GET' ? json(200, listChats(user)) : json(405, { error: 'Method not allowed' });
+  const chat = getChat(user, id); // null for bad ids and for other users' chats
+  if (!chat) return json(404, { error: 'Chat not found' });
+  if (img !== undefined) {
+    if (req.method !== 'GET' || !IMG_NAME_RE.test(img)) return json(404, { error: 'Not found' });
+    let buf;
+    try { buf = fs.readFileSync(path.join(userDir(user), id, 'img', img)); } catch { return json(404, { error: 'Not found' }); }
+    res.writeHead(200, { 'Content-Type': IMG_TYPES[img.split('.')[1]], 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=86400' });
+    res.end(buf);
+    return true;
+  }
+  if (req.method === 'GET') { const { claudeSessionId: _s, ...pub } = chat; return json(200, pub); }
+  if (req.method === 'DELETE') { deleteChat(user, id); return json(200, { ok: true }); }
+  if (req.method === 'PATCH') {
+    const r = renameChat(user, id, body && body.title);
+    return r ? json(200, { id, title: r.title }) : json(400, { error: 'Title required' });
+  }
+  return json(405, { error: 'Method not allowed' });
+}
+
 module.exports = {
+  handleChatsApi,
   MAX_CHATS, isChatId, userDir, createChat, getChat, listChats, updateChat, renameChat, deleteChat,
   sniffImage, decodeImages, saveImages,
 };
