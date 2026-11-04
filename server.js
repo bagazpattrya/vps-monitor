@@ -1328,6 +1328,63 @@ function deleteErrorEntries(ids, session) {
   return result;
 }
 
+// Kirim error yang sudah diselesaikan ke workspace (tabel error_logs), baru hapus dari log asli.
+// Log lokal hanya dihapus untuk grup yang workspace-nya menjawab 2xx, jadi tidak ada error yang hilang.
+async function resolveErrorEntries(groups, solution, session) {
+  const url = String(process.env.WORKSPACE_ERROR_URL || '').trim();
+  const token = String(process.env.WORKSPACE_ERROR_TOKEN || '').trim();
+  if (!url || !token) return { ok: false, error: 'WORKSPACE_ERROR_URL / WORKSPACE_ERROR_TOKEN belum diatur di .env monitor' };
+  const note = String(solution || '').trim();
+  if (!note) return { ok: false, error: 'Solusi wajib diisi' };
+
+  const data = collectErrorLogs(true);
+  const byId = new Map();
+  for (const e of data.entries) byId.set(errorEntryId(e), e);
+
+  const result = { ok: true, sent: 0, deleted: 0, failed: [] };
+  const sentIds = [];
+  for (const g of (Array.isArray(groups) ? groups : []).slice(0, 50)) {
+    const ids = (Array.isArray(g) ? g : []).filter((x) => typeof x === 'string').slice(0, 200);
+    const entries = ids.map((id) => byId.get(id)).filter((e) => e && !isHidden(session, [e.project, e.source, e.message, e.detail]));
+    if (!entries.length) { result.failed.push({ source: ids[0] || '?', error: 'log tidak ditemukan (sudah berubah?)' }); continue; }
+    const latest = entries.reduce((a, b) => (b.t >= a.t ? b : a));
+    const times = entries.map((e) => e.t).filter(Boolean);
+    const payload = {
+      external_ref: crypto.createHash('sha1').update(entries.map(errorEntryId).sort().join(',')).digest('hex'),
+      project_name: latest.project,
+      level: latest.level,
+      is_critical: !!latest.critical,
+      source: [...new Set(entries.map((e) => e.source))].slice(0, 3).join(', '),
+      message: scrubLogText(latest.message),
+      detail: scrubLogText(latest.detail),
+      occurrences: entries.length,
+      first_seen_at: times.length ? new Date(Math.min(...times)).toISOString() : null,
+      last_seen_at: times.length ? new Date(Math.max(...times)).toISOString() : null,
+      solution: note.slice(0, 10000),
+      solved_by: session.user,
+    };
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) throw new Error('workspace menjawab HTTP ' + r.status);
+      result.sent++;
+      sentIds.push(...entries.map(errorEntryId));
+    } catch (e) {
+      result.failed.push({ source: latest.project + ': ' + latest.message.slice(0, 60), error: 'gagal kirim ke workspace: ' + (e.message || e) });
+    }
+  }
+  if (sentIds.length) {
+    const d = deleteErrorEntries(sentIds, session);
+    result.deleted = d.deleted;
+    for (const f of d.failed) result.failed.push({ source: f.source, error: 'terkirim ke workspace, tapi gagal dihapus lokal: ' + f.error });
+  }
+  return result;
+}
+
 function restartServiceUnit(unit) {
   return new Promise((resolve) => {
     const allow = ['cron', 'supervisor', 'supervisord'];
@@ -3940,6 +3997,16 @@ const server = http.createServer(async (req, res) => {
     const ids = Array.isArray(body && body.ids) ? body.ids : [];
     const r = deleteErrorEntries(ids, session);
     if (r.deleted) audit(session.user, 'logs.delete', `${r.deleted} entries`, ids.length > 1 ? 'bulk' : 'single');
+    errorLogsCache = { time: 0, data: null };
+    return send(res, 200, JSON.stringify(r));
+  }
+  if (p === '/api/logs/errors/resolve' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = await resolveErrorEntries(body && body.groups, body && body.solution, session);
+    if (r.error) return send(res, 400, JSON.stringify(r));
+    if (r.sent) audit(session.user, 'logs.resolve', `${r.sent} groups -> workspace`, r.deleted + ' lines removed');
     errorLogsCache = { time: 0, data: null };
     return send(res, 200, JSON.stringify(r));
   }

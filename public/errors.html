@@ -109,6 +109,7 @@
       </div>
       <div class="err-actions" id="errorSelectionBar" hidden>
         <span class="err-actions-count"><strong id="errorSelectedCount">0</strong> dipilih</span>
+        <button class="btn-sm" id="errorSolveSelected">✓ Tandai solved</button>
         <button class="btn-sm danger" id="errorDeleteSelected">Hapus terpilih</button>
         <button class="btn-sm" id="errorClearSelection">Batal</button>
         <span class="err-actions-note">Baris dihapus permanen dari file log asli.</span>
@@ -132,7 +133,7 @@
               <th style="width:70px">Count</th>
               <th style="width:170px">Last seen / Source</th>
               <th>Message</th>
-              <th style="width:120px;text-align:right">Aksi</th>
+              <th style="width:210px;text-align:right">Aksi</th>
             </tr>
           </thead>
           <tbody id="errorList"></tbody>
@@ -149,6 +150,23 @@
       <button class="btn" id="gitModalClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" id="gitModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="solveModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="solveModalTitle">Tandai solved</span>
+      <button class="btn" id="solveModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div class="modal-body" style="white-space:normal">
+      <p style="margin-top:0;color:var(--mut);font-size:12px">Error + solusi disalin ke tabel Error Logs di workspace. Setelah berhasil terkirim, barisnya dihapus dari log asli di server.</p>
+      <textarea id="solveText" class="input" rows="6" style="width:100%" placeholder="Bagaimana error ini diselesaikan?"></textarea>
+      <div style="margin-top:10px;text-align:right">
+        <span id="solveErr" style="color:var(--bad);font-size:12px;margin-right:8px"></span>
+        <button class="btn-sm" id="solveSubmit">Kirim &amp; hapus</button>
+      </div>
+    </div>
   </div>
 </div>
 

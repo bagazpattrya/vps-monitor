@@ -228,6 +228,7 @@ function renderErrors() {
       <td class="err-msg-cell">${escHtml(e.message || '(empty)')}</td>
       <td style="text-align:right"><span class="err-row-actions">
         <button class="btn-sm" data-error-index="${i}">Detail</button>
+        <button class="btn-sm" data-error-solve="${ids}" title="Tandai solved: kirim ke workspace lalu hapus dari log">✓ Solved</button>
         <button class="btn-sm danger" data-error-delete="${ids}" title="Hapus semua baris log di grup ini" aria-label="Hapus grup log ini">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
         </button>
@@ -257,6 +258,48 @@ async function deleteErrorRows(ids) {
     openModalText('Hapus log gagal', e.message || 'Request gagal', false);
   }
 }
+
+// Grup yang dipilih -> array of id[] (satu grup = satu record di workspace).
+let solveGroups = [];
+function openSolve(groups) {
+  solveGroups = groups.filter(g => g.length);
+  if (!solveGroups.length) return;
+  $('solveModalTitle').textContent = solveGroups.length === 1 ? 'Tandai solved' : `Tandai ${solveGroups.length} grup solved`;
+  $('solveText').value = '';
+  $('solveErr').textContent = '';
+  $('solveSubmit').disabled = false;
+  $('solveModal').classList.add('open');
+  $('solveText').focus();
+}
+function selectedGroups() {
+  const out = [];
+  for (const g of errorViewEntries) if (g.ids.every(id => errorSelected.has(id))) out.push(g.ids);
+  return out;
+}
+$('solveModalClose').addEventListener('click', () => $('solveModal').classList.remove('open'));
+$('solveSubmit').addEventListener('click', async () => {
+  const solution = $('solveText').value.trim();
+  if (!solution) { $('solveErr').textContent = 'Solusi wajib diisi'; return; }
+  $('solveSubmit').disabled = true;
+  $('solveErr').textContent = '';
+  try {
+    const d = await api('POST', '/api/logs/errors/resolve', { groups: solveGroups, solution });
+    $('solveModal').classList.remove('open');
+    errorSelected.clear();
+    await errors(true);
+    if (d.failed && d.failed.length) {
+      openModalText(
+        `Solved: ${d.sent || 0} terkirim, ${d.failed.length} gagal`,
+        d.failed.map(f => `${f.source}: ${f.error}`).join('\n'),
+        false
+      );
+    }
+  } catch (e) {
+    $('solveErr').textContent = e.message || 'Request gagal';
+    $('solveSubmit').disabled = false;
+  }
+});
+if ($('errorSolveSelected')) $('errorSolveSelected').addEventListener('click', () => openSolve(selectedGroups()));
 
 let errorSig = '';
 async function errors(force = false, quiet = false) {
@@ -351,6 +394,8 @@ if ($('errorLevelTabs')) {
 if ($('errorList')) {
   $('errorList').addEventListener('click', (e) => {
     if (e.target.closest('#errorShowMore')) { errorShowLimit += 200; renderErrors(); return; }
+    const solve = e.target.closest('[data-error-solve]');
+    if (solve) { openSolve([solve.dataset.errorSolve.split(',')]); return; }
     const del = e.target.closest('[data-error-delete]');
     if (del) { deleteErrorRows(del.dataset.errorDelete.split(',')); return; }
     const row = e.target.closest('[data-error-project]');
