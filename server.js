@@ -1374,7 +1374,7 @@ async function resolveErrorEntries(groups, solution, session) {
       result.sent++;
       sentIds.push(...entries.map(errorEntryId));
     } catch (e) {
-      result.failed.push({ source: latest.project + ': ' + latest.message.slice(0, 60), error: 'gagal kirim ke workspace: ' + (e.message || e) });
+      result.failed.push({ source: latest.project + ': ' + latest.message.slice(0, 60), error: 'gagal kirim ke workspace (' + url + '): ' + (e.message || e) + (e.cause ? ' [' + (e.cause.code || e.cause.message || e.cause) + ']' : '') });
     }
   }
   if (sentIds.length) {
