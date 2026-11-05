@@ -27,7 +27,7 @@ j('/api/me').then(m => {
   $('sideUser').style.display = '';
   if (!m.admin) { location.href = '/'; return; }
   ['Users', 'Files'].forEach(n => { if (m.superadmin && $('navLink' + n)) $('navLink' + n).style.display = ''; });
-  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat', 'Usage'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
   $('pm2RestartBtn').style.display = '';
 }).catch(() => {});
 
@@ -391,6 +391,7 @@ async function sendMessage(message, images) {
     addErr('Connection lost');
   } finally {
     clearInterval(timer);
+    loadUsage();
     status.remove();
     if (!replyText) bot.row.remove();
     busy = false;
@@ -416,6 +417,18 @@ $('newChat').onclick = newChat;
 $('toggleList').onclick = () => $('chatList').classList.toggle('open');
 modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
 
+// ---- usage ----
+async function loadUsage() {
+  try {
+    const u = await j('/api/chat/usage'), t = u.total, k = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
+    const b = $('usageBadge');
+    b.textContent = `${u.days}d: $${t.cost.toFixed(2)} · ${t.runs} runs`;
+    const rows = (o) => Object.entries(o).map(([n, a]) => `${n}: $${a.cost.toFixed(2)}, ${a.runs} runs, in ${k(a.input)} / out ${k(a.output)} / cache ${k(a.cacheRead)}`).join('\n');
+    b.title = `Claude usage, last ${u.days} days\nin ${k(t.input)} · out ${k(t.output)} · cache read ${k(t.cacheRead)} · cache write ${k(t.cacheWrite)}\n\nBy model\n${rows(u.byModel)}\n\nBy user\n${rows(u.byUser)}`;
+    b.style.display = '';
+  } catch (e) {}
+}
+
 // ---- start ----
 renderChat(null);
 (async () => {
@@ -425,6 +438,7 @@ renderChat(null);
     const saved = localStorage.getItem('chatModel');
     modelSel.value = m.models.includes(saved) ? saved : m.default;
     if (m.shell || m.tinker) $('modeBadge').textContent = 'read-only · ' + (m.shell && m.tinker ? 'commands & tinker need approval' : m.shell ? 'commands need approval' : 'tinker needs approval');
+    loadUsage();
     const list = await loadList();
     const last = localStorage.getItem('chatCurrent');
     const id = list.some((c) => c.id === last) ? last : '';

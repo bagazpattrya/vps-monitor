@@ -672,3 +672,16 @@ test('viewer cannot answer a confirmation', () => {
   chat.handleConfirm({ res: { writeHead(s) { out.status = s; }, end() {} }, session: { user: 'v', admin: false }, body: { id: 'x', allow: true } });
   assert.strictEqual(out.status, 403);
 });
+
+test('parseStreamLine result carries usage; usageSummary scopes by user', () => {
+  const r = parseStreamLine('{"type":"result","session_id":"S","total_cost_usd":0.5,"usage":{"input_tokens":10,"output_tokens":5}}');
+  assert.strictEqual(r.usage.cost, 0.5);
+  assert.strictEqual(r.usage.output, 5);
+  const f = require('path').join(require('os').tmpdir(), 'cu-' + process.pid + '.jsonl');
+  process.env.CHAT_USAGE_FILE = f;
+  const now = Date.now();
+  require('fs').writeFileSync(f, [{ t: now, user: 'a', model: 'haiku', cost: 1 }, { t: now, user: 'b', model: 'opus', cost: 2 }, { t: 1, user: 'a', model: 'opus', cost: 9 }].map((x) => JSON.stringify(x)).join('\n') + '\n');
+  assert.strictEqual(chat.usageSummary({ user: 'a' }).total.cost, 1);
+  assert.strictEqual(chat.usageSummary({ user: 'a', superadmin: true }).total.cost, 3);
+  require('fs').rmSync(f); delete process.env.CHAT_USAGE_FILE;
+});

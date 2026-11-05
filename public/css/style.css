@@ -1065,3 +1065,15 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .confirm-bar button:disabled { opacity: 0.5; cursor: default; }
 .confirm-result { color: var(--mut); font-size: 12.5px; }
 .confirm-keep { border-color: var(--warn) !important; color: var(--warn) !important; }
+
+/* AI usage page */
+.usage-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.usage-lim .usage-pct { font-size: 26px; font-weight: 700; }
+.usage-lim .bar { margin: 8px 0; }
+.usage-note { color: var(--mut); font-size: 12px; margin: 12px 0 0; }
+.usage-chart svg { width: 100%; height: auto; display: block; }
+.usage-chart text { fill: var(--mut); font-size: 10px; }
+.usage-chart rect.b { transition: opacity .15s; }
+.usage-chart rect.b:hover { opacity: .7; }
+.usage-legend { display: flex; gap: 14px; color: var(--mut); font-size: 12px; margin-top: 6px; }
+.usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }

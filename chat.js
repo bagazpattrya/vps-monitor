@@ -64,10 +64,44 @@ function toolLabel(b) {
   return (String(b.name || 'tool') + ' ' + detail).trim().slice(0, 100);
 }
 
+// Usage log: one JSON line per finished Claude run. Read per call so tests can redirect it.
+const usageFile = () => process.env.CHAT_USAGE_FILE || path.join(__dirname, 'data', 'chat-usage.jsonl');
+const limitsFile = () => process.env.CHAT_LIMITS_FILE || path.join(__dirname, 'data', 'chat-limits.json');
+// Plan limits (5h / weekly) are per Anthropic account, so one snapshot, refreshed on every run.
+function recordLimits(windows) {
+  try { fs.writeFileSync(limitsFile(), JSON.stringify({ t: Date.now(), windows }), { mode: 0o600 }); } catch (e) { console.error('[chat] limits log failed:', e.message); }
+}
+function recordUsage(rec) {
+  try { fs.appendFileSync(usageFile(), JSON.stringify(rec) + '\n', { mode: 0o600 }); } catch (e) { console.error('[chat] usage log failed:', e.message); }
+}
+// Last `days` days of usage: superadmin sees every user, admin only their own.
+function usageSummary(session, days = 30) {
+  const since = Date.now() - days * 86400_000;
+  const sum = () => ({ runs: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  const total = sum(), byUser = {}, byModel = {}, daily = {};
+  let lines = [];
+  try { lines = fs.readFileSync(usageFile(), 'utf8').split('\n'); } catch {}
+  for (const l of lines) {
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (!r || r.t < since || (!session.superadmin && r.user !== session.user)) continue;
+    const day = new Date(r.t).toLocaleDateString('sv'); // YYYY-MM-DD, server local time
+    for (const a of [total, byUser[r.user] ||= sum(), byModel[r.model] ||= sum(), daily[day] ||= sum()]) {
+      a.runs++; for (const k of ['cost', 'input', 'output', 'cacheRead', 'cacheWrite']) a[k] += r[k] || 0;
+    }
+  }
+  let limits = null;
+  try { limits = JSON.parse(fs.readFileSync(limitsFile(), 'utf8')); } catch {}
+  return { days, total, byUser, byModel, daily, limits };
+}
+
 function parseStreamLine(line) {
   let o;
   try { o = JSON.parse(line); } catch { return null; }
   if (!o || typeof o !== 'object') return null;
+  if (o.type === 'rate_limit_event' && o.rate_limit_info) {
+    const w = o.rate_limit_info.unifiedWindows;
+    return w && typeof w === 'object' ? { limits: w } : null;
+  }
   if (o.type === 'assistant' && o.message && Array.isArray(o.message.content)) {
     const blocks = o.message.content.filter(Boolean);
     const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
@@ -80,6 +114,10 @@ function parseStreamLine(line) {
   if (o.type === 'result') {
     const r = { sessionId: o.session_id, done: true };
     if (o.is_error) r.error = String(o.result || 'Claude returned an error').slice(0, 300);
+    if (o.usage || o.total_cost_usd != null) {
+      const u = o.usage || {};
+      r.usage = { cost: Number(o.total_cost_usd) || 0, input: u.input_tokens || 0, output: u.output_tokens || 0, cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0, ms: o.duration_ms || 0 };
+    }
     return r;
   }
   return null;
@@ -365,6 +403,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     const parts = [];
     let newSession = '';
     let resultError = '';
+    let usage = null;
     const emit = (o) => { if (!settled) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
     const run = mcp ? { user: session.user, projects: new Set(projects), emit, pending: new Map(), busy: 0, log: (action, target, detail) => log(session.user, action, target, detail) } : null;
     if (run) runs.set(token, run);
@@ -385,6 +424,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
       if (settled) return;
       error = error || resultError;
       persist(error);
+      if (usage) recordUsage({ t: Date.now(), user: session.user, model, chatId: chat.id, ...usage });
       if (error) emit({ error });
       emit({ done: true });
       settled = true;
@@ -399,6 +439,8 @@ async function handleChat({ req, res, session, body, projects, log }) {
       if (ev.tool) emit({ tool: ev.tool });
       if (ev.text) { parts.push(ev.text); emit({ text: ev.text }); }
       if (ev.sessionId) { newSession = ev.sessionId; emit({ sessionId: ev.sessionId }); }
+      if (ev.limits) recordLimits(ev.limits);
+      if (ev.usage) usage = ev.usage;
       if (ev.done) gotResult = true;
       if (ev.error) resultError = ev.error;
     };
@@ -433,5 +475,5 @@ async function handleChat({ req, res, session, body, projects, log }) {
   });
 }
 
-module.exports = { handleChat, handleConfirm, shellAvailable, tinkerAvailable, chatModels, addUploads, scopeDirs, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
+module.exports = { usageSummary, handleChat, handleConfirm, shellAvailable, tinkerAvailable, chatModels, addUploads, scopeDirs, buildClaudeArgs, parseStreamLine, buildSandbox, createLimiter };
 module.exports._test = { setIsRoot: (fn) => { isRoot = fn; } };

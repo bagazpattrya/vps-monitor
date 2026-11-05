@@ -9,3 +9,5 @@ data/removed-dbs/
 .opencode/
 .env
 data/chats/
+data/chat-usage.jsonl
+data/chat-limits.json

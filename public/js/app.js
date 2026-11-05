@@ -65,6 +65,7 @@ j('/api/me').then(m => {
     if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
     if ($('navLinkErrors')) $('navLinkErrors').style.display = '';
     if ($('navLinkChat')) $('navLinkChat').style.display = '';
+    if ($('navLinkUsage')) $('navLinkUsage').style.display = '';
     if ($('procSpikeCard')) $('procSpikeCard').style.display = '';
     if ($('mysqlQueryCard')) $('mysqlQueryCard').style.display = '';
     $('pm2RestartBtn').style.display = '';
