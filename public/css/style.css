@@ -1077,3 +1077,9 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .usage-chart rect.b:hover { opacity: .7; }
 .usage-legend { display: flex; gap: 14px; color: var(--mut); font-size: 12px; margin-top: 6px; }
 .usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+.usage-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 4vh 12px; }
+.usage-modal[hidden] { display: none; }
+.usage-panel { position: relative; width: min(960px, 100%); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+.usage-x { position: absolute; top: 12px; right: 12px; }
+.usage-sec { margin-bottom: 22px; }
+.usage-sec:last-child { margin-bottom: 0; }

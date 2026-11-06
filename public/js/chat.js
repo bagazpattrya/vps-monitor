@@ -17,9 +17,9 @@ function escHtml(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-let isAdmin = false;
+let isAdmin = false, isSuper = false;
 j('/api/me').then(m => {
-  isAdmin = !!m.admin;
+  isAdmin = !!m.admin; isSuper = !!m.superadmin;
   $('who').innerHTML = `<strong>${escHtml(m.user)}</strong>${m.role === 'superadmin' ? '<span class="role">superadmin</span>' : m.admin ? '<span class="role">admin</span>' : ''}`;
   $('sideUserName').textContent = m.user;
   $('sideUserAvatar').textContent = String(m.user || '?').charAt(0);
@@ -27,7 +27,7 @@ j('/api/me').then(m => {
   $('sideUser').style.display = '';
   if (!m.admin) { location.href = '/'; return; }
   ['Users', 'Files'].forEach(n => { if (m.superadmin && $('navLink' + n)) $('navLink' + n).style.display = ''; });
-  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat', 'Usage'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
   $('pm2RestartBtn').style.display = '';
 }).catch(() => {});
 
@@ -418,16 +418,96 @@ $('toggleList').onclick = () => $('chatList').classList.toggle('open');
 modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));
 
 // ---- usage ----
+const k = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));
+const usd = n => '$' + n.toFixed(2);
+const LABELS = { five_hour: 'Session (5 jam)', seven_day: 'Mingguan (7 hari)', seven_day_opus: 'Mingguan Opus', seven_day_sonnet: 'Mingguan Sonnet' };
+
+function until(sec) {
+  const d = sec * 1000 - Date.now();
+  if (d <= 0) return 'sudah reset';
+  const h = Math.floor(d / 3.6e6), m = Math.floor(d % 3.6e6 / 6e4);
+  return h >= 24 ? `reset ${Math.floor(h / 24)}h ${h % 24}j lagi` : `reset ${h}j ${m}m lagi`;
+}
+
+function renderLimits(l) {
+  const box = $('limits');
+  if (!l) { box.innerHTML = '<span style="color:var(--mut)">Belum ada data. Kirim satu chat dulu.</span>'; $('limAge').textContent = '—'; return; }
+  const mins = Math.round((Date.now() - l.t) / 6e4);
+  $('limAge').textContent = 'diperbarui ' + (mins < 1 ? 'baru saja' : mins < 60 ? mins + ' mnt lalu' : Math.round(mins / 60) + ' jam lalu');
+  box.innerHTML = Object.entries(l.windows).map(([key, w]) => {
+    const pct = Math.min(100, Math.round((w.utilization || 0) * 100));
+    const col = pct >= 90 ? 'var(--bad)' : pct >= 70 ? 'var(--warn)' : 'var(--ok)';
+    return `<div class="usage-lim"><div style="color:var(--mut);font-size:12px">${escHtml(LABELS[key] || key)}</div><div class="usage-pct">${pct}%</div><div class="bar"><i style="width:${pct}%;background:${col}"></i></div><div style="color:var(--mut);font-size:12px">${w.resetsAt ? until(w.resetsAt) : ''}${w.status && w.status !== 'allowed' ? ' · ' + escHtml(w.status) : ''}</div></div>`;
+  }).join('');
+}
+
+// Inline SVG bar chart. series: [{key,color}] stacked; days: [{day,...values}]
+function chart(el, days, series, fmt) {
+  const W = 900, H = 220, L = 44, B = 22, T = 8, iw = W - L - 8, ih = H - B - T;
+  const tot = d => series.reduce((a, s) => a + (d[s.key] || 0), 0);
+  const max = Math.max(...days.map(tot), 1e-9);
+  const bw = iw / days.length;
+  let g = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = T + ih - ih * i / 4;
+    g += `<line x1="${L}" x2="${W - 8}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="${L - 6}" y="${y + 3}" text-anchor="end">${fmt(max * i / 4)}</text>`;
+  }
+  days.forEach((d, i) => {
+    let y = T + ih;
+    const x = L + i * bw + bw * 0.15, w = bw * 0.7;
+    let tip = `${d.day}: ` + series.map(s => `${s.key} ${fmt(d[s.key] || 0)}`).join(', ');
+    for (const s of series) {
+      const h = ih * (d[s.key] || 0) / max;
+      y -= h;
+      if (h > 0) g += `<rect class="b" x="${x}" y="${y}" width="${w}" height="${h}" fill="${s.color}"><title>${escHtml(tip)}</title></rect>`;
+    }
+    if (days.length <= 31 ? i % Math.ceil(days.length / 10) === 0 : i % 10 === 0) g += `<text x="${x + w / 2}" y="${H - 6}" text-anchor="middle">${d.day.slice(5)}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+
+const rows = o => Object.entries(o).sort((a, b) => b[1].cost - a[1].cost).map(([n, a]) => `<tr><td>${escHtml(n)}</td><td>${a.runs}</td><td>${usd(a.cost)}</td><td>${k(a.input)}</td><td>${k(a.output)}</td><td>${k(a.cacheRead)}</td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--mut)">Belum ada data</td></tr>';
+
+async function load() {
+  const u = await j('/api/chat/usage?days=' + $('range').value);
+  renderLimits(u.limits);
+  const days = [];
+  for (let i = u.days - 1; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 864e5).toLocaleDateString('sv');
+    days.push({ day, ...(u.daily[day] || {}) });
+  }
+  $('costTotal').textContent = usd(u.total.cost) + ' · ' + u.total.runs + ' runs';
+  $('tokTotal').textContent = 'in ' + k(u.total.input) + ' · out ' + k(u.total.output);
+  chart($('chartCost'), days, [{ key: 'cost', color: 'var(--ac)' }], usd);
+  chart($('chartTok'), days, [{ key: 'input', color: 'var(--ac)' }, { key: 'output', color: 'var(--ok)' }, { key: 'cacheRead', color: 'var(--warn)' }], k);
+  $('byModel').innerHTML = rows(u.byModel);
+  $('byUser').innerHTML = rows(u.byUser);
+}
+
 async function loadUsage() {
   try {
-    const u = await j('/api/chat/usage'), t = u.total, k = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
-    const b = $('usageBadge');
-    b.textContent = `${u.days}d: $${t.cost.toFixed(2)} · ${t.runs} runs`;
-    const rows = (o) => Object.entries(o).map(([n, a]) => `${n}: $${a.cost.toFixed(2)}, ${a.runs} runs, in ${k(a.input)} / out ${k(a.output)} / cache ${k(a.cacheRead)}`).join('\n');
-    b.title = `Claude usage, last ${u.days} days\nin ${k(t.input)} · out ${k(t.output)} · cache read ${k(t.cacheRead)} · cache write ${k(t.cacheWrite)}\n\nBy model\n${rows(u.byModel)}\n\nBy user\n${rows(u.byUser)}`;
-    b.style.display = '';
+    const u = await j('/api/chat/usage?days=' + $('range').value), t = u.total;
+    $('usageBadge').textContent = `${u.days}d: ${usd(t.cost)} · ${t.runs} runs`;
+    $('usageBadge').style.display = '';
+    $('userCard').style.display = isSuper ? '' : 'none';
+    renderLimits(u.limits);
+    const days = [];
+    for (let i = u.days - 1; i >= 0; i--) {
+      const day = new Date(Date.now() - i * 864e5).toLocaleDateString('sv');
+      days.push({ day, ...(u.daily[day] || {}) });
+    }
+    $('costTotal').textContent = usd(t.cost) + ' · ' + t.runs + ' runs';
+    $('tokTotal').textContent = 'in ' + k(t.input) + ' · out ' + k(t.output);
+    chart($('chartCost'), days, [{ key: 'cost', color: 'var(--ac)' }], usd);
+    chart($('chartTok'), days, [{ key: 'input', color: 'var(--ac)' }, { key: 'output', color: 'var(--ok)' }, { key: 'cacheRead', color: 'var(--warn)' }], k);
+    $('byModel').innerHTML = rows(u.byModel);
+    $('byUser').innerHTML = rows(u.byUser);
   } catch (e) {}
 }
+$('usageBadge').onclick = () => { $('usageModal').hidden = false; loadUsage(); };
+$('usageClose').onclick = () => { $('usageModal').hidden = true; };
+$('usageModal').addEventListener('click', (e) => { if (e.target === $('usageModal')) $('usageModal').hidden = true; });
+$('range').onchange = loadUsage;
 
 // ---- start ----
 renderChat(null);

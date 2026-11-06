@@ -4781,7 +4781,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
-  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p === '/usage' ? '/usage.html' : p;
+  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
   serveFile(req, res, file);
 });

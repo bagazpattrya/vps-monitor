@@ -41,7 +41,7 @@ j('/api/me').then(m => {
   $('sideUser').style.display = '';
   if (!m.admin) { location.href = '/'; return; }
   ['Users', 'Files'].forEach(n => { if (m.superadmin && $('navLink' + n)) $('navLink' + n).style.display = ''; });
-  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat', 'Usage'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
   $('pm2RestartBtn').style.display = '';
   errors();
 }).catch(() => {});
