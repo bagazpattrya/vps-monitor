@@ -11,3 +11,4 @@ data/removed-dbs/
 data/chats/
 data/chat-usage.jsonl
 data/chat-limits.json
+data/projects.json

@@ -18,6 +18,7 @@
   </div>
   <div id="navSearch" class="input nav-search" contenteditable="plaintext-only" role="searchbox" aria-label="Cari menu" data-placeholder="Cari menu..." spellcheck="false"></div>
   <a href="#/overview" class="nav-link active" data-view="overview" style="--c:59,130,246"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></span>Overview</a>
+  <a href="#/projects" class="nav-link" id="navLinkProjects" data-view="projects" style="display:none;--c:139,92,246"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></span>Projects</a>
   <a href="#/storage" class="nav-link" data-view="storage" style="--c:168,85,247"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/></svg></span>Storage</a>
   <a href="#/workers" class="nav-link" data-view="workers" style="--c:245,158,11"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>Workers &amp; Cron</a>
   <a href="/errors" class="nav-link" id="navLinkErrors" style="display:none;--c:239,68,68"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>Error Logs</a>
@@ -192,6 +193,30 @@
     </div>
   </div>
   </div><!-- /view-overview -->
+
+  <!-- VIEW: PROJECTS (superadmin) -->
+  <div class="view-pane" id="view-projects">
+    <div class="card c12">
+      <div class="sec-head">
+        <h3 class="sec-title">
+          <span>Projects</span>
+          <span class="badge" id="projCount">0</span>
+        </h3>
+        <div class="proc-controls">
+          <input type="search" id="projSearch" class="input" placeholder="Filter project, repo, database, domain..." style="min-width:240px" />
+          <button class="btn ok" id="projNew" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">+ New Project</button>
+          <button class="btn" id="projRefresh">Refresh</button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--mut);margin-bottom:14px">
+        Project hanya mengelompokkan: git deployment, database (live + backup), dan hosted site. Menghapus project <strong>tidak</strong> menyentuh repo, database, maupun config nginx.
+      </div>
+      <div id="projError" style="display:none;color:var(--bad);font-size:12px;margin-bottom:12px"></div>
+      <div class="proj-grid" id="projList">
+        <span style="color:var(--mut);font-size:12px">Memuat project...</span>
+      </div>
+    </div>
+  </div><!-- /view-projects -->
 
   <!-- VIEW: STORAGE -->
   <div class="view-pane" id="view-storage">
@@ -892,6 +917,35 @@
   </div>
   </div><!-- /view-deploy -->
 </main>
+
+<div class="modal-backdrop" id="projModal">
+  <div class="modal" style="max-width:760px;max-height:88vh">
+    <div class="modal-head">
+      <span id="projModalTitle">New Project</span>
+      <button class="btn" id="projModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div style="padding:14px 16px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0">
+      <div>
+        <label class="proj-lbl" for="projName">Nama project</label>
+        <input id="projName" class="input" style="width:100%" maxlength="80" autocomplete="off" />
+      </div>
+      <div>
+        <label class="proj-lbl" for="projDesc">Deskripsi (opsional)</label>
+        <textarea id="projDesc" class="input" style="width:100%;min-height:54px;resize:vertical" maxlength="500"></textarea>
+      </div>
+      <div class="proj-picks">
+        <div class="proj-pick"><div class="proj-lbl">Git deployments <span class="badge" id="pickRepoCount">0</span></div><input type="search" class="input" id="pickRepoQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickRepos"></div></div>
+        <div class="proj-pick"><div class="proj-lbl">Databases <span class="badge" id="pickDbCount">0</span></div><input type="search" class="input" id="pickDbQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickDbs"></div></div>
+        <div class="proj-pick"><div class="proj-lbl">Hosted sites <span class="badge" id="pickSiteCount">0</span></div><input type="search" class="input" id="pickSiteQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickSites"></div></div>
+      </div>
+      <div id="projFormErr" style="color:var(--bad);display:none;white-space:pre-wrap"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn" id="projCancel">Batal</button>
+        <button class="btn ok" id="projSave" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="gitModal">
   <div class="modal">

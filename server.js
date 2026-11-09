@@ -12,6 +12,7 @@ try { process.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 const auth = require('./auth');
 const chat = require('./chat');
 const chats = require('./chats');
+const projects = require('./projects');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -3865,6 +3866,67 @@ async function runRenameJob(job, p) {
   }
 }
 
+// ---- Projects: gabungkan referensi tersimpan (projects.js) dengan data live git / MySQL / backup / nginx ----
+// Hanya superadmin yang boleh memanggil ini, jadi hidden keywords tidak diterapkan.
+async function buildProjectsView() {
+  const gitList = getGitProjects();
+  const dbRes = await listDatabases(null);
+  const backups = getBackupInfo();
+  const siteList = getHostedSites();
+
+  const gitBy = new Map(gitList.map((g) => [g.relPath, g]));
+  const siteBy = new Map(siteList.map((s) => [s.id, s]));
+  const dbBy = new Map(dbRes.ok ? dbRes.databases.map((d) => [d.name, d]) : []);
+  const backupsBy = new Map();
+  for (const f of backups.files || []) {
+    if (!backupsBy.has(f.dbName)) backupsBy.set(f.dbName, []);
+    backupsBy.get(f.dbName).push(f); // sudah terurut terbaru dulu (getBackupInfo)
+  }
+
+  const repoView = (rel) => {
+    const g = gitBy.get(rel);
+    if (!g) return { relPath: rel, found: false };
+    const { remote, github } = projects.remoteInfo(g.remote);
+    return { relPath: rel, found: true, name: g.name, branch: g.branch, hash: g.hash, time: g.time, message: g.message, dirty: !!g.dirty, broken: !!g.broken, lastPull: g.lastPull, remote, github };
+  };
+  const dbView = (name) => {
+    const files = backupsBy.get(name) || [];
+    const latest = files[0] || null;
+    return {
+      name,
+      live: dbRes.ok ? dbBy.has(name) : null, // null = MySQL tidak bisa dibaca, status tidak diketahui
+      size: dbBy.has(name) ? dbBy.get(name).size : null,
+      backups: {
+        count: files.length,
+        totalBytes: files.reduce((a, f) => a + f.size, 0),
+        latest: latest && { name: latest.name, relPath: latest.relPath, category: latest.category, size: latest.size, mtime: latest.mtime },
+      },
+    };
+  };
+  const siteView = (id) => {
+    const s = siteBy.get(id);
+    if (!s) return { id, found: false, file: path.basename(id) };
+    return { id, found: true, file: s.file, domains: s.domains, ssl: s.ssl, type: s.type, root: s.root, upstream: s.upstream, broken: !!s.broken };
+  };
+
+  return {
+    time: Date.now(),
+    dbError: dbRes.ok ? null : dbRes.error,
+    backupsAvailable: !!backups.available,
+    projects: projects.list().map((p) => ({
+      id: p.id, name: p.name, description: p.description, createdBy: p.createdBy, createdAt: p.createdAt, updatedAt: p.updatedAt,
+      repos: p.repos.map(repoView), databases: p.databases.map(dbView), sites: p.sites.map(siteView),
+    })),
+    // Pilihan untuk form: semua yang bisa ditautkan.
+    options: {
+      repos: gitList.map((g) => ({ relPath: g.relPath, name: g.name, group: g.group, remote: projects.remoteInfo(g.remote).remote })),
+      databases: dbRes.ok ? dbRes.databases : [],
+      backupDbs: [...backupsBy.keys()].sort(),
+      sites: siteList.map((s) => ({ id: s.id, file: s.file, domains: s.domains })),
+    },
+  };
+}
+
 const server = http.createServer(async (req, res) => {
 
 
@@ -4375,6 +4437,34 @@ const server = http.createServer(async (req, res) => {
     const r = await deleteHostedSite(site);
     if (!r.ok) audit(session.user, 'site.delete.fail', site.file, String(r.error || '').slice(0, 200));
     return send(res, r.ok ? 200 : (r.status || 500), JSON.stringify(r));
+  }
+  if (p === '/api/projects' && req.method === 'GET') {
+    if (!session.superadmin) return needSuper();
+    return send(res, 200, JSON.stringify(await buildProjectsView()));
+  }
+  if (p === '/api/projects' && req.method === 'POST') {
+    if (!session.superadmin) return needSuper();
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = projects.create(body, session.user);
+    if (r.ok) audit(session.user, 'project.create', r.project.name, `repos=${r.project.repos.length} dbs=${r.project.databases.length} sites=${r.project.sites.length}`);
+    return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true, id: r.project.id } : { error: r.error }));
+  }
+  if (p === '/api/projects/update' && req.method === 'POST') {
+    if (!session.superadmin) return needSuper();
+    let body;
+    try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = projects.update(body && body.id, body);
+    if (r.ok) audit(session.user, 'project.update', r.project.name, `repos=${r.project.repos.length} dbs=${r.project.databases.length} sites=${r.project.sites.length}`);
+    return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true } : { error: r.error }));
+  }
+  if (p === '/api/projects/delete' && req.method === 'POST') {
+    if (!session.superadmin) return needSuper();
+    let body;
+    try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const r = projects.remove(body && body.id);
+    if (r.ok) audit(session.user, 'project.delete', r.project.name, 'grouping only; repos/databases/sites untouched');
+    return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true } : { error: r.error }));
   }
   if (p === '/api/git/projects') {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));

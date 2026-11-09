@@ -59,6 +59,7 @@ j('/api/me').then(m => {
   if (m.admin) {
     if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
+    if ($('navLinkProjects') && m.superadmin) $('navLinkProjects').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkSites')) $('navLinkSites').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
@@ -70,7 +71,8 @@ j('/api/me').then(m => {
     $('pm2RestartBtn').style.display = '';
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
-  if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
+  if (!m.superadmin && ['users', 'files', 'projects'].includes(currentView())) location.hash = '#/overview';
+    if (m.superadmin && currentView() === 'projects') loadProjects();
     if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
@@ -1845,7 +1847,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites', 'projects'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -1880,6 +1882,7 @@ function navigateView(name, refresh = true) {
     if (view === 'activity') { activity(); activityAutoToggle(); }
     if (view === 'deploy') { deployJobsRefresh(); undLoadTargets(); }
     if (view === 'sites') sites();
+    if (view === 'projects') loadProjects();
   }
 }
 
@@ -1914,6 +1917,204 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   link.addEventListener('click', () => {
     toggleSidebar(false);
   });
+});
+
+// ---- Projects (superadmin) ----
+let projData = { projects: [], options: { repos: [], databases: [], backupDbs: [], sites: [] } };
+let projEditId = null;
+let projSel = { repos: new Set(), databases: new Set(), sites: new Set() };
+
+async function projPost(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  let d = {};
+  try { d = await r.json(); } catch {}
+  return { ok: r.ok, data: d };
+}
+
+async function loadProjects() {
+  if (!isSuper) return;
+  $('projError').style.display = 'none';
+  try {
+    projData = await j('/api/projects');
+    renderProjects();
+  } catch {
+    $('projError').textContent = 'Gagal memuat project (butuh akses superadmin).';
+    $('projError').style.display = '';
+  }
+}
+
+function projRepoHtml(r) {
+  if (!r.found) return `<div class="proj-row"><span class="proj-name">${escHtml(r.relPath)}</span> <span class="pill down">repo tidak ditemukan</span></div>`;
+  const link = r.github
+    ? `<a class="btn-sm ok" style="text-decoration:none" href="${escHtml(r.github)}" target="_blank" rel="noopener noreferrer">GitHub ↗</a>`
+    : (r.remote ? `<span class="proj-sub">${escHtml(r.remote)}</span>` : '<span class="proj-sub">tanpa remote</span>');
+  const pulled = r.lastPull ? ' · pull ' + escHtml(fmtUserDate(r.lastPull)) : '';
+  return `<div class="proj-row">
+    <div><span class="proj-name">${escHtml(r.name)}</span> <span class="pill">${escHtml(r.branch)}</span> ${r.dirty ? '<span class="pill warn">dirty</span>' : ''}${r.broken ? '<span class="pill down">broken</span>' : ''} ${link}</div>
+    <div class="proj-sub"><span class="proj-mono">${escHtml(r.hash)}</span> ${escHtml(r.message || '')} · ${escHtml(r.time || '')}${pulled}</div>
+  </div>`;
+}
+
+function projDbHtml(d) {
+  let live;
+  if (d.live === true) live = `<span class="pill ok">live · ${escHtml(fmtBytes(d.size || 0))}</span>`;
+  else if (d.live === false) live = '<span class="pill down">tidak ada di server</span>';
+  else live = '<span class="pill warn">status MySQL tidak diketahui</span>';
+  const b = d.backups;
+  const bk = b.count
+    ? `<span class="pill ok">${b.count} backup</span> <span class="proj-sub">terakhir ${escHtml(fmtUserDate(b.latest.mtime))} · ${escHtml(b.latest.category)} · ${escHtml(fmtBytes(b.latest.size))} · total ${escHtml(fmtBytes(b.totalBytes))}</span>`
+    : '<span class="pill warn">belum ada backup</span>';
+  return `<div class="proj-row">
+    <div><span class="proj-name proj-mono">${escHtml(d.name)}</span> ${live}</div>
+    <div>${bk}</div>
+  </div>`;
+}
+
+function projSiteHtml(s) {
+  if (!s.found) return `<div class="proj-row"><span class="proj-name">${escHtml(s.file)}</span> <span class="pill down">config nginx tidak ditemukan</span></div>`;
+  const scheme = s.ssl ? 'https' : 'http';
+  const doms = (s.domains || []).length
+    ? s.domains.map(dm => `<div><strong>${escHtml(dm)}</strong>${/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm) ? ` <a class="btn-sm ok" style="text-decoration:none" href="${scheme}://${escHtml(dm)}" target="_blank" rel="noopener noreferrer">Visit ↗</a>` : ''}</div>`).join('')
+    : '<div class="proj-sub">(tanpa domain)</div>';
+  return `<div class="proj-row">
+    ${doms}
+    <div>${s.broken ? '<span class="pill down">broken</span>' : `<span class="pill">${escHtml(s.type)}</span>`} ${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'} <span class="proj-sub proj-mono">${escHtml(s.file)}</span></div>
+  </div>`;
+}
+
+function projSection(title, items, html) {
+  return `<div class="proj-sec"><div class="proj-sec-title">${title} <span class="badge">${items.length}</span></div>${items.length ? items.map(html).join('') : '<div class="proj-sub">Belum ada yang ditautkan</div>'}</div>`;
+}
+
+function renderProjects() {
+  const q = ($('projSearch').value || '').trim().toLowerCase();
+  const all = projData.projects || [];
+  const hay = p => [p.name, p.description, ...p.repos.map(r => `${r.relPath} ${r.remote || ''}`), ...p.databases.map(d => d.name), ...p.sites.flatMap(s => [s.file, ...(s.domains || [])])].join(' ').toLowerCase();
+  const list = all.filter(p => !q || hay(p).includes(q));
+  $('projCount').textContent = list.length === all.length ? all.length : `${list.length}/${all.length}`;
+  if (projData.dbError) {
+    $('projError').textContent = 'MySQL tidak bisa dibaca: ' + projData.dbError;
+    $('projError').style.display = '';
+  }
+  if (!list.length) {
+    $('projList').innerHTML = `<span style="color:var(--mut);font-size:12px">${all.length ? 'Tidak ada project yang cocok dengan filter' : 'Belum ada project. Klik “+ New Project” untuk membuat yang pertama.'}</span>`;
+    return;
+  }
+  $('projList').innerHTML = list.map(p => `
+    <div class="proj-card">
+      <div class="proj-head">
+        <div>
+          <div class="proj-title">${escHtml(p.name)}</div>
+          ${p.description ? `<div class="proj-sub">${escHtml(p.description)}</div>` : ''}
+        </div>
+        <div style="white-space:nowrap"><button class="btn-sm" data-proj-edit="${escHtml(p.id)}">Edit</button> <button class="btn-sm danger" data-proj-del="${escHtml(p.id)}">Hapus</button></div>
+      </div>
+      ${projSection('Git deployments', p.repos, projRepoHtml)}
+      ${projSection('Databases', p.databases, projDbHtml)}
+      ${projSection('Hosted sites', p.sites, projSiteHtml)}
+      <div class="proj-sub" style="margin-top:8px">dibuat oleh ${escHtml(p.createdBy || '—')} · diubah ${escHtml(fmtUserDate(p.updatedAt))}</div>
+    </div>`).join('');
+}
+
+// -- form --
+function projPickRows(key, rows, q) {
+  const f = (q || '').trim().toLowerCase();
+  const shown = rows.filter(r => !f || r.text.toLowerCase().includes(f));
+  $({ repos: 'pickRepos', databases: 'pickDbs', sites: 'pickSites' }[key]).innerHTML = shown.length
+    ? shown.map(r => `<label class="proj-opt"><input type="checkbox" data-pick="${key}" data-v="${escHtml(r.value)}" ${projSel[key].has(r.value) ? 'checked' : ''}/> <span>${escHtml(r.text)}${r.note ? ` <em>${escHtml(r.note)}</em>` : ''}</span></label>`).join('')
+    : '<div class="proj-sub">Tidak ada</div>';
+  $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[key]).textContent = projSel[key].size;
+}
+
+function projPickModel() {
+  const o = projData.options || {};
+  const withMissing = (rows, key) => {
+    const have = new Set(rows.map(r => r.value));
+    const missing = [...projSel[key]].filter(v => !have.has(v)).map(v => ({ value: v, text: v, note: '(tidak ditemukan)' }));
+    return [...rows, ...missing];
+  };
+  const liveDbs = new Set((o.databases || []).map(d => d.name));
+  const dbRows = [
+    ...(o.databases || []).map(d => ({ value: d.name, text: d.name, note: fmtBytes(d.size || 0) })),
+    ...(o.backupDbs || []).filter(n => !liveDbs.has(n)).map(n => ({ value: n, text: n, note: '(hanya backup)' })),
+  ];
+  return {
+    repos: withMissing((o.repos || []).map(r => ({ value: r.relPath, text: r.relPath, note: r.remote })), 'repos'),
+    databases: withMissing(dbRows, 'databases'),
+    sites: withMissing((o.sites || []).map(s => ({ value: s.id, text: (s.domains || []).join(', ') || s.file, note: s.file })), 'sites'),
+  };
+}
+
+function projRenderPickers() {
+  const m = projPickModel();
+  projPickRows('repos', m.repos, $('pickRepoQ').value);
+  projPickRows('databases', m.databases, $('pickDbQ').value);
+  projPickRows('sites', m.sites, $('pickSiteQ').value);
+}
+
+async function projOpenForm(id) {
+  projEditId = id || null;
+  const p = id ? (projData.projects || []).find(x => x.id === id) : null;
+  $('projModalTitle').textContent = p ? 'Edit Project — ' + p.name : 'New Project';
+  $('projName').value = p ? p.name : '';
+  $('projDesc').value = p ? p.description : '';
+  projSel = {
+    repos: new Set(p ? p.repos.map(r => r.relPath) : []),
+    databases: new Set(p ? p.databases.map(d => d.name) : []),
+    sites: new Set(p ? p.sites.map(s => s.id) : []),
+  };
+  ['pickRepoQ', 'pickDbQ', 'pickSiteQ'].forEach(i => { $(i).value = ''; });
+  $('projFormErr').style.display = 'none';
+  projRenderPickers();
+  $('projModal').classList.add('open');
+  $('projName').focus();
+}
+
+async function projSave() {
+  const btn = $('projSave');
+  btn.disabled = true;
+  try {
+    const body = { name: $('projName').value, description: $('projDesc').value, repos: [...projSel.repos], databases: [...projSel.databases], sites: [...projSel.sites] };
+    if (projEditId) body.id = projEditId;
+    const r = await projPost(projEditId ? '/api/projects/update' : '/api/projects', body);
+    if (!r.ok) { $('projFormErr').textContent = r.data.error || 'Gagal menyimpan'; $('projFormErr').style.display = ''; return; }
+    $('projModal').classList.remove('open');
+    loadProjects();
+  } catch {
+    $('projFormErr').textContent = 'Gagal menyimpan'; $('projFormErr').style.display = '';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function projDelete(id) {
+  const p = (projData.projects || []).find(x => x.id === id);
+  if (!p || !confirm(`Hapus project "${p.name}"?\n\nHanya pengelompokan yang dihapus. Repo, database, backup, dan config nginx tidak disentuh.`)) return;
+  const r = await projPost('/api/projects/delete', { id });
+  if (!r.ok) { $('projError').textContent = r.data.error || 'Gagal menghapus'; $('projError').style.display = ''; return; }
+  loadProjects();
+}
+
+$('projNew').addEventListener('click', () => projOpenForm(null));
+$('projRefresh').addEventListener('click', loadProjects);
+$('projSearch').addEventListener('input', renderProjects);
+$('projSave').addEventListener('click', projSave);
+$('projCancel').addEventListener('click', () => $('projModal').classList.remove('open'));
+$('projModalClose').addEventListener('click', () => $('projModal').classList.remove('open'));
+$('projModal').addEventListener('click', (e) => { if (e.target === $('projModal')) $('projModal').classList.remove('open'); });
+['pickRepoQ', 'pickDbQ', 'pickSiteQ'].forEach(i => $(i).addEventListener('input', projRenderPickers));
+$('projModal').addEventListener('change', (e) => {
+  const c = e.target;
+  if (!c.dataset || !c.dataset.pick) return;
+  projSel[c.dataset.pick][c.checked ? 'add' : 'delete'](c.dataset.v);
+  // Hanya update counter; render ulang akan mereset posisi scroll daftar.
+  $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
+});
+$('projList').addEventListener('click', (e) => {
+  const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]');
+  if (ed) projOpenForm(ed.dataset.projEdit);
+  else if (dl) projDelete(dl.dataset.projDel);
 });
 
 // ---- Auto Deploy ----
