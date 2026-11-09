@@ -1085,16 +1085,23 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .usage-sec:last-child { margin-bottom: 0; }
 
 /* Projects */
-.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; }
-.proj-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
-.proj-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
-.proj-title { font-size: 16px; font-weight: 600; }
-.proj-sec { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-.proj-sec-title { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--mut); margin-bottom: 6px; }
-.proj-row { padding: 4px 0; display: flex; flex-direction: column; gap: 3px; min-width: 0; word-break: break-word; }
+.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 8px; align-items: start; }
+.proj-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; font-size: 12px; }
+.proj-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 2px; }
+.proj-head > div:first-child { min-width: 0; flex: 1; }
+.proj-title { font-size: 13px; font-weight: 600; }
+.proj-sec { border-top: 1px solid var(--border); padding-top: 4px; margin-top: 4px; }
+.proj-sec-title { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--mut); margin-bottom: 2px; }
+.proj-row { padding: 2px 0; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.proj-line { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.proj-push { margin-left: auto; flex: none; }
+.proj-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .proj-name { font-weight: 600; }
-.proj-sub { color: var(--mut); font-size: 12px; }
+.proj-sub { color: var(--mut); font-size: 11px; }
 .proj-mono { font-family: var(--font-mono); }
+.proj-card .pill { font-size: 10px; padding: 1px 6px; flex: none; }
+.proj-card .btn-sm { font-size: 11px; padding: 2px 7px; flex: none; }
+.proj-card .badge { font-size: 10px; padding: 0 6px; }
 .proj-lbl { display: block; font-size: 12px; color: var(--mut); margin-bottom: 4px; }
 .proj-picks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .proj-pick { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
