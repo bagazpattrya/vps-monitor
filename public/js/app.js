@@ -1,6 +1,9 @@
 
 const $ = id => document.getElementById(id);
 
+const loadingHtml = (text) => `<span class="loading-box"><span class="spinner"></span>${text || 'Loading…'}</span>`;
+const skelCards = (n = 2) => Array.from({ length: n }, () => '<div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div>').join('');
+
 const fmtBytes = (b) => {
   if (!b || b <= 0) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -317,7 +320,7 @@ async function previewFsFile(filePath) {
   fsCurrentPreviewPath = filePath;
   $('fsPreviewTitle').textContent = filePath.split('/').pop() || 'Preview';
   $('fsPreviewSize').textContent = 'Loading...';
-  $('fsPreviewContent').textContent = 'Memuat isi file...';
+  $('fsPreviewContent').innerHTML = loadingHtml('Memuat isi file…');
   $('fsPreviewNotice').style.display = 'none';
   $('fsPreviewDownloadBtn').onclick = () => {
     location.href = `/api/fs/download?path=${encodeURIComponent(filePath)}`;
@@ -471,7 +474,7 @@ async function openSiteConfig(id) {
   if (!s) return;
   $('siteCfgTitle').textContent = 'Config nginx — ' + s.file;
   $('siteCfgMeta').textContent = s.id;
-  $('siteCfgContent').textContent = 'Memuat config...';
+  $('siteCfgContent').innerHTML = loadingHtml('Memuat config…');
   $('siteCfgModal').classList.add('open');
   try {
     const d = await j('/api/sites/config?id=' + encodeURIComponent(id));
@@ -1645,7 +1648,7 @@ async function serviceRestart(unit, btn) {
 async function viewLog(file) {
   if (!file) return;
   $('gitModalTitle').textContent = `tail: ${file}`;
-  $('gitModalBody').textContent = 'Loading...';
+  $('gitModalBody').innerHTML = loadingHtml('Loading…');
   $('gitModalBody').className = 'modal-body';
   $('gitModal').classList.add('open');
   try {
@@ -1690,7 +1693,8 @@ function openModalText(title, text, ok) {
   $('gitModal').classList.add('open');
 }
 async function showSchedTasks(dir) {
-  openModalText('schedule:list — ' + dir, 'Loading...');
+  openModalText('schedule:list — ' + dir, '');
+  $('gitModalBody').innerHTML = loadingHtml('Loading…');
   try {
     const d = await j('/api/workers/schedule?dir=' + encodeURIComponent(dir));
     if (!d.ok) return openModalText('schedule:list — ' + dir, d.error || d.raw || 'Failed', false);
@@ -1934,6 +1938,7 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
 });
 
 // ---- Projects (superadmin) ----
+let projLoaded = false;
 let projData = { projects: [], options: { repos: [], databases: [], backupDbs: [], sites: [] } };
 let projEditId = null;
 let projSel = { repos: new Set(), databases: new Set(), sites: new Set() };
@@ -1946,15 +1951,22 @@ async function projPost(url, body) {
   return { ok: r.ok, data: d };
 }
 
-async function loadProjects() {
+async function loadProjects(fresh = false) {
   if (!isSuper) return;
   $('projError').style.display = 'none';
+  const btn = $('projRefresh');
+  if (btn) btn.classList.add('is-loading');
+  if (!projLoaded) $('projList').innerHTML = skelCards(3); // kunjungan pertama: kerangka kartu, bukan teks kosong
   try {
-    projData = await j('/api/projects');
+    projData = await j('/api/projects' + (fresh === true ? '?fresh=1' : ''));
+    projLoaded = true;
     renderProjects();
   } catch {
+    if (!projLoaded) $('projList').innerHTML = '';
     $('projError').textContent = 'Gagal memuat project (butuh akses superadmin).';
     $('projError').style.display = '';
+  } finally {
+    if (btn) btn.classList.remove('is-loading');
   }
 }
 
@@ -2115,7 +2127,7 @@ async function projDelete(id) {
 }
 
 $('projNew').addEventListener('click', () => projOpenForm(null));
-$('projRefresh').addEventListener('click', loadProjects);
+$('projRefresh').addEventListener('click', () => loadProjects(true)); // tombol Refresh = scan git baru
 $('projSearch').addEventListener('input', renderProjects);
 $('projSave').addEventListener('click', projSave);
 $('projCancel').addEventListener('click', () => $('projModal').classList.remove('open'));
@@ -2465,7 +2477,7 @@ async function openRenameModal(rel, mode) {
   ['rnNewDir', 'rnNewDb', 'rnPassword'].forEach((id) => { $(id).value = ''; });
   $('rnOutput').style.display = 'none';
   $('rnCurrent').textContent = '';
-  $('rnStatus').textContent = 'Memuat info project...';
+  $('rnStatus').innerHTML = loadingHtml('Memuat info project…');
   $('rnStart').disabled = true;
   $('rnNewDb').disabled = true;
   $('rnModal').classList.add('open');
@@ -2552,7 +2564,7 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.pull-split')
 async function openSeedModal(rel) {
   seedRel = rel;
   $('seedModalTitle').textContent = `Run Seeder: ${rel}`;
-  $('seedList').textContent = 'Loading…';
+  $('seedList').innerHTML = loadingHtml('Loading…');
   $('seedOut').style.display = 'none';
   $('seedRun').disabled = true;
   $('seedModal').classList.add('open');
@@ -2669,7 +2681,7 @@ async function openDbSyncModal(rel) {
   dbSyncTarget = rel;
   $('dbSyncModalTitle').textContent = `Sync DB ke: ${rel}`;
   $('dbSyncTargetInfo').textContent = rel;
-  $('dbSyncSource').innerHTML = '<option value="">Memuat sumber database...</option>';
+  $('dbSyncSource').innerHTML = '<option value="">Memuat sumber database…</option>';
   $('dbSyncSource').disabled = true;
   $('dbSyncSrcDb').textContent = '—';
   $('dbSyncDstDb').textContent = '—';
@@ -2966,7 +2978,7 @@ function renderDbDump() {
 $('dbDumpBtn').addEventListener('click', async () => {
   $('dbDumpModal').classList.add('open');
   $('dbDumpSearch').value = '';
-  $('dbDumpList').textContent = 'Loading…';
+  $('dbDumpList').innerHTML = loadingHtml('Loading…');
   try {
     dbDumpItems = (await api('GET', '/api/backups/databases')).databases || [];
     renderDbDump();

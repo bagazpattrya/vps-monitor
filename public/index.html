@@ -8,6 +8,7 @@
 
 <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="/js/theme.js"></script>
+<script src="/js/loading.js"></script>
 <meta name="theme-color" content="#090b0e"/>
 <link rel="stylesheet" href="/css/style.css"/>
 </head>
@@ -218,7 +219,7 @@
       </div>
       <div id="projError" style="display:none;color:var(--bad);font-size:12px;margin-bottom:12px"></div>
       <div class="proj-grid" id="projList">
-        <span style="color:var(--mut);font-size:12px">Memuat project...</span>
+        <div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div><div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div>
       </div>
     </div>
   </div><!-- /view-projects -->
@@ -278,7 +279,7 @@
     <!-- Mounts & Physical Partitions -->
     <div class="worker-sub" style="margin-top:0">Mounts &amp; Inodes Health</div>
     <div class="git-group-items" id="mountsList" style="margin-bottom:16px">
-      <span style="color:var(--mut);font-size:12px">Loading partitions...</span>
+      <span class="loading-box"><span class="spinner"></span>Loading partitions…</span>
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:6px">
@@ -334,7 +335,7 @@
     <!-- Supervisor Section -->
     <div class="worker-sub">Supervisorctl Managed Workers (<span id="supCount">0</span>)</div>
     <div class="git-group-items" id="supList" style="margin-bottom:14px">
-      <span style="color:var(--mut);font-size:12px">Loading supervisor status...</span>
+      <span class="loading-box"><span class="spinner"></span>Loading supervisor status…</span>
     </div>
 
     <!-- Cron Jobs Section -->
@@ -607,7 +608,7 @@
             </tr>
           </thead>
           <tbody id="backupList">
-            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat data backup...</td></tr>
+            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px"><span class="loading-box"><span class="spinner"></span>Memuat data backup…</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -661,7 +662,7 @@
             </tr>
           </thead>
           <tbody id="fsList">
-            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">Memuat direktori...</td></tr>
+            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px"><span class="loading-box"><span class="spinner"></span>Memuat direktori…</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -697,7 +698,7 @@
             </tr>
           </thead>
           <tbody id="usersList">
-            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px">Memuat data pengguna...</td></tr>
+            <tr><td colspan="6" style="color:var(--mut);text-align:center;padding:18px"><span class="loading-box"><span class="spinner"></span>Memuat data pengguna…</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -735,7 +736,7 @@
             </tr>
           </thead>
           <tbody id="sitesList">
-            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px">Memuat sites...</td></tr>
+            <tr><td colspan="7" style="color:var(--mut);text-align:center;padding:18px"><span class="loading-box"><span class="spinner"></span>Memuat sites…</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -785,7 +786,7 @@
             </tr>
           </thead>
           <tbody id="activityList">
-            <tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px">Memuat activity...</td></tr>
+            <tr><td colspan="5" style="color:var(--mut);text-align:center;padding:18px"><span class="loading-box"><span class="spinner"></span>Memuat activity…</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -1017,7 +1018,7 @@
       </select>
     </div>
     <div style="padding:6px 16px 0;font-size:12px;color:var(--mut)" id="dbDumpCount"></div>
-    <div style="padding:6px 16px 14px;overflow:auto;flex:1;font-size:13px" id="dbDumpList">Loading…</div>
+    <div style="padding:6px 16px 14px;overflow:auto;flex:1;font-size:13px" id="dbDumpList"><span class="loading-box"><span class="spinner"></span>Loading…</span></div>
   </aside>
 </div>
 
@@ -1029,7 +1030,7 @@
     </div>
     <div style="padding:14px 16px;overflow:auto">
       <div style="font-size:12px;color:var(--mut);margin-bottom:8px">Pilih seeder yang akan dijalankan (<code>db:seed --class=… --force</code>). Seeder bisa mengubah data live — pastikan aman diulang.</div>
-      <div class="seed-list" id="seedList">Loading…</div>
+      <div class="seed-list" id="seedList"><span class="loading-box"><span class="spinner"></span>Loading…</span></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
         <button class="btn" id="seedCancel">Batal</button>
         <button class="btn-pull" id="seedRun" disabled>Run Selected</button>

@@ -1542,6 +1542,76 @@ function getGitProjects(force = false) {
   return projects;
 }
 
+// ---- versi async dari scanner git (dipakai /api/projects) ----
+// getGitProjects() di atas memakai execSync per repo (4-6 proses git, sebagian lewat sudo) sehingga
+// saat cache kedaluwarsa SELURUH server (semua request + polling) macet sampai semua repo selesai.
+// Versi ini menjalankan git secara paralel (dibatasi) tanpa memblokir event loop.
+const GIT_SCAN_CONCURRENCY = 4;
+let gitRefreshing = null;
+
+async function scanGitRepoAsync(d) {
+  const rel = path.relative(SCAN_ROOT, d);
+  const name = path.basename(d);
+  const parts = rel.split(path.sep);
+  const group = parts.length > 1 ? parts[0] : 'Projects';
+  const isLaravel = fs.existsSync(path.join(d, 'artisan'));
+  const isWP = fs.existsSync(path.join(d, 'wp-load.php'));
+  const base = { name, group, relPath: rel, path: d, remote: '', lastPull: null, isLaravel, isWP, isNode: !isLaravel && !isWP && fs.existsSync(path.join(d, 'package.json')), isDev: isDevProjectName(name) };
+  const git = (args, timeout) => runCmd(gitCmdFor(d, args + ' 2>/dev/null'), { timeout });
+  // filemode=false harus terpasang sebelum `status`; rev-parse tidak bergantung padanya.
+  const [, head] = await Promise.all([git('config core.filemode false', 2000), git('rev-parse --abbrev-ref HEAD', 2000)]);
+  if (!head.ok) {
+    return { ...base, branch: 'BROKEN', hash: '—', time: '—', message: 'git repo tidak bisa dibaca (' + String(head.error || '').slice(0, 100) + ')', dirty: false, broken: true };
+  }
+  const branch = head.output.trim() || 'unknown';
+  const [log, status, remote] = await Promise.all([
+    git('log -1 --format="%h%x1f%cr%x1f%ct%x1f%s"', 2000),
+    git('status --porcelain', 5000),
+    git('remote get-url origin', 1500),
+  ]);
+  if (!log.ok && !status.ok) {
+    return { ...base, branch, hash: '—', time: '—', message: 'git repo error (' + String(log.error || status.error || '').slice(0, 100) + ')', dirty: false, remote: '', lastPull: null, broken: true };
+  }
+  const [hash, time, ct, ...msg] = log.output.trim().split('\x1f');
+  let lastPull = null;
+  try {
+    const fetchHead = path.join(d, '.git', 'FETCH_HEAD');
+    if (fs.existsSync(fetchHead)) lastPull = fs.statSync(fetchHead).mtimeMs;
+    else if (ct) lastPull = parseInt(ct, 10) * 1000;
+  } catch {}
+  return { ...base, branch, hash: hash || '—', time: time || '—', message: msg.join('\x1f') || '—', dirty: status.output.trim().length > 0, remote: remote.ok ? remote.output.trim() : '', lastPull };
+}
+
+function refreshGitProjectsAsync() {
+  if (gitRefreshing) return gitRefreshing; // permintaan bersamaan berbagi satu scan
+  gitRefreshing = (async () => {
+    try {
+      const dirs = scanGitDirs(SCAN_ROOT, 6);
+      const out = new Array(dirs.length);
+      let next = 0;
+      const worker = async () => {
+        while (next < dirs.length) {
+          const i = next++;
+          try { out[i] = await scanGitRepoAsync(dirs[i]); } catch { out[i] = null; }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(GIT_SCAN_CONCURRENCY, dirs.length) }, worker));
+      gitCache = { time: Date.now(), projects: out.filter(Boolean) };
+      return gitCache.projects;
+    } finally { gitRefreshing = null; }
+  })();
+  return gitRefreshing;
+}
+
+// Stale-while-revalidate: cache segar -> langsung; cache basi tapi ada -> kembalikan basi + refresh di
+// belakang; belum ada / sengaja di-invalidate (time=0, mis. setelah pull) / fresh=true -> tunggu scan baru.
+async function getGitProjectsAsync(fresh = false) {
+  const age = Date.now() - gitCache.time;
+  if (!fresh && gitCache.time && age < 30_000) return gitCache.projects;
+  if (!fresh && gitCache.time) { refreshGitProjectsAsync().catch(() => {}); return gitCache.projects; }
+  return refreshGitProjectsAsync();
+}
+
 // Validasi relPath project git (whitelist) dan kembalikan { full, uid, me } atau { error }.
 function resolveGitProject(rel) {
   if (typeof rel !== 'string' || !rel || rel.includes('..') || rel.startsWith('/')) return { error: 'Invalid project' };
@@ -3876,9 +3946,9 @@ async function runRenameJob(job, p) {
 
 // ---- Projects: gabungkan referensi tersimpan (projects.js) dengan data live git / MySQL / backup / nginx ----
 // Hanya superadmin yang boleh memanggil ini, jadi hidden keywords tidak diterapkan.
-async function buildProjectsView() {
-  const gitList = getGitProjects();
-  const dbRes = await listDatabases(null);
+async function buildProjectsView(fresh = false) {
+  // Git (paralel, non-blocking) dan MySQL berjalan bersamaan, bukan berurutan.
+  const [gitList, dbRes] = await Promise.all([getGitProjectsAsync(fresh), listDatabases(null)]);
   const backups = getBackupInfo();
   const siteList = getHostedSites();
 
@@ -4450,7 +4520,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/projects' && req.method === 'GET') {
     if (!session.superadmin) return needSuper();
-    return send(res, 200, JSON.stringify(await buildProjectsView()));
+    return send(res, 200, JSON.stringify(await buildProjectsView(url.searchParams.get('fresh') === '1')));
   }
   if (p === '/api/projects' && req.method === 'POST') {
     if (!session.superadmin) return needSuper();
@@ -4898,3 +4968,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`vps-monitor on http://${HOST}:${PORT}`));
+// Hangatkan cache git di belakang layar supaya kunjungan pertama ke Projects tidak menunggu scan.
+refreshGitProjectsAsync().catch(() => {});
