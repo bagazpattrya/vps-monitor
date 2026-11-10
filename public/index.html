@@ -7,6 +7,8 @@
 <link rel="icon" type="image/png" href="/images/logo.png"/>
 
 <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/js/theme.js"></script>
+<meta name="theme-color" content="#090b0e"/>
 <link rel="stylesheet" href="/css/style.css"/>
 </head>
 <body>
@@ -69,6 +71,7 @@
     </div>
   </div>
   <div class="header-right">
+    <button class="btn theme-toggle" type="button" title="Toggle light / dark mode" aria-label="Toggle light / dark mode"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg></button>
     <button class="btn" id="fullscreenBtn" title="Fullscreen Monitor (Overview, History & Services)">
       <svg id="fsIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
       <span id="fsLabel">Fullscreen</span>

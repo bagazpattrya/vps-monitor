@@ -1083,6 +1083,18 @@ async function svc() {
   } catch (e) {}
 }
 
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+// Re-apply chart colors when the theme is toggled.
+document.addEventListener('themechange', () => {
+  if (!chart) return;
+  const o = chart.options;
+  o.plugins.legend.labels.color = cssVar('--chart-tx');
+  Object.assign(o.plugins.tooltip, { backgroundColor: cssVar('--bg-elev'), titleColor: cssVar('--tx'), bodyColor: cssVar('--soft-tx'), borderColor: cssVar('--border-light') });
+  for (const a of ['x', 'y']) { o.scales[a].ticks.color = cssVar('--chart-tick'); o.scales[a].grid.color = cssVar('--chart-grid'); }
+  chart.update();
+});
+
 async function hist() {
   try {
     const d = await j(`/api/history?limit=${histLimit}`);
@@ -1130,26 +1142,26 @@ async function hist() {
           interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: {
-              labels: { color: '#8a94a6', boxWidth: 12, usePointStyle: true, font: { size: 11 } }
+              labels: { color: cssVar('--chart-tx'), boxWidth: 12, usePointStyle: true, font: { size: 11 } }
             },
             tooltip: {
-              backgroundColor: '#171b24',
-              titleColor: '#f0f4f8',
-              bodyColor: '#cbd5e1',
-              borderColor: '#2d3446',
+              backgroundColor: cssVar('--bg-elev'),
+              titleColor: cssVar('--tx'),
+              bodyColor: cssVar('--soft-tx'),
+              borderColor: cssVar('--border-light'),
               borderWidth: 1
             }
           },
           scales: {
             x: {
-              ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 11 } },
-              grid: { color: 'rgba(34, 39, 52, 0.5)' }
+              ticks: { color: cssVar('--chart-tick'), maxTicksLimit: 8, font: { size: 11 } },
+              grid: { color: cssVar('--chart-grid') }
             },
             y: {
               min: 0,
               max: 100,
-              ticks: { color: '#64748b', stepSize: 25, callback: v => v + '%', font: { size: 11 } },
-              grid: { color: 'rgba(34, 39, 52, 0.5)' }
+              ticks: { color: cssVar('--chart-tick'), stepSize: 25, callback: v => v + '%', font: { size: 11 } },
+              grid: { color: cssVar('--chart-grid') }
             }
           }
         }
@@ -2946,7 +2958,7 @@ function renderDbDump() {
     .sort((a, b) => (key === 'size' ? a.size - b.size : a.name.localeCompare(b.name)) * (dir === 'desc' ? -1 : 1));
   $('dbDumpCount').textContent = `${items.length} / ${dbDumpItems.length} database`;
   $('dbDumpList').innerHTML = items.length ? items.map((d) => `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd, rgba(255,255,255,.08))">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <div><strong>${escHtml(d.name)}</strong> <span style="color:var(--mut);font-size:12px">${fmtBytes(d.size)}</span></div>
       <a href="/api/backups/dump?db=${encodeURIComponent(d.name)}" class="btn-sm ok" style="text-decoration:none" download>⬇ Download</a>
     </div>`).join('') : '<div style="color:var(--mut)">Tidak ada database.</div>';

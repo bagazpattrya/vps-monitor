@@ -5,21 +5,27 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>VPS Monitor · Login</title>
 <link rel="icon" type="image/png" href="/images/logo.png"/>
+<script src="/js/theme.js"></script>
 <style>
-:root{--bg:#0f1115;--card:#171b22;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--bad:#f31260}
+:root{--bg:#0f1115;--card:#171b22;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--bad:#f31260;--bd:#232a35;--in-bd:#2c3544;--in-bg:#0f1115;--btn-tx:#04121f;color-scheme:dark}
+:root[data-theme="light"]{--bg:#f4f6fa;--card:#fff;--mut:#5b6678;--tx:#151a23;--ac:#2563eb;--bad:#dc2626;--bd:#dde2ea;--in-bd:#c8d0dc;--in-bg:#fff;--btn-tx:#fff;color-scheme:light}
+.theme-toggle{position:fixed;top:14px;right:14px;width:auto;margin:0;padding:8px;line-height:0;background:var(--card);color:var(--tx);border:1px solid var(--bd)}
+.theme-toggle svg{width:16px;height:16px}.theme-toggle .ico-sun{display:none}
+:root[data-theme="light"] .theme-toggle .ico-sun{display:block}:root[data-theme="light"] .theme-toggle .ico-moon{display:none}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-form{width:min(340px,92vw);background:var(--card);border:1px solid #232a35;border-radius:12px;padding:22px}
+form{width:min(340px,92vw);background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:22px}
 h1{font-size:18px;margin:0 0 4px}.mut{color:var(--mut);font-size:12px;margin:0 0 16px}
 label{display:block;font-size:12px;color:var(--mut);margin:12px 0 4px}
-input{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #2c3544;background:#0f1115;color:var(--tx);font:inherit}
+input{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--in-bd);background:var(--in-bg);color:var(--tx);font:inherit}
 input:focus{outline:2px solid var(--ac);border-color:transparent}
-button{width:100%;margin-top:18px;padding:10px;border:0;border-radius:8px;background:var(--ac);color:#04121f;font:inherit;font-weight:600;cursor:pointer}
+button{width:100%;margin-top:18px;padding:10px;border:0;border-radius:8px;background:var(--ac);color:var(--btn-tx);font:inherit;font-weight:600;cursor:pointer}
 button:disabled{opacity:.6;cursor:default}
 #err{color:var(--bad);font-size:12px;min-height:18px;margin-top:12px}
 </style>
 </head>
 <body>
+<button class="btn theme-toggle" type="button" title="Toggle light / dark mode" aria-label="Toggle light / dark mode"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg></button>
 <form id="f">
 <h1>VPS Monitor</h1>
 <p class="mut">Sign in with your server account</p>

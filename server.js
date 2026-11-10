@@ -3964,6 +3964,8 @@ const server = http.createServer(async (req, res) => {
     return serveFile(req, res, '/login.html');
   }
 
+  if (p === '/js/theme.js') return serveFile(req, res, p); // dipakai halaman login (sebelum auth)
+
   const session = auth.getSession(req);
   if (!session) {
     if (p.startsWith('/api/')) return send(res, 401, JSON.stringify({ error: 'Unauthorized' }));
