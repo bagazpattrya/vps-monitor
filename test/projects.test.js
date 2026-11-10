@@ -64,3 +64,12 @@ test('remoteInfo builds a GitHub URL and strips credentials', () => {
 test('data/projects.json is git-ignored', () => {
   assert.ok(/^data\/projects\.json$/m.test(fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8')));
 });
+
+test('category is trimmed, optional, length-limited and can be changed/cleared', () => {
+  assert.strictEqual(projects.sanitize({ name: 'p' }).value.category, '');
+  assert.strictEqual(projects.sanitize({ name: 'p', category: '  Client   A ' }).value.category, 'Client A');
+  assert.ok(projects.sanitize({ name: 'p', category: 'x'.repeat(41) }).error);
+  const p = projects.create({ name: 'Catty', category: 'Internal' }, 'u').project;
+  assert.strictEqual(p.category, 'Internal');
+  assert.strictEqual(projects.update(p.id, { name: 'Catty', category: '' }).project.category, '');
+});

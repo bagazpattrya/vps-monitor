@@ -1941,6 +1941,10 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
 let projLoaded = false;
 let projData = { projects: [], options: { repos: [], databases: [], backupDbs: [], sites: [] } };
 let projEditId = null;
+// Kategori yang ditutup (disimpan per browser). '' = "Tanpa kategori".
+let projCollapsed = new Set();
+try { projCollapsed = new Set(JSON.parse(localStorage.getItem('projCollapsed') || '[]')); } catch {}
+const projSaveCollapsed = () => { try { localStorage.setItem('projCollapsed', JSON.stringify([...projCollapsed])); } catch {} };
 let projSel = { repos: new Set(), databases: new Set(), sites: new Set() };
 
 async function projPost(url, body) {
@@ -1956,7 +1960,7 @@ async function loadProjects(fresh = false) {
   $('projError').style.display = 'none';
   const btn = $('projRefresh');
   if (btn) btn.classList.add('is-loading');
-  if (!projLoaded) $('projList').innerHTML = skelCards(3); // kunjungan pertama: kerangka kartu, bukan teks kosong
+  if (!projLoaded) $('projList').innerHTML = `<div class="proj-grid">${skelCards(3)}</div>`; // kunjungan pertama: kerangka kartu, bukan teks kosong
   try {
     projData = await j('/api/projects' + (fresh === true ? '?fresh=1' : ''));
     projLoaded = true;
@@ -2021,7 +2025,7 @@ function projSection(title, items, html, cls) {
 function renderProjects() {
   const q = ($('projSearch').value || '').trim().toLowerCase();
   const all = projData.projects || [];
-  const hay = p => [p.name, p.description, ...p.repos.map(r => `${r.relPath} ${r.remote || ''}`), ...p.databases.map(d => d.name), ...p.sites.flatMap(s => [s.file, ...(s.domains || [])])].join(' ').toLowerCase();
+  const hay = p => [p.name, p.description, p.category, ...p.repos.map(r => `${r.relPath} ${r.remote || ''}`), ...p.databases.map(d => d.name), ...p.sites.flatMap(s => [s.file, ...(s.domains || [])])].join(' ').toLowerCase();
   const list = all.filter(p => !q || hay(p).includes(q));
   $('projCount').textContent = list.length === all.length ? all.length : `${list.length}/${all.length}`;
   if (projData.dbError) {
@@ -2032,7 +2036,36 @@ function renderProjects() {
     $('projList').innerHTML = `<span style="color:var(--mut);font-size:12px">${all.length ? 'Tidak ada project yang cocok dengan filter' : 'Belum ada project. Klik “+ New Project” untuk membuat yang pertama.'}</span>`;
     return;
   }
-  $('projList').innerHTML = list.map(p => `
+  const searching = !!q;
+  const groups = new Map();
+  for (const p of list) {
+    const c = p.category || '';
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(p);
+  }
+  // A-Z, "Tanpa kategori" selalu terakhir
+  const cats = [...groups.keys()].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+  const cnt = (arr, k) => arr.reduce((n, p) => n + p[k].length, 0);
+  $('projList').innerHTML = cats.map(c => {
+    const items = groups.get(c);
+    const open = searching || !projCollapsed.has(c); // saat mencari, kategori yang cocok selalu terbuka
+    const label = c || 'Tanpa kategori';
+    const sum = `${cnt(items, 'repos')} git · ${cnt(items, 'databases')} db · ${cnt(items, 'sites')} site`;
+    return `<div class="proj-cat${open ? '' : ' collapsed'}">
+      <button type="button" class="proj-cat-head" data-cat-toggle="${escHtml(c)}" aria-expanded="${open}">
+        <span class="proj-cat-name proj-clip${c ? '' : ' none'}" title="${escHtml(label)}">${escHtml(label)}</span><span class="badge">${items.length}</span><span class="proj-cat-sum">${sum}</span>
+      </button>
+      ${open ? `<div class="proj-grid">${items.map(projCardHtml).join('')}</div>` : ''}
+    </div>`;
+  }).join('');
+  const anyOpen = searching || cats.some(c => !projCollapsed.has(c));
+  $('projToggleAll').textContent = anyOpen ? 'Collapse all' : 'Expand all';
+  $('projToggleAll').dataset.mode = anyOpen ? 'collapse' : 'expand';
+  $('projCatList').innerHTML = [...new Set(all.map(p => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escHtml(c)}"></option>`).join('');
+}
+
+function projCardHtml(p) {
+  return `
     <div class="proj-card">
       <div class="proj-head">
         <div>
@@ -2044,7 +2077,7 @@ function renderProjects() {
       ${projSection('Git deployments', p.repos, projRepoHtml, 's-git')}
       ${projSection('Databases', p.databases, projDbHtml, 's-db')}
       ${projSection('Hosted sites', p.sites, projSiteHtml, 's-site')}
-    </div>`).join('');
+    </div>`;
 }
 
 // -- form --
@@ -2089,6 +2122,7 @@ async function projOpenForm(id) {
   $('projModalTitle').textContent = p ? 'Edit Project — ' + p.name : 'New Project';
   $('projName').value = p ? p.name : '';
   $('projDesc').value = p ? p.description : '';
+  $('projCat').value = p ? (p.category || '') : '';
   projSel = {
     repos: new Set(p ? p.repos.map(r => r.relPath) : []),
     databases: new Set(p ? p.databases.map(d => d.name) : []),
@@ -2105,7 +2139,7 @@ async function projSave() {
   const btn = $('projSave');
   btn.disabled = true;
   try {
-    const body = { name: $('projName').value, description: $('projDesc').value, repos: [...projSel.repos], databases: [...projSel.databases], sites: [...projSel.sites] };
+    const body = { name: $('projName').value, category: $('projCat').value, description: $('projDesc').value, repos: [...projSel.repos], databases: [...projSel.databases], sites: [...projSel.sites] };
     if (projEditId) body.id = projEditId;
     const r = await projPost(projEditId ? '/api/projects/update' : '/api/projects', body);
     if (!r.ok) { $('projFormErr').textContent = r.data.error || 'Gagal menyimpan'; $('projFormErr').style.display = ''; return; }
@@ -2129,6 +2163,13 @@ async function projDelete(id) {
 $('projNew').addEventListener('click', () => projOpenForm(null));
 $('projRefresh').addEventListener('click', () => loadProjects(true)); // tombol Refresh = scan git baru
 $('projSearch').addEventListener('input', renderProjects);
+$('projToggleAll').addEventListener('click', () => {
+  const cats = [...new Set((projData.projects || []).map(p => p.category || ''))];
+  projCollapsed = $('projToggleAll').dataset.mode === 'collapse' ? new Set(cats) : new Set();
+  projSaveCollapsed();
+  if ($('projSearch').value.trim()) $('projSearch').value = ''; // mode cari memaksa terbuka; reset agar tombol berefek
+  renderProjects();
+});
 $('projSave').addEventListener('click', projSave);
 $('projCancel').addEventListener('click', () => $('projModal').classList.remove('open'));
 $('projModalClose').addEventListener('click', () => $('projModal').classList.remove('open'));
@@ -2142,6 +2183,13 @@ $('projModal').addEventListener('change', (e) => {
   $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
 });
 $('projList').addEventListener('click', async (e) => {
+  const ct = e.target.closest('[data-cat-toggle]');
+  if (ct) {
+    const c = ct.dataset.catToggle;
+    if (projCollapsed.has(c)) projCollapsed.delete(c); else projCollapsed.add(c);
+    projSaveCollapsed();
+    return renderProjects();
+  }
   const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]'), pl = e.target.closest('[data-proj-pull]');
   if (pl) {
     if (pl.disabled) return;

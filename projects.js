@@ -51,13 +51,15 @@ function sanitize(input) {
   if (name.length > 80) return { error: 'Nama project maksimal 80 karakter' };
   const description = typeof i.description === 'string' ? i.description.trim() : '';
   if (description.length > 500) return { error: 'Deskripsi maksimal 500 karakter' };
+  const category = typeof i.category === 'string' ? i.category.trim().replace(/\s+/g, ' ') : '';
+  if (category.length > 40) return { error: 'Kategori maksimal 40 karakter' };
   const repos = cleanList(i.repos, validRepo, 'repos');
   if (repos.error) return repos;
   const databases = cleanList(i.databases, (s) => typeof s === 'string' && DB_RE.test(s), 'databases');
   if (databases.error) return databases;
   const sites = cleanList(i.sites, validSite, 'sites');
   if (sites.error) return sites;
-  return { value: { name, description, repos: repos.value, databases: databases.value, sites: sites.value } };
+  return { value: { name, description, category, repos: repos.value, databases: databases.value, sites: sites.value } };
 }
 
 const nameTaken = (list, name, exceptId) => list.some((p) => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase());

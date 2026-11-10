@@ -3992,7 +3992,7 @@ async function buildProjectsView(fresh = false) {
     dbError: dbRes.ok ? null : dbRes.error,
     backupsAvailable: !!backups.available,
     projects: projects.list().map((p) => ({
-      id: p.id, name: p.name, description: p.description, createdBy: p.createdBy, createdAt: p.createdAt, updatedAt: p.updatedAt,
+      id: p.id, name: p.name, description: p.description, category: p.category || '', createdBy: p.createdBy, createdAt: p.createdAt, updatedAt: p.updatedAt,
       repos: p.repos.map(repoView), databases: p.databases.map(dbView), sites: p.sites.map(siteView),
     })),
     // Pilihan untuk form: semua yang bisa ditautkan.

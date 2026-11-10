@@ -211,6 +211,7 @@
         <div class="proc-controls">
           <input type="search" id="projSearch" class="input" placeholder="Filter project, repo, database, domain..." style="min-width:240px" />
           <button class="btn ok" id="projNew" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">+ New Project</button>
+          <button class="btn" id="projToggleAll" title="Buka / tutup semua kategori">Collapse all</button>
           <button class="btn" id="projRefresh">Refresh</button>
         </div>
       </div>
@@ -218,8 +219,8 @@
         Project hanya mengelompokkan: git deployment, database (live + backup), dan hosted site. Menghapus project <strong>tidak</strong> menyentuh repo, database, maupun config nginx.
       </div>
       <div id="projError" style="display:none;color:var(--bad);font-size:12px;margin-bottom:12px"></div>
-      <div class="proj-grid" id="projList">
-        <div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div><div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div>
+      <div id="projList">
+        <div class="proj-grid"><div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div><div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div></div>
       </div>
     </div>
   </div><!-- /view-projects -->
@@ -934,6 +935,11 @@
       <div>
         <label class="proj-lbl" for="projName">Nama project</label>
         <input id="projName" class="input" style="width:100%" maxlength="80" autocomplete="off" />
+      </div>
+      <div>
+        <label class="proj-lbl" for="projCat">Kategori (opsional — pilih yang ada atau ketik baru)</label>
+        <input id="projCat" class="input" style="width:100%" maxlength="40" autocomplete="off" list="projCatList" placeholder="mis. Client A, Internal, Dev" />
+        <datalist id="projCatList"></datalist>
       </div>
       <div>
         <label class="proj-lbl" for="projDesc">Deskripsi (opsional)</label>
