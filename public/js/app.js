@@ -1318,7 +1318,17 @@ function renderGitProjects() {
   updateBatchButton();
 }
 
+function gitSkeletonHtml() {
+  const item = `<div class="git-skel-item"><span class="skel box"></span><div class="col"><span class="skel t"></span><div class="tags"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div><span class="skel m"></span></div><span class="skel btn-sk"></span></div>`;
+  const group = `<div class="git-group"><div class="git-group-head"><div class="git-group-title"><span class="skel"></span></div><span class="skel r"></span></div><div class="git-group-items">${item.repeat(3)}</div></div>`;
+  return `<div class="git-skel" aria-busy="true" aria-label="Scanning repositories">${group}<div class="git-skel-note"><span class="dots"><i></i><i></i><i></i></span>Scanning for git repositories…</div></div>`;
+}
+
 async function gitProjects() {
+  const list = $('gitList'), btn = $('gitRefresh');
+  if (btn) btn.classList.add('is-loading');
+  if (!rawGitProjects.length) list.innerHTML = gitSkeletonHtml();
+  else list.classList.add('is-refreshing'); // data lama tetap tampil, redup, sampai scan selesai
   try {
     const d = await j('/api/git/projects');
     rawGitProjects = d.projects || [];
@@ -1326,6 +1336,9 @@ async function gitProjects() {
     renderGitProjects();
   } catch (e) {
     $('gitList').innerHTML = '<span style="color:var(--bad);font-size:12px">Failed loading git projects</span>';
+  } finally {
+    list.classList.remove('is-refreshing');
+    if (btn) btn.classList.remove('is-loading');
   }
 }
 
@@ -2715,7 +2728,8 @@ $('rnStart').addEventListener('click', rnSubmit);
 $('gitSearch').addEventListener('input', renderGitProjects);
 
 $('gitRefresh').addEventListener('click', () => {
-  $('gitList').innerHTML = '<span style="color:var(--mut);font-size:12px">Scanning for repositories...</span>';
+  if ($('gitRefresh').classList.contains('is-loading')) return;
+  rawGitProjects = [];
   gitProjects();
 });
 

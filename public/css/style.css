@@ -629,6 +629,18 @@ th {
 th:hover { color: var(--tx); }
 tbody tr:hover { background: var(--row-hover); }
 
+/* Sticky first column (opaque backgrounds so scrolled content doesn't show through) */
+table.sticky-first th:first-child,
+table.sticky-first td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-card);
+  box-shadow: 1px 0 0 var(--border);
+}
+table.sticky-first th:first-child { z-index: 2; background: linear-gradient(var(--row-alt), var(--row-alt)), var(--bg-card); }
+table.sticky-first tbody tr:hover td:first-child { background: linear-gradient(var(--row-hover), var(--row-hover)), var(--bg-card); }
+
 .usage-cell {
   display: flex;
   align-items: center;
@@ -1233,3 +1245,40 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .theme-toggle .ico-sun { display: none; }
 :root[data-theme="light"] .theme-toggle .ico-sun { display: block; }
 :root[data-theme="light"] .theme-toggle .ico-moon { display: none; }
+
+/* Header: compact two-row layout on tablet/phone portrait.
+   Row 1: menu button + quick actions. Row 2: host / uptime / clock in one scrollable line.
+   User + logout live in the sidebar footer, so they are dropped from the header here. */
+@media (max-width: 820px) {
+  header { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand actions" "meta meta"; gap: 8px 10px; padding: 8px 14px; align-items: center; }
+  .header-left { display: contents; }
+  .brand-btn { grid-area: brand; justify-self: start; }
+  .header-right { grid-area: actions; margin-left: 0; gap: 8px; }
+  .meta-pills { grid-area: meta; flex-wrap: nowrap; overflow-x: auto; gap: 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .meta-pills::-webkit-scrollbar { display: none; }
+  .meta-pills .badge { flex: none; font-size: 11.5px; padding: 3px 9px; }
+  #os, .user-badge, #logout { display: none; }
+  #fsLabel { display: none; }
+  #fullscreenBtn, .theme-toggle { width: 34px; height: 32px; padding: 0; justify-content: center; }
+  .brand-btn { height: 32px; }
+}
+
+/* Git Deployments: skeleton loader */
+.git-skel .git-group-title .skel { width: 110px; height: 14px; }
+.git-skel .git-group-head .skel.r { width: 56px; height: 18px; border-radius: 99px; }
+.git-skel-item { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; }
+.git-skel-item .box { flex: none; width: 16px; height: 16px; border-radius: 4px; }
+.git-skel-item .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.git-skel-item .skel { height: 11px; }
+.git-skel-item .skel.t { height: 14px; width: 45%; }
+.git-skel-item .tags { display: flex; gap: 6px; }
+.git-skel-item .tags .skel { width: 52px; height: 16px; border-radius: 99px; }
+.git-skel-item .skel.m { width: 85%; }
+.git-skel-item .btn-sk { flex: none; width: 78px; height: 30px; border-radius: 8px; }
+.git-skel-item:nth-child(2) .skel.t { width: 60%; }
+.git-skel-item:nth-child(3) .skel.t { width: 35%; }
+.git-skel-item:nth-child(3) .skel.m { width: 70%; }
+.git-skel-note { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--mut); font-size: 12px; padding: 4px 0 2px; }
+.git-skel-note .dots i { background: var(--ac); }
+#gitRefresh.is-loading { opacity: .75; }
+.git-list.is-refreshing .git-group { opacity: .55; transition: opacity .15s; pointer-events: none; }
