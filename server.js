@@ -1792,6 +1792,7 @@ function pullGitProject(targetPath) {
       ? `sudo -H -u "#${uid}" git -C "${targetPath}" pull`
       : `git -C "${targetPath}" pull`;
     ensureFilemodeFalse(targetPath);
+    let selfRestart = false;
     const runFix = (out) => {
       let combined = out;
       try {
@@ -1815,11 +1816,18 @@ function pullGitProject(targetPath) {
               combined += '\n--- npm run build ---\n' + bOut;
             }
           } catch {}
-          try {
-            const pmOut = execSync(`sudo -H -u "#${uid}" pm2 restart "${dirName}" 2>&1 || pm2 restart "${dirName}" 2>&1`, { timeout: 30_000 }).toString();
-            combined += `\n--- pm2 restart ${dirName} ---\n` + pmOut;
-          } catch (pErr) {
-            combined += `\n--- pm2 restart ${dirName} [FAILED] ---\n` + (pErr.stdout || pErr.message);
+          if (path.resolve(targetPath) === path.resolve(__dirname)) {
+            // Update diri sendiri: jangan restart di tengah request (proses mati -> nginx balas 502 HTML,
+            // frontend gagal parse JSON). Restart dijadwalkan setelah response terkirim.
+            selfRestart = true;
+            combined += '\n--- pm2 restart (dijadwalkan setelah response, panel reconnect otomatis) ---\n';
+          } else {
+            try {
+              const pmOut = execSync(`sudo -H -u "#${uid}" pm2 restart "${dirName}" 2>&1 || pm2 restart "${dirName}" 2>&1`, { timeout: 30_000 }).toString();
+              combined += `\n--- pm2 restart ${dirName} ---\n` + pmOut;
+            } catch (pErr) {
+              combined += `\n--- pm2 restart ${dirName} [FAILED] ---\n` + (pErr.stdout || pErr.message);
+            }
           }
         }
 
@@ -1883,7 +1891,7 @@ function pullGitProject(targetPath) {
       } catch (fErr) {
         combined += '\n--- post-update error ---\n' + fErr.message;
       }
-      return { ok: true, output: combined };
+      return { ok: true, output: combined, restart: selfRestart };
     };
     exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
       gitCache.time = 0; // invalidate cache
@@ -4590,7 +4598,18 @@ const server = http.createServer(async (req, res) => {
     audit(session.user, 'git.pull', rel);
     const r = await pullGitProject(full);
     if (!r.ok) return send(res, 500, JSON.stringify(r));
-    return send(res, 200, JSON.stringify(r));
+    const { restart, ...payload } = r;
+    send(res, 200, JSON.stringify(payload));
+    if (restart) {
+      // Restart setelah response terkirim; proses ini sendiri akan di-restart oleh pm2.
+      setTimeout(() => {
+        const target = process.env.pm_id !== undefined ? process.env.pm_id : (process.env.PM2_APP_NAME || 'vps-monitor');
+        const child = spawn('pm2', ['restart', String(target)], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' });
+        child.on('error', () => {});
+        child.unref();
+      }, 500);
+    }
+    return;
   }
 
   if (p === '/api/deploy' && req.method === 'POST') {

@@ -1326,7 +1326,9 @@ async function doPull(relPath, btn) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ relPath })
     });
-    const d = await res.json();
+    let d;
+    try { d = await res.json(); }
+    catch { throw new Error(`Server returned a non-JSON response (HTTP ${res.status}). If you updated the monitor itself it may be restarting — reload in a few seconds.`); }
     if (card) { card.className = 'git-item ' + (d.ok ? 'pull-ok' : 'pull-err'); }
     if (btn) {
       btn.textContent = d.ok ? '✓ Updated' : '✕ Error';
@@ -1945,15 +1947,18 @@ async function loadProjects() {
 }
 
 function projRepoHtml(r) {
-  if (!r.found) return `<div class="proj-row"><span class="proj-name">${escHtml(r.relPath)}</span> <span class="pill down">repo tidak ditemukan</span></div>`;
-  const link = r.github
+  if (!r.found) return `<div class="proj-row"><div class="proj-line"><span class="proj-name">${escHtml(r.relPath)}</span> <span class="pill down">repo tidak ditemukan</span></div></div>`;
+  const gh = r.github
     ? `<a class="btn-sm ok" style="text-decoration:none" href="${escHtml(r.github)}" target="_blank" rel="noopener noreferrer">GitHub ↗</a>`
-    : (r.remote ? `<span class="proj-sub proj-clip" title="${escHtml(r.remote)}">${escHtml(r.remote)}</span>` : '<span class="proj-sub">tanpa remote</span>');
-  const pulled = r.lastPull ? ' · pull ' + escHtml(fmtUserDate(r.lastPull)) : '';
-  const detail = `${r.hash || ''} ${r.message || ''} · ${r.time || ''}${r.lastPull ? ' · pull ' + fmtUserDate(r.lastPull) : ''}`;
+    : '';
+  const upd = r.broken ? '' : `<button class="btn-sm proj-pull" data-proj-pull="${escHtml(r.relPath)}" title="git pull + migrate + optimize:clear">↻ Update</button>`;
+  const remote = !r.github ? (r.remote ? escHtml(r.remote) : 'tanpa remote') : '';
+  const meta = [r.time ? `commit ${escHtml(r.time)}` : '', r.lastPull ? `pull ${escHtml(fmtUserDate(r.lastPull))}` : '', remote].filter(Boolean).join(' · ');
+  const full = `${r.hash || ''} ${r.message || ''}`;
   return `<div class="proj-row">
-    <div class="proj-line"><span class="proj-name proj-clip" title="${escHtml(r.relPath || r.name)}">${escHtml(r.name)}</span> <span class="pill">${escHtml(r.branch)}</span>${r.dirty ? '<span class="pill warn">dirty</span>' : ''}${r.broken ? '<span class="pill down">broken</span>' : ''}<span class="proj-push">${link}</span></div>
-    <div class="proj-sub proj-clip" title="${escHtml(detail)}"><span class="proj-mono">${escHtml(r.hash)}</span> ${escHtml(r.message || '')} · ${escHtml(r.time || '')}${pulled}</div>
+    <div class="proj-line"><span class="proj-name proj-clip" title="${escHtml(r.relPath || r.name)}">${escHtml(r.name)}</span><span class="pill">${escHtml(r.branch)}</span>${r.dirty ? '<span class="pill warn">dirty</span>' : ''}${r.broken ? '<span class="pill down">broken</span>' : ''}<span class="proj-push">${upd}${gh}</span></div>
+    <div class="proj-sub proj-msg" title="${escHtml(full)}"><span class="proj-mono">${escHtml(r.hash || '')}</span>${escHtml(r.message || '')}</div>
+    <div class="proj-sub proj-wrap">${meta}</div>
   </div>`;
 }
 
@@ -1966,28 +1971,27 @@ function projDbHtml(d) {
     ? `<span class="proj-push"><a href="/api/backups/dump?db=${encodeURIComponent(d.name)}" class="btn-sm ok" style="text-decoration:none" title="Download dump (.sql.gz) database live saat ini" download>⬇ Live DB</a></span>`
     : '';
   const b = d.backups;
-  const bkText = b.count ? `terakhir ${fmtUserDate(b.latest.mtime)} · ${b.latest.category} · ${fmtBytes(b.latest.size)} · total ${fmtBytes(b.totalBytes)}` : '';
   const bk = b.count
-    ? `<span class="pill ok">${b.count} backup</span> <span class="proj-sub proj-clip" title="${escHtml(bkText)}">${escHtml(bkText)}</span>`
-    : '<span class="pill warn">belum ada backup</span>';
+    ? `<div class="proj-sub proj-wrap"><span class="pill ok">${b.count} backup</span> terakhir ${escHtml(fmtUserDate(b.latest.mtime))} · ${escHtml(b.latest.category)} · ${escHtml(fmtBytes(b.latest.size))} · total ${escHtml(fmtBytes(b.totalBytes))}</div>`
+    : '<div class="proj-sub"><span class="pill warn">belum ada backup</span></div>';
   return `<div class="proj-row">
-    <div class="proj-line"><span class="proj-name proj-mono proj-clip" title="${escHtml(d.name)}">${escHtml(d.name)}</span> ${live}${dl}</div>
-    <div class="proj-line">${bk}</div>
+    <div class="proj-line"><span class="proj-name proj-mono proj-clip" title="${escHtml(d.name)}">${escHtml(d.name)}</span>${live}${dl}</div>
+    ${bk}
   </div>`;
 }
 
 function projSiteHtml(s) {
-  if (!s.found) return `<div class="proj-row"><span class="proj-name">${escHtml(s.file)}</span> <span class="pill down">config nginx tidak ditemukan</span></div>`;
+  if (!s.found) return `<div class="proj-row"><div class="proj-line"><span class="proj-name">${escHtml(s.file)}</span> <span class="pill down">config nginx tidak ditemukan</span></div></div>`;
   const scheme = s.ssl ? 'https' : 'http';
   const tags = `${s.broken ? '<span class="pill down">broken</span>' : `<span class="pill">${escHtml(s.type)}</span>`}${s.ssl ? '<span class="pill ok">https</span>' : '<span class="pill warn">http</span>'}`;
   const doms = s.domains || [];
-  if (!doms.length) return `<div class="proj-row"><div class="proj-line"><span class="proj-sub proj-clip" title="${escHtml(s.file)}">(tanpa domain) ${escHtml(s.file)}</span> ${tags}</div></div>`;
+  if (!doms.length) return `<div class="proj-row"><div class="proj-line"><span class="proj-sub proj-wrap" title="${escHtml(s.file)}">(tanpa domain) ${escHtml(s.file)}</span> ${tags}</div></div>`;
   return `<div class="proj-row">${doms.map((dm, i) => `<div class="proj-line"><span class="proj-name proj-clip" title="${escHtml(s.file)}">${escHtml(dm)}</span>${i === 0 ? tags : ''}${/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm) ? `<span class="proj-push"><a class="btn-sm ok" style="text-decoration:none" href="${scheme}://${escHtml(dm)}" target="_blank" rel="noopener noreferrer">Visit ↗</a></span>` : ''}</div>`).join('')}</div>`;
 }
 
-function projSection(title, items, html) {
+function projSection(title, items, html, cls) {
   if (!items.length) return '';
-  return `<div class="proj-sec"><div class="proj-sec-title">${title} <span class="badge">${items.length}</span></div>${items.map(html).join('')}</div>`;
+  return `<div class="proj-sec ${cls || ''}"><div class="proj-sec-title">${title} <span class="badge">${items.length}</span></div>${items.map(html).join('')}</div>`;
 }
 
 function renderProjects() {
@@ -2013,9 +2017,9 @@ function renderProjects() {
         </div>
         <div style="white-space:nowrap" title="dibuat oleh ${escHtml(p.createdBy || '—')} · diubah ${escHtml(fmtUserDate(p.updatedAt))}"><button class="btn-sm" data-proj-edit="${escHtml(p.id)}">Edit</button> <button class="btn-sm danger" data-proj-del="${escHtml(p.id)}">Hapus</button></div>
       </div>
-      ${projSection('Git deployments', p.repos, projRepoHtml)}
-      ${projSection('Databases', p.databases, projDbHtml)}
-      ${projSection('Hosted sites', p.sites, projSiteHtml)}
+      ${projSection('Git deployments', p.repos, projRepoHtml, 's-git')}
+      ${projSection('Databases', p.databases, projDbHtml, 's-db')}
+      ${projSection('Hosted sites', p.sites, projSiteHtml, 's-site')}
     </div>`).join('');
 }
 
@@ -2113,9 +2117,19 @@ $('projModal').addEventListener('change', (e) => {
   // Hanya update counter; render ulang akan mereset posisi scroll daftar.
   $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
 });
-$('projList').addEventListener('click', (e) => {
-  const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]');
-  if (ed) projOpenForm(ed.dataset.projEdit);
+$('projList').addEventListener('click', async (e) => {
+  const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]'), pl = e.target.closest('[data-proj-pull]');
+  if (pl) {
+    if (pl.disabled) return;
+    const rel = pl.dataset.projPull;
+    const r = await doPull(rel, pl);
+    $('gitModalTitle').textContent = `Update: ${rel}`;
+    $('gitModalBody').textContent = r.output;
+    $('gitModalBody').className = 'modal-body ' + (r.ok ? 'ok' : 'err');
+    $('gitModal').classList.add('open');
+    loadProjects();
+  }
+  else if (ed) projOpenForm(ed.dataset.projEdit);
   else if (dl) projDelete(dl.dataset.projDel);
 });
 
