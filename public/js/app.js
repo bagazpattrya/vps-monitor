@@ -1960,7 +1960,7 @@ async function loadProjects(fresh = false) {
   $('projError').style.display = 'none';
   const btn = $('projRefresh');
   if (btn) btn.classList.add('is-loading');
-  if (!projLoaded) $('projList').innerHTML = `<div class="proj-grid">${skelCards(3)}</div>`; // kunjungan pertama: kerangka kartu, bukan teks kosong
+  if (!projLoaded) $('projList').innerHTML = `<div class="proj-grid">${skelCards(6)}</div>`; // kunjungan pertama: kerangka kartu, bukan teks kosong
   try {
     projData = await j('/api/projects' + (fresh === true ? '?fresh=1' : ''));
     projLoaded = true;
@@ -2046,6 +2046,7 @@ function renderProjects() {
   // A-Z, "Tanpa kategori" selalu terakhir
   const cats = [...groups.keys()].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const cnt = (arr, k) => arr.reduce((n, p) => n + p[k].length, 0);
+  projPopHide(true);
   $('projList').innerHTML = cats.map(c => {
     const items = groups.get(c);
     const open = searching || !projCollapsed.has(c); // saat mencari, kategori yang cocok selalu terbuka
@@ -2055,7 +2056,7 @@ function renderProjects() {
       <button type="button" class="proj-cat-head" data-cat-toggle="${escHtml(c)}" aria-expanded="${open}">
         <span class="proj-cat-name proj-clip${c ? '' : ' none'}" title="${escHtml(label)}">${escHtml(label)}</span><span class="badge">${items.length}</span><span class="proj-cat-sum">${sum}</span>
       </button>
-      ${open ? `<div class="proj-grid">${items.map(projCardHtml).join('')}</div>` : ''}
+      ${open ? `<div class="proj-grid">${items.map(projTileHtml).join('')}</div>` : ''}
     </div>`;
   }).join('');
   const anyOpen = searching || cats.some(c => !projCollapsed.has(c));
@@ -2063,6 +2064,126 @@ function renderProjects() {
   $('projToggleAll').dataset.mode = anyOpen ? 'collapse' : 'expand';
   $('projCatList').innerHTML = [...new Set(all.map(p => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escHtml(c)}"></option>`).join('');
 }
+
+// -- tile ringkas (detail lengkap muncul sebagai popover saat hover / fokus / tap) --
+const PROJ_ICO = {
+  git: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.6"/><circle cx="4" cy="12.5" r="1.6"/><circle cx="12" cy="6" r="1.6"/><path d="M4 5.1v5.8M12 7.6c0 2.4-2.6 2.4-5.4 3.3"/></svg>',
+  db: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="8" cy="3.8" rx="5" ry="2"/><path d="M3 3.8v8.4c0 1.1 2.2 2 5 2s5-.9 5-2V3.8M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg>',
+  site: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 1.8 2.8 3.8 2.8 6S10 12.2 8 14c-2-1.8-2.8-3.8-2.8-6S6 3.8 8 2z"/></svg>'
+};
+
+// 'bad' | 'warn' | '' per jenis, supaya masalah terlihat tanpa perlu hover
+function projHealth(p) {
+  const git = p.repos.some(r => !r.found || r.broken) ? 'bad' : p.repos.some(r => r.dirty) ? 'warn' : '';
+  const db = p.databases.some(d => d.live === false) ? 'bad' : p.databases.some(d => d.live == null || !d.backups.count) ? 'warn' : '';
+  const site = p.sites.some(s => !s.found || s.broken) ? 'bad' : p.sites.some(s => !s.ssl) ? 'warn' : '';
+  return { git, db, site };
+}
+
+function projTileHtml(p) {
+  const h = projHealth(p);
+  const hue = [...p.name].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 360, 7);
+  const ini = (p.name.match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
+  const chip = (k, n, label) => `<span class="proj-chip${n ? '' : ' zero'}${h[k] ? ' ' + h[k] : ''}" title="${n} ${label}">${PROJ_ICO[k]}${n}</span>`;
+  return `<div class="proj-tile" tabindex="0" data-proj-id="${escHtml(p.id)}" aria-haspopup="true">
+    <span class="proj-ava" style="--h:${hue}">${escHtml(ini)}</span>
+    <div class="proj-tile-main">
+      <div class="proj-tile-name proj-clip">${escHtml(p.name)}</div>
+      <div class="proj-sub proj-clip">${escHtml(p.description || ' ')}</div>
+      <div class="proj-chips">${chip('git', p.repos.length, 'git deployment')}${chip('db', p.databases.length, 'database')}${chip('site', p.sites.length, 'hosted site')}</div>
+    </div>
+  </div>`;
+}
+
+let projPop = null, projPopTile = null, projPopPinned = false, projPopTimer = null;
+
+function projPopEl() {
+  if (projPop) return projPop;
+  projPop = document.createElement('div');
+  projPop.className = 'proj-pop';
+  projPop.addEventListener('mouseenter', () => clearTimeout(projPopTimer));
+  projPop.addEventListener('mouseleave', () => projPopLater(false));
+  projPop.addEventListener('click', projActionClick);
+  document.body.appendChild(projPop);
+  return projPop;
+}
+
+function projPopPlace() {
+  const pop = projPopEl(), r = projPopTile.getBoundingClientRect(), m = 10;
+  pop.style.maxHeight = '';
+  const w = Math.min(560, innerWidth - 2 * m);
+  pop.style.width = w + 'px';
+  const left = Math.max(m, Math.min(r.left, innerWidth - w - m));
+  const below = innerHeight - r.bottom - m, above = r.top - m;
+  const hgt = Math.min(pop.scrollHeight + 2, 640);
+  const down = hgt <= below || below >= above; // muat di bawah, atau bawah lebih lega dari atas
+  const room = down ? below : above;
+  const mh = Math.min(hgt, room);
+  pop.style.maxHeight = mh + 'px';
+  pop.style.left = left + 'px';
+  pop.style.top = (down ? r.bottom + 6 : r.top - mh - 6) + 'px';
+}
+
+function projPopShow(tile, pin) {
+  const p = (projData.projects || []).find(x => x.id === tile.dataset.projId);
+  if (!p) return;
+  clearTimeout(projPopTimer);
+  const pop = projPopEl();
+  if (projPopTile !== tile || !pop.classList.contains('open')) {
+    pop.innerHTML = projCardHtml(p);
+    pop.scrollTop = 0;
+  }
+  if (projPopTile) projPopTile.classList.remove('active');
+  projPopTile = tile;
+  tile.classList.add('active');
+  projPopPinned = !!pin;
+  pop.classList.add('open');
+  projPopPlace();
+}
+
+function projPopHide(force) {
+  clearTimeout(projPopTimer);
+  if (!projPop) return;
+  if (!force && projPopPinned) return;
+  projPop.classList.remove('open');
+  if (projPopTile) projPopTile.classList.remove('active');
+  projPopTile = null; projPopPinned = false;
+}
+
+function projPopLater(show, tile) {
+  clearTimeout(projPopTimer);
+  projPopTimer = setTimeout(() => show ? projPopShow(tile, false) : projPopHide(false), show ? 120 : 220);
+}
+
+const projCanHover = () => matchMedia('(hover: hover)').matches;
+const projTileOf = e => e.target.closest && e.target.closest('.proj-tile');
+
+$('projList').addEventListener('mouseover', (e) => {
+  const t = projTileOf(e);
+  if (!t || !projCanHover() || projPopPinned || (projPopTile === t && projPop.classList.contains('open'))) return;
+  projPopLater(true, t);
+});
+$('projList').addEventListener('mouseout', (e) => {
+  const t = projTileOf(e);
+  if (!t || !projCanHover() || t.contains(e.relatedTarget)) return;
+  projPopLater(false);
+});
+$('projList').addEventListener('focusin', (e) => { const t = projTileOf(e); if (t && !projPopPinned) projPopShow(t, false); });
+$('projList').addEventListener('keydown', (e) => {
+  const t = projTileOf(e);
+  if (t && e.target === t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); projPopShow(t, true); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') projPopHide(true); });
+// Klik/tap tile = pin popover (satu-satunya cara di layar sentuh); klik di luar = tutup
+document.addEventListener('click', (e) => {
+  if (!projPop || !projPop.classList.contains('open')) return;
+  if (projPop.contains(e.target)) return;
+  const t = projTileOf(e);
+  if (t) return projPopShow(t, projPopTile === t ? !projPopPinned : true);
+  projPopHide(true);
+});
+addEventListener('resize', () => { if (projPop && projPop.classList.contains('open')) projPopPlace(); });
+addEventListener('scroll', (e) => { if (projPop && !projPop.contains(e.target) && projPop.classList.contains('open') && !projPopPinned) projPopHide(true); }, true);
 
 function projCardHtml(p) {
   return `
@@ -2182,27 +2303,32 @@ $('projModal').addEventListener('change', (e) => {
   // Hanya update counter; render ulang akan mereset posisi scroll daftar.
   $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
 });
-$('projList').addEventListener('click', async (e) => {
-  const ct = e.target.closest('[data-cat-toggle]');
-  if (ct) {
-    const c = ct.dataset.catToggle;
-    if (projCollapsed.has(c)) projCollapsed.delete(c); else projCollapsed.add(c);
-    projSaveCollapsed();
-    return renderProjects();
-  }
+async function projActionClick(e) {
   const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]'), pl = e.target.closest('[data-proj-pull]');
   if (pl) {
     if (pl.disabled) return;
     const rel = pl.dataset.projPull;
+    projPopPinned = true; // jangan menutup popover selama update berjalan
     const r = await doPull(rel, pl);
+    projPopHide(true);
     $('gitModalTitle').textContent = `Update: ${rel}`;
     $('gitModalBody').textContent = r.output;
     $('gitModalBody').className = 'modal-body ' + (r.ok ? 'ok' : 'err');
     $('gitModal').classList.add('open');
     loadProjects();
   }
-  else if (ed) projOpenForm(ed.dataset.projEdit);
-  else if (dl) projDelete(dl.dataset.projDel);
+  else if (ed) { projPopHide(true); projOpenForm(ed.dataset.projEdit); }
+  else if (dl) { projPopHide(true); projDelete(dl.dataset.projDel); }
+}
+$('projList').addEventListener('click', (e) => {
+  const ct = e.target.closest('[data-cat-toggle]');
+  if (ct) {
+    const c = ct.dataset.catToggle;
+    if (projCollapsed.has(c)) projCollapsed.delete(c); else projCollapsed.add(c);
+    projSaveCollapsed();
+    projPopHide(true);
+    renderProjects();
+  }
 });
 
 // ---- Auto Deploy ----
