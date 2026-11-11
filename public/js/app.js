@@ -1,6 +1,16 @@
 
 const $ = id => document.getElementById(id);
 
+// j() dengan batas waktu. fetch tanpa timeout bisa menggantung selamanya (koneksi keep-alive mati
+// setelah tab lama dibiarkan), dan flag "sedang loading" yang menunggunya ikut macet.
+function jt(u, ms, outer) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  const onOuter = () => ac.abort();
+  if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener('abort', onOuter, { once: true }); }
+  return j(u, { signal: ac.signal }).finally(() => { clearTimeout(timer); if (outer) outer.removeEventListener('abort', onOuter); });
+}
+
 const loadingHtml = (text) => `<span class="loading-box"><span class="spinner"></span>${text || 'Loading…'}</span>`;
 const skelCards = (n = 2) => Array.from({ length: n }, () => '<div class="skel-card"><div class="skel-line w60"></div><div class="skel-line w80"></div><div class="skel-line w40"></div></div>').join('');
 
@@ -39,8 +49,8 @@ let procSort = 'cpu';
 let rawSpikes = [];
 let procMeta = { intervalMs: 5000, cores: 0, spikeThreshold: 70, sampledAt: 0 };
 
-async function j(u) {
-  const r = await fetch(u);
+async function j(u, opts) {
+  const r = await fetch(u, opts);
   if (r.status === 401) {
     location.href = '/login';
     throw new Error('unauthorized');
@@ -398,25 +408,52 @@ let siteDelTarget = null;
 async function sites() {
   if (!isAdmin) return;
   try {
-    const d = await j('/api/sites');
+    const d = await jt('/api/sites', 20000);
     rawSites = d.sites || [];
+    // buang status site yang sudah tidak ada (mis. baru dihapus)
+    const ids = new Set(rawSites.map(x => x.id));
+    for (const id of Object.keys(siteStatus)) if (!ids.has(id)) delete siteStatus[id];
     renderSites();
     checkSites();
   } catch {
-    $('sitesList').innerHTML = '<tr><td colspan="7" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat sites</td></tr>';
+    $('sitesList').innerHTML = '<tr><td colspan="7" style="color:var(--bad);text-align:center;padding:18px">Gagal memuat sites. <button class="btn-sm" id="sitesRetry">Coba lagi</button></td></tr>';
+    const b = $('sitesRetry'); if (b) b.addEventListener('click', sites);
   }
 }
+// Cek status dilakukan per site (6 paralel) dan hasilnya tampil begitu masuk. Tiap request pendek,
+// jadi tidak kena timeout proxy nginx 30 detik walau ada banyak site mati. Check baru membatalkan yang
+// lama (mis. setelah hapus site) dan flag siteChecking selalu direset.
+let siteCheckCtl = null;
+let siteRenderTimer = null;
+function renderSitesSoon() {
+  if (siteRenderTimer) return;
+  siteRenderTimer = setTimeout(() => { siteRenderTimer = null; renderSites(); }, 120);
+}
 async function checkSites() {
-  if (siteChecking) return;
-  siteChecking = true;
-  siteStatus = {};
+  if (siteCheckCtl) siteCheckCtl.abort();
+  const ctl = siteCheckCtl = new AbortController();
+  const queue = rawSites.filter(s => !s.broken).map(s => s.id);
+  for (const s of rawSites) if (s.broken) siteStatus[s.id] = { id: s.id, state: 'down', reasons: ['config rusak'], inactive: true };
+  siteChecking = queue.length > 0;
   renderSites();
-  try {
-    const d = await j('/api/sites/check');
-    siteStatus = Object.fromEntries((d.results || []).map(r => [r.id, r]));
-  } catch {}
-  siteChecking = false;
-  renderSites();
+  const worker = async () => {
+    while (queue.length && !ctl.signal.aborted) {
+      const id = queue.shift();
+      try {
+        const d = await jt('/api/sites/check?id=' + encodeURIComponent(id), 15000, ctl.signal);
+        if (ctl.signal.aborted) return;
+        for (const r of d.results || []) siteStatus[r.id] = r;
+      } catch (e) {
+        if (ctl.signal.aborted) return;
+        siteStatus[id] = { id, state: 'unknown', reasons: ['cek status gagal / timeout'], inactive: false };
+      }
+      renderSitesSoon();
+    }
+  };
+  try { await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker)); }
+  finally {
+    if (siteCheckCtl === ctl) { siteCheckCtl = null; siteChecking = false; renderSites(); }
+  }
 }
 function siteStatusHtml(s) {
   const st = siteStatus[s.id];

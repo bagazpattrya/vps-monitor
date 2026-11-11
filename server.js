@@ -3288,16 +3288,31 @@ function probeLocalHttp(site, domain) {
   });
 }
 
+// Hasil DNS di-cache sebentar dan lookup yang sedang berjalan dipakai bersama. dns.lookup memakai
+// thread pool libuv (default 4 thread) dan tidak berhenti saat timeout 3 detik di bawah tercapai,
+// jadi tanpa ini cek berulang bisa menumpuk dan memperlambat seluruh server.
+const DNS_CACHE_MS = 60_000;
+const dnsCache = new Map(); // domain -> { at, value } | { pending: Promise }
 async function resolvesDomain(domain) {
-  try {
-    const r = await Promise.race([
-      require('dns').promises.lookup(domain, { all: true }),
-      new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), 3000)),
-    ]);
-    return { ok: r.length > 0, ips: r.map((x) => x.address) };
-  } catch (e) {
-    return { ok: false, ips: [], unknown: !(e && (e.code === 'ENOTFOUND' || e.code === 'ENODATA')) };
-  }
+  const hit = dnsCache.get(domain);
+  if (hit && hit.pending) return hit.pending;
+  if (hit && Date.now() - hit.at < DNS_CACHE_MS) return hit.value;
+  const pending = (async () => {
+    try {
+      const r = await Promise.race([
+        require('dns').promises.lookup(domain, { all: true }),
+        new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), 3000)),
+      ]);
+      return { ok: r.length > 0, ips: r.map((x) => x.address) };
+    } catch (e) {
+      return { ok: false, ips: [], unknown: !(e && (e.code === 'ENOTFOUND' || e.code === 'ENODATA')) };
+    }
+  })();
+  dnsCache.set(domain, { pending });
+  const value = await pending;
+  dnsCache.set(domain, { at: Date.now(), value });
+  if (dnsCache.size > 500) for (const [k, v] of dnsCache) { if (!v.pending && Date.now() - v.at >= DNS_CACHE_MS) dnsCache.delete(k); }
+  return value;
 }
 
 async function probeSite(site) {
@@ -3319,10 +3334,33 @@ async function probeSite(site) {
   return out;
 }
 
-async function probeSites(sites) {
+async function probeSites(sites, aborted = () => false) {
   const results = [];
-  for (let i = 0; i < sites.length; i += 6) results.push(...await Promise.all(sites.slice(i, i + 6).map(probeSite)));
+  for (let i = 0; i < sites.length; i += 6) {
+    if (aborted()) break; // klien sudah pergi, jangan buang waktu probe sisanya
+    results.push(...await Promise.all(sites.slice(i, i + 6).map(probeSiteShared)));
+  }
   return results;
+}
+
+// Probe yang sama (site yang sama) yang sedang berjalan dipakai bersama, supaya klik/refresh berulang
+// tidak menumpuk request ke nginx lokal.
+const probeInflight = new Map();
+function probeSiteShared(site) {
+  let p = probeInflight.get(site.id);
+  if (!p) {
+    p = probeSite(site).finally(() => probeInflight.delete(site.id));
+    probeInflight.set(site.id, p);
+  }
+  return p;
+}
+
+// Daftar site untuk endpoint cek: mem-parse semua file nginx tiap panggilan itu mahal bila UI mengecek
+// satu per satu, jadi dipakai ulang beberapa detik. Endpoint hapus/config tetap membaca langsung.
+let hostedSitesCache = { at: 0, value: null };
+function getHostedSitesCached(maxAgeMs = 3000) {
+  if (!hostedSitesCache.value || Date.now() - hostedSitesCache.at > maxAgeMs) hostedSitesCache = { at: Date.now(), value: getHostedSites() };
+  return hostedSitesCache.value;
 }
 
 // ---- site delete (backup config -> hapus -> nginx -t -> reload; rollback bila nginx -t gagal) ----
@@ -4483,8 +4521,17 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/sites/check' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    const sites = getHostedSites().filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
-    return send(res, 200, JSON.stringify({ time: Date.now(), results: await probeSites(sites) }));
+    const visible = getHostedSitesCached().filter((x) => !isHidden(session, [x.file, x.domains, x.root, x.upstream]));
+    // ?id=<site id>: cek satu site (dipakai UI supaya hasil muncul bertahap dan tiap request pendek).
+    const one = url.searchParams.get('id');
+    if (one) {
+      const site = visible.find((x) => x.id === one);
+      if (!site) return send(res, 404, JSON.stringify({ error: 'Site tidak ditemukan' }));
+      return send(res, 200, JSON.stringify({ time: Date.now(), results: [await probeSiteShared(site)] }));
+    }
+    let gone = false;
+    res.on('close', () => { if (!res.writableEnded) gone = true; });
+    return send(res, 200, JSON.stringify({ time: Date.now(), results: await probeSites(visible, () => gone) }));
   }
   if (p === '/api/sites/config' && req.method === 'GET') {
     if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
