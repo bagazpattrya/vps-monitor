@@ -72,7 +72,7 @@ j('/api/me').then(m => {
   if (m.admin) {
     if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
-    if ($('navLinkProjects') && m.superadmin) $('navLinkProjects').style.display = '';
+    if ($('navLinkProjects')) $('navLinkProjects').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkSites')) $('navLinkSites').style.display = '';
     if ($('navLinkDeploy')) $('navLinkDeploy').style.display = '';
@@ -84,8 +84,10 @@ j('/api/me').then(m => {
     $('pm2RestartBtn').style.display = '';
   }
   if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
-  if (!m.superadmin && ['users', 'files', 'projects'].includes(currentView())) location.hash = '#/overview';
-    if (m.superadmin && currentView() === 'projects') loadProjects();
+  if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && currentView() === 'projects') location.hash = '#/overview';
+  if (!m.superadmin) document.body.classList.add('no-proj-edit');
+    if (m.admin && currentView() === 'projects') loadProjects();
     if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
@@ -1987,7 +1989,7 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   });
 });
 
-// ---- Projects (superadmin) ----
+// ---- Projects (admin: lihat; superadmin: kelola) ----
 let projLoaded = false;
 let projData = { projects: [], options: { repos: [], databases: [], backupDbs: [], sites: [] } };
 let projEditId = null;
@@ -2006,7 +2008,7 @@ async function projPost(url, body) {
 }
 
 async function loadProjects(fresh = false) {
-  if (!isSuper) return;
+  if (!isAdmin) return;
   $('projError').style.display = 'none';
   const btn = $('projRefresh');
   if (btn) btn.classList.add('is-loading');
@@ -2017,7 +2019,7 @@ async function loadProjects(fresh = false) {
     renderProjects();
   } catch {
     if (!projLoaded) $('projList').innerHTML = '';
-    $('projError').textContent = 'Gagal memuat project (butuh akses superadmin).';
+    $('projError').textContent = 'Gagal memuat project (butuh akses admin).';
     $('projError').style.display = '';
   } finally {
     if (btn) btn.classList.remove('is-loading');

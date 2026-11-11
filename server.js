@@ -3983,18 +3983,23 @@ async function runRenameJob(job, p) {
 }
 
 // ---- Projects: gabungkan referensi tersimpan (projects.js) dengan data live git / MySQL / backup / nginx ----
-// Hanya superadmin yang boleh memanggil ini, jadi hidden keywords tidak diterapkan.
-async function buildProjectsView(fresh = false) {
+// Superadmin melihat semuanya; admin melihat project yang sama tapi dengan hidden keywords diterapkan
+// (project/repo/database/site yang cocok keyword dibuang dari respons, termasuk dari pilihan form).
+async function buildProjectsView(fresh = false, session = null) {
   // Git (paralel, non-blocking) dan MySQL berjalan bersamaan, bukan berurutan.
-  const [gitList, dbRes] = await Promise.all([getGitProjectsAsync(fresh), listDatabases(null)]);
+  const [gitAll, dbRes] = await Promise.all([getGitProjectsAsync(fresh), listDatabases(session)]);
+  const hid = (v) => isHidden(session, v);
   const backups = getBackupInfo();
-  const siteList = getHostedSites();
+  const allSites = getHostedSites();
+  const siteList = allSites.filter((x) => !hid([x.id, x.file, x.domains, x.root, x.upstream]));
 
+  const gitList = gitAll.filter((g) => !hid([g.name, g.relPath, g.remote]));
   const gitBy = new Map(gitList.map((g) => [g.relPath, g]));
   const siteBy = new Map(siteList.map((s) => [s.id, s]));
   const dbBy = new Map(dbRes.ok ? dbRes.databases.map((d) => [d.name, d]) : []);
   const backupsBy = new Map();
   for (const f of backups.files || []) {
+    if (hid(f.dbName)) continue;
     if (!backupsBy.has(f.dbName)) backupsBy.set(f.dbName, []);
     backupsBy.get(f.dbName).push(f); // sudah terurut terbaru dulu (getBackupInfo)
   }
@@ -4029,10 +4034,18 @@ async function buildProjectsView(fresh = false) {
     time: Date.now(),
     dbError: dbRes.ok ? null : dbRes.error,
     backupsAvailable: !!backups.available,
-    projects: projects.list().map((p) => ({
-      id: p.id, name: p.name, description: p.description, category: p.category || '', createdBy: p.createdBy, createdAt: p.createdAt, updatedAt: p.updatedAt,
-      repos: p.repos.map(repoView), databases: p.databases.map(dbView), sites: p.sites.map(siteView),
-    })),
+    projects: projects.list().flatMap((p) => {
+      if (hid([p.name, p.description, p.category])) return [];
+      const repos = p.repos.filter((r) => !hid(r) && (gitBy.has(r) || !gitAll.some((g) => g.relPath === r)));
+      const databases = p.databases.filter((d) => !hid(d));
+      const sites = p.sites.filter((x) => !hid(x) && (siteBy.has(x) || !allSites.some((y) => y.id === x)));
+      // Project yang seluruh isinya tersembunyi ikut disembunyikan, bukan tampil kosong.
+      if ((p.repos.length + p.databases.length + p.sites.length) > 0 && !(repos.length + databases.length + sites.length)) return [];
+      return [{
+        id: p.id, name: p.name, description: p.description, category: p.category || '', createdBy: p.createdBy, createdAt: p.createdAt, updatedAt: p.updatedAt,
+        repos: repos.map(repoView), databases: databases.map(dbView), sites: sites.map(siteView),
+      }];
+    }),
     // Pilihan untuk form: semua yang bisa ditautkan.
     options: {
       repos: gitList.map((g) => ({ relPath: g.relPath, name: g.name, group: g.group, remote: projects.remoteInfo(g.remote).remote })),
@@ -4566,8 +4579,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, r.ok ? 200 : (r.status || 500), JSON.stringify(r));
   }
   if (p === '/api/projects' && req.method === 'GET') {
-    if (!session.superadmin) return needSuper();
-    return send(res, 200, JSON.stringify(await buildProjectsView(url.searchParams.get('fresh') === '1')));
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify(await buildProjectsView(url.searchParams.get('fresh') === '1', session)));
   }
   if (p === '/api/projects' && req.method === 'POST') {
     if (!session.superadmin) return needSuper();

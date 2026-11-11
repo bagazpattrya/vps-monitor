@@ -804,6 +804,7 @@ code {
   align-items: center;
   gap: 4px;
 }
+body.no-proj-edit #projNew, body.no-proj-edit [data-proj-edit], body.no-proj-edit [data-proj-del] { display: none !important; }
 body.no-pull .pull-split, body.no-pull .btn-pull, body.no-pull .git-check, body.no-pull #gitBatchPull { display: none !important; }
 .pull-split { position: relative; display: inline-flex; flex: none; }
 .pull-split .btn-pull { border-radius: 8px 0 0 8px; }
