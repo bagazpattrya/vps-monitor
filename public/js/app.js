@@ -2017,6 +2017,7 @@ async function loadProjects(fresh = false) {
     projData = await j('/api/projects' + (fresh === true ? '?fresh=1' : ''));
     projLoaded = true;
     renderProjects();
+    projLoadErrors(fresh === true);
   } catch {
     if (!projLoaded) $('projList').innerHTML = '';
     $('projError').textContent = 'Gagal memuat project (butuh akses admin).';
@@ -2069,6 +2070,63 @@ function projSiteHtml(s) {
   return `<div class="proj-row">${doms.map((dm, i) => `<div class="proj-line"><span class="proj-name proj-clip" title="${escHtml(s.file)}">${escHtml(dm)}</span>${i === 0 ? tags : ''}${/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm) ? `<span class="proj-push"><a class="btn-sm ok" style="text-decoration:none" href="${scheme}://${escHtml(dm)}" target="_blank" rel="noopener noreferrer">Visit ↗</a></span>` : ''}</div>`).join('')}</div>`;
 }
 
+// Error log 24 jam terakhir, dikelompokkan per repo (nama repo == nama project di /errors).
+let projErrByRepo = new Map();
+let projErrSig = null;
+const projErrKey = e => e.level + '|' + String(e.message || '')
+  .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '#').replace(/0x[0-9a-f]+/gi, '#')
+  .replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 200);
+async function projLoadErrors(force) {
+  try {
+    const d = await j('/api/logs/errors?hours=24' + (force ? '&force=1' : ''));
+    const by = new Map();
+    for (const e of d.entries || []) {
+      let r = by.get(e.project);
+      if (!r) by.set(e.project, r = { critical: 0, total: 0, groups: new Map() });
+      r.total++;
+      if (e.critical) r.critical++;
+      const k = projErrKey(e);
+      let g = r.groups.get(k);
+      if (!g) r.groups.set(k, g = { e, count: 0, last: 0, ids: [] });
+      g.count++;
+      g.ids.push(e.id);
+      if (e.t >= g.last) { g.last = e.t; g.e = e; }
+    }
+    const sig = (d.entries || []).map(e => e.id).join();
+    if (sig === projErrSig && projErrSig !== null) return; // tidak berubah: jangan render ulang (hindari kedip)
+    projErrSig = sig;
+    projErrByRepo = by;
+    const id = projPopTile && projPopTile.dataset.projId, pinned = projPopPinned;
+    const top = projPop ? projPop.scrollTop : 0;
+    renderProjects();
+    const tile = id && document.querySelector(`.proj-tile[data-proj-id="${CSS.escape(id)}"]`);
+    if (tile) { projPopShow(tile, pinned); projPop.scrollTop = top; }
+  } catch {} // error log opsional: project tetap tampil tanpa
+}
+// Gabungan semua repo milik project
+function projErrOf(p) {
+  const out = { critical: 0, total: 0, repos: [] };
+  for (const r of p.repos) {
+    const x = r.found && projErrByRepo.get(r.name);
+    if (!x) continue;
+    out.critical += x.critical; out.total += x.total;
+    out.repos.push({ name: r.name, ...x });
+  }
+  return out;
+}
+function projErrHtml(p) {
+  const er = projErrOf(p);
+  if (!er.total) return '';
+  const rows = er.repos.map(r => {
+    const top = [...r.groups.values()].sort((a, b) => (b.e.critical - a.e.critical) || (b.count - a.count)).slice(0, 5);
+    return `<div class="proj-row">
+      <div class="proj-line"><span class="proj-name proj-clip">${escHtml(r.name)}</span><span class="pill ${r.critical ? 'down' : 'warn'}">${r.total} error</span><span class="proj-push"><a class="btn-sm" style="text-decoration:none" href="/errors?project=${encodeURIComponent(r.name)}">Kelola ↗</a></span></div>
+      ${top.map(g => `<div class="proj-sub proj-msg" title="${escHtml(g.e.message)}"><span class="pill ${g.e.critical ? 'down' : 'warn'}">×${g.count}</span> ${escHtml(g.e.message || '(empty)')}<span class="proj-push"><button class="btn-sm" data-proj-esolve="${g.ids.join(',')}" title="Tandai solved: kirim ke workspace lalu hapus dari log">✓ Solved</button> <button class="btn-sm danger" data-proj-edel="${g.ids.join(',')}" title="Hapus baris log grup ini" aria-label="Hapus">🗑</button></span></div>`).join('')}
+    </div>`;
+  }).join('');
+  return `<div class="proj-sec"><div class="proj-sec-title">Error logs (24 jam) <span class="badge">${er.total}</span></div>${rows}</div>`;
+}
+
 function projSection(title, items, html, cls) {
   if (!items.length) return '';
   return `<div class="proj-sec ${cls || ''}"><div class="proj-sec-title">${title} <span class="badge">${items.length}</span></div>${items.map(html).join('')}</div>`;
@@ -2078,7 +2136,9 @@ function renderProjects() {
   const q = ($('projSearch').value || '').trim().toLowerCase();
   const all = projData.projects || [];
   const hay = p => [p.name, p.description, p.category, ...p.repos.map(r => `${r.relPath} ${r.remote || ''}`), ...p.databases.map(d => d.name), ...p.sites.flatMap(s => [s.file, ...(s.domains || [])])].join(' ').toLowerCase();
-  const list = all.filter(p => !q || hay(p).includes(q));
+  const errOnly = $('projErrOnly').checked;
+  let list = all.filter(p => (!q || hay(p).includes(q)) && (!errOnly || projErrOf(p).total));
+  if (errOnly) list.sort((a, b) => { const x = projErrOf(a), y = projErrOf(b); return (y.critical - x.critical) || (y.total - x.total); });
   $('projCount').textContent = list.length === all.length ? all.length : `${list.length}/${all.length}`;
   if (projData.dbError) {
     $('projError').textContent = 'MySQL tidak bisa dibaca: ' + projData.dbError;
@@ -2088,7 +2148,7 @@ function renderProjects() {
     $('projList').innerHTML = `<span style="color:var(--mut);font-size:12px">${all.length ? 'Tidak ada project yang cocok dengan filter' : 'Belum ada project. Klik “+ New Project” untuk membuat yang pertama.'}</span>`;
     return;
   }
-  const searching = !!q;
+  const searching = !!q || errOnly;
   const groups = new Map();
   for (const p of list) {
     const c = p.category || '';
@@ -2132,6 +2192,11 @@ function projHealth(p) {
   return { git, db, site };
 }
 
+function projErrChip(p) {
+  const er = projErrOf(p);
+  return er.total ? `<span class="proj-chip ${er.critical ? 'bad' : 'warn'}" title="${er.total} error log (24 jam)">⚠${er.total}</span>` : '';
+}
+
 function projTileHtml(p) {
   const h = projHealth(p);
   const hue = [...p.name].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) % 360, 7);
@@ -2142,7 +2207,7 @@ function projTileHtml(p) {
     <div class="proj-tile-main">
       <div class="proj-tile-name proj-clip">${escHtml(p.name)}</div>
       <div class="proj-sub proj-clip">${escHtml(p.description || ' ')}</div>
-      <div class="proj-chips">${chip('git', p.repos.length, 'git deployment')}${chip('db', p.databases.length, 'database')}${chip('site', p.sites.length, 'hosted site')}</div>
+      <div class="proj-chips">${projErrChip(p)}${chip('git', p.repos.length, 'git deployment')}${chip('db', p.databases.length, 'database')}${chip('site', p.sites.length, 'hosted site')}</div>
     </div>
   </div>`;
 }
@@ -2250,6 +2315,7 @@ function projCardHtml(p) {
       ${projSection('Git deployments', p.repos, projRepoHtml, 's-git')}
       ${projSection('Databases', p.databases, projDbHtml, 's-db')}
       ${projSection('Hosted sites', p.sites, projSiteHtml, 's-site')}
+      ${projErrHtml(p)}
     </div>`;
 }
 
@@ -2336,6 +2402,9 @@ async function projDelete(id) {
 $('projNew').addEventListener('click', () => projOpenForm(null));
 $('projRefresh').addEventListener('click', () => loadProjects(true)); // tombol Refresh = scan git baru
 $('projSearch').addEventListener('input', renderProjects);
+$('projErrOnly').addEventListener('change', renderProjects);
+// Auto-refresh error log hanya saat tab Projects terbuka
+setInterval(() => { if (isAdmin && !document.hidden && currentView() === 'projects') projLoadErrors(false); }, 15000);
 $('projToggleAll').addEventListener('click', () => {
   const cats = [...new Set((projData.projects || []).map(p => p.category || ''))];
   projCollapsed = $('projToggleAll').dataset.mode === 'collapse' ? new Set(cats) : new Set();
@@ -2355,7 +2424,25 @@ $('projModal').addEventListener('change', (e) => {
   // Hanya update counter; render ulang akan mereset posisi scroll daftar.
   $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
 });
+async function projErrAfter() { projErrSig = null; await projLoadErrors(true); }
+let projSolveIds = [];
 async function projActionClick(e) {
+  const es = e.target.closest('[data-proj-esolve]'), edl = e.target.closest('[data-proj-edel]');
+  if (es) {
+    projSolveIds = es.dataset.projEsolve.split(',');
+    $('solveText').value = ''; $('solveErr').textContent = ''; $('solveSubmit').disabled = false;
+    $('solveModal').classList.add('open'); $('solveText').focus();
+    return;
+  }
+  if (edl) {
+    const ids = edl.dataset.projEdel.split(',');
+    if (!confirm(`Hapus ${ids.length} baris log?\n\nBaris dihapus permanen dari file log asli di server dan tidak bisa dikembalikan.`)) return;
+    try {
+      const d = await api('POST', '/api/logs/errors/delete', { ids });
+      if (d.failed && d.failed.length) alert(`${d.deleted || 0} terhapus, ${d.failed.length} gagal:\n` + d.failed.map(f => `${f.source}: ${f.error}`).join('\n'));
+    } catch (er) { alert('Hapus log gagal: ' + er.message); }
+    return projErrAfter();
+  }
   const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]'), pl = e.target.closest('[data-proj-pull]');
   if (pl) {
     if (pl.disabled) return;
@@ -2372,6 +2459,18 @@ async function projActionClick(e) {
   else if (ed) { projPopHide(true); projOpenForm(ed.dataset.projEdit); }
   else if (dl) { projPopHide(true); projDelete(dl.dataset.projDel); }
 }
+$('solveModalClose').addEventListener('click', () => $('solveModal').classList.remove('open'));
+$('solveSubmit').addEventListener('click', async () => {
+  const solution = $('solveText').value.trim();
+  if (!solution) { $('solveErr').textContent = 'Solusi wajib diisi'; return; }
+  $('solveSubmit').disabled = true; $('solveErr').textContent = '';
+  try {
+    const d = await api('POST', '/api/logs/errors/resolve', { groups: [projSolveIds], solution });
+    $('solveModal').classList.remove('open');
+    if (d.failed && d.failed.length) alert(`${d.sent || 0} terkirim, ${d.failed.length} gagal:\n` + d.failed.map(f => `${f.source}: ${f.error}`).join('\n'));
+    projErrAfter();
+  } catch (er) { $('solveErr').textContent = er.message || 'Request gagal'; $('solveSubmit').disabled = false; }
+});
 $('projList').addEventListener('click', (e) => {
   const ct = e.target.closest('[data-cat-toggle]');
   if (ct) {

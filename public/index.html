@@ -210,6 +210,7 @@
         </h3>
         <div class="proc-controls">
           <input type="search" id="projSearch" class="input" placeholder="Filter project, repo, database, domain..." style="min-width:240px" />
+          <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="projErrOnly" /> Hanya yang error</label>
           <button class="btn ok" id="projNew" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">+ New Project</button>
           <button class="btn" id="projToggleAll" title="Buka / tutup semua kategori">Collapse all</button>
           <button class="btn" id="projRefresh">Refresh</button>
@@ -924,6 +925,23 @@
   </div>
   </div><!-- /view-deploy -->
 </main>
+
+<div class="modal-backdrop" id="solveModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="solveModalTitle">Tandai solved</span>
+      <button class="btn" id="solveModalClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div class="modal-body" style="white-space:normal">
+      <p style="margin-top:0;color:var(--mut);font-size:12px">Error + solusi disalin ke tabel Error Logs di workspace. Setelah berhasil terkirim, barisnya dihapus dari log asli di server.</p>
+      <textarea id="solveText" class="input" rows="6" style="width:100%" placeholder="Bagaimana error ini diselesaikan?"></textarea>
+      <div style="margin-top:10px;text-align:right">
+        <span id="solveErr" style="color:var(--bad);font-size:12px;margin-right:8px"></span>
+        <button class="btn-sm" id="solveSubmit">Kirim &amp; hapus</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="projModal">
   <div class="modal" style="max-width:760px;max-height:88vh">
