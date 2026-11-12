@@ -86,7 +86,7 @@ j('/api/me').then(m => {
   if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
   if (!m.admin && currentView() === 'projects') location.hash = '#/overview';
-  if (!m.superadmin) document.body.classList.add('no-proj-edit');
+  if (!m.admin) document.body.classList.add('no-proj-edit');
     if (m.admin && currentView() === 'projects') loadProjects();
     if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
   document.body.classList.toggle('no-pull', !m.admin);
@@ -1989,7 +1989,7 @@ document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   });
 });
 
-// ---- Projects (admin: lihat; superadmin: kelola) ----
+// ---- Projects (admin & superadmin: lihat + kelompokkan) ----
 let projLoaded = false;
 let projData = { projects: [], options: { repos: [], databases: [], backupDbs: [], sites: [] } };
 let projEditId = null;

@@ -4583,7 +4583,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify(await buildProjectsView(url.searchParams.get('fresh') === '1', session)));
   }
   if (p === '/api/projects' && req.method === 'POST') {
-    if (!session.superadmin) return needSuper();
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const r = projects.create(body, session.user);
@@ -4591,7 +4591,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true, id: r.project.id } : { error: r.error }));
   }
   if (p === '/api/projects/update' && req.method === 'POST') {
-    if (!session.superadmin) return needSuper();
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req, 65536)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const r = projects.update(body && body.id, body);
@@ -4599,7 +4599,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true } : { error: r.error }));
   }
   if (p === '/api/projects/delete' && req.method === 'POST') {
-    if (!session.superadmin) return needSuper();
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
     let body;
     try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     const r = projects.remove(body && body.id);
