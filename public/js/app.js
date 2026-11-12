@@ -2070,37 +2070,28 @@ function projSiteHtml(s) {
   return `<div class="proj-row">${doms.map((dm, i) => `<div class="proj-line"><span class="proj-name proj-clip" title="${escHtml(s.file)}">${escHtml(dm)}</span>${i === 0 ? tags : ''}${/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(dm) ? `<span class="proj-push"><a class="btn-sm ok" style="text-decoration:none" href="${scheme}://${escHtml(dm)}" target="_blank" rel="noopener noreferrer">Visit ↗</a></span>` : ''}</div>`).join('')}</div>`;
 }
 
-// Error log 24 jam terakhir, dikelompokkan per repo (nama repo == nama project di /errors).
+// Error log 24 jam terakhir: hanya hitungan per repo (nama repo == nama project di /errors).
 let projErrByRepo = new Map();
 let projErrSig = null;
-const projErrKey = e => e.level + '|' + String(e.message || '')
-  .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '#').replace(/0x[0-9a-f]+/gi, '#')
-  .replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 200);
 async function projLoadErrors(force) {
   try {
     const d = await j('/api/logs/errors?hours=24' + (force ? '&force=1' : ''));
     const by = new Map();
     for (const e of d.entries || []) {
       let r = by.get(e.project);
-      if (!r) by.set(e.project, r = { critical: 0, total: 0, groups: new Map() });
+      if (!r) by.set(e.project, r = { critical: 0, total: 0 });
       r.total++;
       if (e.critical) r.critical++;
-      const k = projErrKey(e);
-      let g = r.groups.get(k);
-      if (!g) r.groups.set(k, g = { e, count: 0, last: 0, ids: [] });
-      g.count++;
-      g.ids.push(e.id);
-      if (e.t >= g.last) { g.last = e.t; g.e = e; }
     }
-    const sig = (d.entries || []).map(e => e.id).join();
-    if (sig === projErrSig && projErrSig !== null) return; // tidak berubah: jangan render ulang (hindari kedip)
+    const sig = [...by].map(([k, v]) => `${k}:${v.critical}/${v.total}`).sort().join();
+    if (sig === projErrSig) return; // tidak berubah: jangan render ulang (hindari kedip)
     projErrSig = sig;
     projErrByRepo = by;
-    const id = projPopTile && projPopTile.dataset.projId, pinned = projPopPinned;
+    const id = projPopTile && projPopTile.dataset.projId;
     const top = projPop ? projPop.scrollTop : 0;
     renderProjects();
     const tile = id && document.querySelector(`.proj-tile[data-proj-id="${CSS.escape(id)}"]`);
-    if (tile) { projPopShow(tile, pinned); projPop.scrollTop = top; }
+    if (tile) { projPopShow(tile); projPop.scrollTop = top; }
   } catch {} // error log opsional: project tetap tampil tanpa
 }
 // Gabungan semua repo milik project
@@ -2117,13 +2108,7 @@ function projErrOf(p) {
 function projErrHtml(p) {
   const er = projErrOf(p);
   if (!er.total) return '';
-  const rows = er.repos.map(r => {
-    const top = [...r.groups.values()].sort((a, b) => (b.e.critical - a.e.critical) || (b.count - a.count)).slice(0, 5);
-    return `<div class="proj-row">
-      <div class="proj-line"><span class="proj-name proj-clip">${escHtml(r.name)}</span><span class="pill ${r.critical ? 'down' : 'warn'}">${r.total} error</span><span class="proj-push"><a class="btn-sm" style="text-decoration:none" href="/errors?project=${encodeURIComponent(r.name)}">Kelola ↗</a></span></div>
-      ${top.map(g => `<div class="proj-sub proj-msg" title="${escHtml(g.e.message)}"><span class="pill ${g.e.critical ? 'down' : 'warn'}">×${g.count}</span> ${escHtml(g.e.message || '(empty)')}<span class="proj-push"><button class="btn-sm" data-proj-esolve="${g.ids.join(',')}" title="Tandai solved: kirim ke workspace lalu hapus dari log">✓ Solved</button> <button class="btn-sm danger" data-proj-edel="${g.ids.join(',')}" title="Hapus baris log grup ini" aria-label="Hapus">🗑</button></span></div>`).join('')}
-    </div>`;
-  }).join('');
+  const rows = er.repos.map(r => `<div class="proj-row"><div class="proj-line"><span class="proj-name proj-clip">${escHtml(r.name)}</span><span class="pill ${r.critical ? 'down' : 'warn'}">${r.total} error${r.critical ? ` · ${r.critical} critical` : ''}</span><span class="proj-push"><a class="btn-sm" style="text-decoration:none" href="/errors?project=${encodeURIComponent(r.name)}">Kelola ↗</a></span></div></div>`).join('');
   return `<div class="proj-sec"><div class="proj-sec-title">Error logs (24 jam) <span class="badge">${er.total}</span></div>${rows}</div>`;
 }
 
@@ -2212,105 +2197,58 @@ function projTileHtml(p) {
   </div>`;
 }
 
-let projPop = null, projPopTile = null, projPopPinned = false, projPopTimer = null;
+// Detail project = side drawer kanan. Klik tile membuka; Esc / klik backdrop / ✕ menutup.
+let projPop = null, projPopBg = null, projPopTile = null, projPopPinned = false;
 
 function projPopEl() {
   if (projPop) return projPop;
-  projPop = document.createElement('div');
+  projPopBg = document.createElement('div');
+  projPopBg.className = 'proj-drawer-bg';
+  projPopBg.addEventListener('click', () => projPopHide(true));
+  projPop = document.createElement('aside');
   projPop.className = 'proj-pop';
-  projPop.addEventListener('mouseenter', () => clearTimeout(projPopTimer));
-  projPop.addEventListener('mouseleave', () => projPopLater(false));
   projPop.addEventListener('click', projActionClick);
-  document.body.appendChild(projPop);
+  document.body.append(projPopBg, projPop);
   return projPop;
 }
 
-function projPopPlace() {
-  const pop = projPopEl(), r = projPopTile.getBoundingClientRect(), m = 10;
-  pop.style.maxHeight = '';
-  const w = Math.min(560, innerWidth - 2 * m);
-  pop.style.width = w + 'px';
-  const left = Math.max(m, Math.min(r.left, innerWidth - w - m));
-  const below = innerHeight - r.bottom - m, above = r.top - m;
-  const hgt = Math.min(pop.scrollHeight + 2, 640);
-  const down = hgt <= below || below >= above; // muat di bawah, atau bawah lebih lega dari atas
-  const room = down ? below : above;
-  const mh = Math.min(hgt, room);
-  pop.style.maxHeight = mh + 'px';
-  pop.style.left = left + 'px';
-  pop.style.top = (down ? r.bottom + 6 : r.top - mh - 6) + 'px';
-}
-
-function projPopShow(tile, pin) {
+function projPopShow(tile) {
   const p = (projData.projects || []).find(x => x.id === tile.dataset.projId);
   if (!p) return;
-  clearTimeout(projPopTimer);
   const pop = projPopEl();
-  if (projPopTile !== tile || !pop.classList.contains('open')) {
-    pop.innerHTML = projCardHtml(p);
-    pop.scrollTop = 0;
-  }
+  pop.innerHTML = projCardHtml(p);
   if (projPopTile) projPopTile.classList.remove('active');
   projPopTile = tile;
   tile.classList.add('active');
-  projPopPinned = !!pin;
   pop.classList.add('open');
-  projPopPlace();
+  projPopBg.classList.add('open');
 }
 
-function projPopHide(force) {
-  clearTimeout(projPopTimer);
+function projPopHide() {
   if (!projPop) return;
-  if (!force && projPopPinned) return;
   projPop.classList.remove('open');
+  projPopBg.classList.remove('open');
   if (projPopTile) projPopTile.classList.remove('active');
   projPopTile = null; projPopPinned = false;
 }
 
-function projPopLater(show, tile) {
-  clearTimeout(projPopTimer);
-  projPopTimer = setTimeout(() => show ? projPopShow(tile, false) : projPopHide(false), show ? 120 : 220);
-}
-
-const projCanHover = () => matchMedia('(hover: hover)').matches;
 const projTileOf = e => e.target.closest && e.target.closest('.proj-tile');
-
-$('projList').addEventListener('mouseover', (e) => {
-  const t = projTileOf(e);
-  if (!t || !projCanHover() || projPopPinned || (projPopTile === t && projPop.classList.contains('open'))) return;
-  projPopLater(true, t);
-});
-$('projList').addEventListener('mouseout', (e) => {
-  const t = projTileOf(e);
-  if (!t || !projCanHover() || t.contains(e.relatedTarget)) return;
-  projPopLater(false);
-});
-$('projList').addEventListener('focusin', (e) => { const t = projTileOf(e); if (t && !projPopPinned) projPopShow(t, false); });
+$('projList').addEventListener('click', (e) => { const t = projTileOf(e); if (t) projPopShow(t); });
 $('projList').addEventListener('keydown', (e) => {
   const t = projTileOf(e);
-  if (t && e.target === t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); projPopShow(t, true); }
+  if (t && e.target === t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); projPopShow(t); }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') projPopHide(true); });
-// Klik/tap tile = pin popover (satu-satunya cara di layar sentuh); klik di luar = tutup
-document.addEventListener('click', (e) => {
-  if (!projPop || !projPop.classList.contains('open')) return;
-  if (projPop.contains(e.target)) return;
-  const t = projTileOf(e);
-  if (t) return projPopShow(t, projPopTile === t ? !projPopPinned : true);
-  projPopHide(true);
-});
-addEventListener('resize', () => { if (projPop && projPop.classList.contains('open')) projPopPlace(); });
-addEventListener('scroll', (e) => { if (projPop && !projPop.contains(e.target) && projPop.classList.contains('open') && !projPopPinned) projPopHide(true); }, true);
 
 function projCardHtml(p) {
   return `
     <div class="proj-card">
       <div class="proj-head">
-        <div>
+        <div style="min-width:0">
           <div class="proj-title proj-clip" title="${escHtml(p.name)}">${escHtml(p.name)}</div>
           ${p.description ? `<div class="proj-sub proj-clip" title="${escHtml(p.description)}">${escHtml(p.description)}</div>` : ''}
         </div>
-        <div style="white-space:nowrap" title="dibuat oleh ${escHtml(p.createdBy || '—')} · diubah ${escHtml(fmtUserDate(p.updatedAt))}"><button class="btn-sm" data-proj-edit="${escHtml(p.id)}">Edit</button> <button class="btn-sm danger" data-proj-del="${escHtml(p.id)}">Hapus</button></div>
+        <div style="white-space:nowrap" title="dibuat oleh ${escHtml(p.createdBy || '—')} · diubah ${escHtml(fmtUserDate(p.updatedAt))}"><button class="btn-sm" data-proj-edit="${escHtml(p.id)}">Edit</button> <button class="btn-sm danger" data-proj-del="${escHtml(p.id)}">Hapus</button> <button class="btn-sm" data-proj-close aria-label="Tutup">✕</button></div>
       </div>
       ${projSection('Git deployments', p.repos, projRepoHtml, 's-git')}
       ${projSection('Databases', p.databases, projDbHtml, 's-db')}
@@ -2424,30 +2362,13 @@ $('projModal').addEventListener('change', (e) => {
   // Hanya update counter; render ulang akan mereset posisi scroll daftar.
   $({ repos: 'pickRepoCount', databases: 'pickDbCount', sites: 'pickSiteCount' }[c.dataset.pick]).textContent = projSel[c.dataset.pick].size;
 });
-async function projErrAfter() { projErrSig = null; await projLoadErrors(true); }
-let projSolveIds = [];
 async function projActionClick(e) {
-  const es = e.target.closest('[data-proj-esolve]'), edl = e.target.closest('[data-proj-edel]');
-  if (es) {
-    projSolveIds = es.dataset.projEsolve.split(',');
-    $('solveText').value = ''; $('solveErr').textContent = ''; $('solveSubmit').disabled = false;
-    $('solveModal').classList.add('open'); $('solveText').focus();
-    return;
-  }
-  if (edl) {
-    const ids = edl.dataset.projEdel.split(',');
-    if (!confirm(`Hapus ${ids.length} baris log?\n\nBaris dihapus permanen dari file log asli di server dan tidak bisa dikembalikan.`)) return;
-    try {
-      const d = await api('POST', '/api/logs/errors/delete', { ids });
-      if (d.failed && d.failed.length) alert(`${d.deleted || 0} terhapus, ${d.failed.length} gagal:\n` + d.failed.map(f => `${f.source}: ${f.error}`).join('\n'));
-    } catch (er) { alert('Hapus log gagal: ' + er.message); }
-    return projErrAfter();
-  }
+  if (e.target.closest('[data-proj-close]')) return projPopHide(true);
   const ed = e.target.closest('[data-proj-edit]'), dl = e.target.closest('[data-proj-del]'), pl = e.target.closest('[data-proj-pull]');
   if (pl) {
     if (pl.disabled) return;
     const rel = pl.dataset.projPull;
-    projPopPinned = true; // jangan menutup popover selama update berjalan
+    projPopPinned = true; // tetap terbuka selama update berjalan
     const r = await doPull(rel, pl);
     projPopHide(true);
     $('gitModalTitle').textContent = `Update: ${rel}`;
@@ -2459,18 +2380,6 @@ async function projActionClick(e) {
   else if (ed) { projPopHide(true); projOpenForm(ed.dataset.projEdit); }
   else if (dl) { projPopHide(true); projDelete(dl.dataset.projDel); }
 }
-$('solveModalClose').addEventListener('click', () => $('solveModal').classList.remove('open'));
-$('solveSubmit').addEventListener('click', async () => {
-  const solution = $('solveText').value.trim();
-  if (!solution) { $('solveErr').textContent = 'Solusi wajib diisi'; return; }
-  $('solveSubmit').disabled = true; $('solveErr').textContent = '';
-  try {
-    const d = await api('POST', '/api/logs/errors/resolve', { groups: [projSolveIds], solution });
-    $('solveModal').classList.remove('open');
-    if (d.failed && d.failed.length) alert(`${d.sent || 0} terkirim, ${d.failed.length} gagal:\n` + d.failed.map(f => `${f.source}: ${f.error}`).join('\n'));
-    projErrAfter();
-  } catch (er) { $('solveErr').textContent = er.message || 'Request gagal'; $('solveSubmit').disabled = false; }
-});
 $('projList').addEventListener('click', (e) => {
   const ct = e.target.closest('[data-cat-toggle]');
   if (ct) {
