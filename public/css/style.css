@@ -1285,3 +1285,18 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .git-skel-note .dots i { background: var(--ac); }
 #gitRefresh.is-loading { opacity: .75; }
 .git-list.is-refreshing .git-group { opacity: .55; transition: opacity .15s; pointer-events: none; }
+
+/* ---- Console ---- */
+.console-card { position: relative; padding: 0; overflow: hidden; display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 360px; }
+.console-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.console-title { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.console-actions { display: flex; gap: 8px; }
+.console-term { flex: 1; min-height: 0; padding: 8px 4px 4px 10px; background: #0b0e13; }
+.console-term .xterm-viewport { background: transparent !important; }
+.console-gate { position: absolute; inset: 0; top: 49px; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--overlay-strong); backdrop-filter: blur(3px); }
+.console-gate[hidden] { display: none; }
+.console-gate-box { width: min(420px, 100%); background: var(--bg-card); border: 1px solid var(--border-light); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 12px; }
+.console-gate-box h3 { margin: 0; font-size: 16px; }
+.console-gate-box p { margin: 0; color: var(--mut); font-size: 13px; line-height: 1.5; }
+.console-gate-err { min-height: 16px; color: var(--bad-tx); font-size: 13px; }
+@media (max-width: 700px) { .console-card { height: calc(100vh - 110px); } }

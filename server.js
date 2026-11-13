@@ -13,6 +13,7 @@ const auth = require('./auth');
 const chat = require('./chat');
 const chats = require('./chats');
 const projects = require('./projects');
+const consoleWs = require('./console');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -4096,6 +4097,11 @@ const server = http.createServer(async (req, res) => {
 
   const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
 
+  if ((p === '/console' || p === '/js/console.js' || p.startsWith('/vendor/xterm/')) && !session.superadmin) {
+    res.writeHead(302, { Location: '/' });
+    return res.end();
+  }
+
   if (p.startsWith('/api/chats')) {
     let body;
     if (req.method === 'PATCH') { try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); } }
@@ -5022,9 +5028,15 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
-  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p;
+  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p === '/console' ? '/console.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
   serveFile(req, res, file);
+});
+
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, 'http://localhost');
+  if (pathname === '/api/console/ws') return consoleWs.handleUpgrade(req, socket, head, { auth, audit });
+  socket.destroy();
 });
 
 server.listen(PORT, HOST, () => console.log(`vps-monitor on http://${HOST}:${PORT}`));

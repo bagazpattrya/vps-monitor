@@ -411,6 +411,7 @@ module.exports = {
   logout,
   getSession,
   confirmPassword,
+  clientIp,
   ALLOW_LINUX_LOGIN,
   listAppUsers,
   createAppUser,
