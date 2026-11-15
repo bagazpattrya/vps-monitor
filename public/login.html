@@ -7,47 +7,110 @@
 <link rel="icon" type="image/png" href="/images/logo.png"/>
 <script src="/js/theme.js"></script>
 <style>
-:root{--bg:#0f1115;--card:#171b22;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--bad:#f31260;--bd:#232a35;--in-bd:#2c3544;--in-bg:#0f1115;--btn-tx:#04121f;color-scheme:dark}
-:root[data-theme="light"]{--bg:#f4f6fa;--card:#fff;--mut:#5b6678;--tx:#151a23;--ac:#2563eb;--bad:#dc2626;--bd:#dde2ea;--in-bd:#c8d0dc;--in-bg:#fff;--btn-tx:#fff;color-scheme:light}
-.theme-toggle{position:fixed;top:14px;right:14px;width:auto;margin:0;padding:8px;line-height:0;background:var(--card);color:var(--tx);border:1px solid var(--bd)}
+:root{--bg:#0b0d11;--card:#14181f;--mut:#8b93a3;--tx:#e8ecf1;--ac:#4da3ff;--ac2:#3b82f6;--bad:#f87171;--bad-bg:rgba(248,113,113,.1);--bad-bd:rgba(248,113,113,.3);--bd:#232a35;--in-bd:#2c3544;--in-bg:#0f1218;--btn-tx:#04121f;--glow1:rgba(59,130,246,.18);--glow2:rgba(139,92,246,.12);--shadow:0 20px 50px rgba(0,0,0,.45);color-scheme:dark}
+:root[data-theme="light"]{--bg:#f4f6fa;--card:#fff;--mut:#5b6678;--tx:#151a23;--ac:#2563eb;--ac2:#1d4ed8;--bad:#b91c1c;--bad-bg:rgba(220,38,38,.07);--bad-bd:rgba(220,38,38,.25);--bd:#dde2ea;--in-bd:#c8d0dc;--in-bg:#f9fafc;--btn-tx:#fff;--glow1:rgba(37,99,235,.14);--glow2:rgba(139,92,246,.1);--shadow:0 20px 50px rgba(15,23,42,.1);color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 0;color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+ background:radial-gradient(60% 50% at 20% 10%,var(--glow1),transparent 70%),radial-gradient(50% 45% at 85% 90%,var(--glow2),transparent 70%),var(--bg)}
+.theme-toggle{position:fixed;top:14px;right:14px;width:auto;margin:0;padding:9px;line-height:0;background:var(--card);color:var(--tx);border:1px solid var(--bd);border-radius:10px;cursor:pointer;transition:border-color .15s}
+.theme-toggle:hover{border-color:var(--ac)}
 .theme-toggle svg{width:16px;height:16px}.theme-toggle .ico-sun{display:none}
 :root[data-theme="light"] .theme-toggle .ico-sun{display:block}:root[data-theme="light"] .theme-toggle .ico-moon{display:none}
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-form{width:min(340px,92vw);background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:22px}
-h1{font-size:18px;margin:0 0 4px}.mut{color:var(--mut);font-size:12px;margin:0 0 16px}
-label{display:block;font-size:12px;color:var(--mut);margin:12px 0 4px}
-input{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--in-bd);background:var(--in-bg);color:var(--tx);font:inherit}
-input:focus{outline:2px solid var(--ac);border-color:transparent}
-button{width:100%;margin-top:18px;padding:10px;border:0;border-radius:8px;background:var(--ac);color:var(--btn-tx);font:inherit;font-weight:600;cursor:pointer}
-button:disabled{opacity:.6;cursor:default}
-#err{color:var(--bad);font-size:12px;min-height:18px;margin-top:12px}
+form{width:min(400px,92vw);background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:34px 30px 30px;box-shadow:var(--shadow);animation:rise .4s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){form{animation:none}}
+.brand{display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:26px}
+.logo{width:52px;height:52px;border-radius:14px;background:var(--in-bg);border:1px solid var(--bd);display:grid;place-items:center;margin-bottom:14px;box-shadow:0 0 0 4px var(--glow1)}
+.logo img{width:30px;height:30px;object-fit:contain}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
+.mut{color:var(--mut);font-size:13px;margin:0}
+label{display:block;font-size:12px;font-weight:500;color:var(--mut);margin:16px 0 6px}
+.field{position:relative}
+.field>svg.lead{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--mut);pointer-events:none;transition:color .15s}
+.field:focus-within>svg.lead{color:var(--ac)}
+input{width:100%;height:44px;padding:0 12px 0 40px;border-radius:10px;border:1px solid var(--in-bd);background:var(--in-bg);color:var(--tx);font:inherit;transition:border-color .15s,box-shadow .15s}
+input#p{padding-right:44px}
+input:focus{outline:0;border-color:var(--ac);box-shadow:0 0 0 3px var(--glow1)}
+input:-webkit-autofill{-webkit-text-fill-color:var(--tx);box-shadow:0 0 0 40px var(--in-bg) inset}
+.eye{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:34px;height:34px;display:grid;place-items:center;margin:0;padding:0;border:0;border-radius:8px;background:none;color:var(--mut);cursor:pointer;transition:color .15s,background .15s}
+.eye:hover{color:var(--tx);background:var(--glow1)}
+.eye:focus-visible{outline:2px solid var(--ac)}
+.eye svg{width:18px;height:18px}.eye .ico-off{display:none}
+.eye.on .ico-on{display:none}.eye.on .ico-off{display:block}
+.caps{display:none;font-size:11.5px;color:#d97706;margin-top:6px}
+.caps.show{display:block}
+#b{width:100%;height:46px;margin-top:24px;padding:0 10px;border:0;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--btn-tx);font:inherit;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:filter .15s,transform .05s}
+:root:not([data-theme="light"]) #b{color:#fff}
+#b:hover:not(:disabled){filter:brightness(1.08)}
+#b:active:not(:disabled){transform:translateY(1px)}
+#b:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+#b:disabled{opacity:.7;cursor:default}
+.spin{display:none;width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
+#b.busy .spin{display:block}
+@keyframes sp{to{transform:rotate(360deg)}}
+#err{display:none;align-items:center;gap:8px;color:var(--bad);background:var(--bad-bg);border:1px solid var(--bad-bd);border-radius:10px;font-size:12.5px;padding:9px 12px;margin-top:16px}
+#err.show{display:flex}
+#err svg{flex:none;width:16px;height:16px}
+.foot{text-align:center;color:var(--mut);font-size:11.5px;margin:20px 0 0}
 </style>
 </head>
 <body>
 <button class="btn theme-toggle" type="button" title="Toggle light / dark mode" aria-label="Toggle light / dark mode"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg></button>
 <form id="f">
-<h1>VPS Monitor</h1>
-<p class="mut">Sign in with your server account</p>
-<label for="u">Username</label>
-<input id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
-<label for="p">Password</label>
-<input id="p" name="password" type="password" autocomplete="current-password" required>
-<button id="b" type="submit">Sign in</button>
-<div id="err" role="alert"></div>
+ <div class="brand">
+  <div class="logo"><img src="/images/logo.png" alt=""></div>
+  <h1>VPS Monitor</h1>
+  <p class="mut">Sign in with your server account</p>
+ </div>
+
+ <label for="u">Username</label>
+ <div class="field">
+  <svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+  <input id="u" name="username" placeholder="Enter your username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+ </div>
+
+ <label for="p">Password</label>
+ <div class="field">
+  <svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  <input id="p" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+  <button class="eye" id="eye" type="button" aria-label="Show password" aria-pressed="false" title="Show password">
+   <svg class="ico-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+   <svg class="ico-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.17 4.19"/><path d="M6.61 6.61A17.5 17.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/></svg>
+  </button>
+ </div>
+ <div class="caps" id="caps">Caps Lock is on</div>
+
+ <button id="b" type="submit"><span class="spin" aria-hidden="true"></span><span id="bt">Sign in</span></button>
+ <div id="err" role="alert"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><span id="errt"></span></div>
+ <p class="foot">Protected area · authorized users only</p>
 </form>
 <script>
-const f=document.getElementById('f'),err=document.getElementById('err'),b=document.getElementById('b');
+const f=document.getElementById('f'),err=document.getElementById('err'),errt=document.getElementById('errt'),
+ b=document.getElementById('b'),bt=document.getElementById('bt'),p=document.getElementById('p'),
+ eye=document.getElementById('eye'),caps=document.getElementById('caps');
+function showErr(m){errt.textContent=m;err.classList.toggle('show',!!m)}
+eye.addEventListener('click',()=>{
+ const show=p.type==='password';
+ p.type=show?'text':'password';
+ eye.classList.toggle('on',show);
+ eye.setAttribute('aria-pressed',show);
+ const l=show?'Hide password':'Show password';
+ eye.setAttribute('aria-label',l);eye.title=l;
+ p.focus();
+});
+p.addEventListener('keydown',e=>caps.classList.toggle('show',e.getModifierState&&e.getModifierState('CapsLock')));
+p.addEventListener('keyup',e=>caps.classList.toggle('show',e.getModifierState&&e.getModifierState('CapsLock')));
+p.addEventListener('blur',()=>caps.classList.remove('show'));
 f.addEventListener('submit',async e=>{
- e.preventDefault();err.textContent='';b.disabled=true;
+ e.preventDefault();showErr('');b.disabled=true;b.classList.add('busy');bt.textContent='Signing in…';
  try{
   const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({username:f.username.value.trim(),password:f.password.value})});
+   body:JSON.stringify({username:f.username.value.trim(),password:p.value})});
   if(r.ok){location.href='/';return}
   const d=await r.json().catch(()=>({}));
-  err.textContent=d.error||'Login failed';
- }catch{err.textContent='Network error'}
- b.disabled=false;f.password.value='';f.password.focus();
+  showErr(d.error||'Login failed');
+ }catch{showErr('Network error')}
+ b.disabled=false;b.classList.remove('busy');bt.textContent='Sign in';p.value='';p.focus();
 });
 </script>
 </body>
