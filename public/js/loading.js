@@ -1,9 +1,8 @@
-// Indikator loading bersama: progress bar tipis di atas halaman untuk request yang lambat.
-// Request cepat (mis. polling 3 detik) tidak memunculkan apa-apa; bar baru tampil kalau ada
-// request yang masih berjalan setelah SHOW_AFTER ms, jadi tidak berkedip.
+// Progress bar tipis di atas halaman, hanya untuk pindah halaman sungguhan (klik link, reload,
+// redirect lewat location). Request fetch/AJAX (polling, tombol update, dll.) sengaja tidak
+// memunculkan apa-apa.
 (function () {
-  const SHOW_AFTER = 400;
-  let pending = 0, timer = null, bar = null;
+  let bar = null;
   const getBar = () => {
     if (bar) return bar;
     bar = document.createElement('div');
@@ -14,19 +13,22 @@
     document.body.appendChild(bar);
     return bar;
   };
-  const start = () => {
-    if (++pending !== 1) return;
-    timer = setTimeout(() => { if (pending > 0) getBar().classList.add('on'); }, SHOW_AFTER);
+  // beforeunload hanya terpanggil kalau browser benar-benar akan meninggalkan halaman ini
+  // (link biasa, reload, location.href = ...). Klik hash (#), target=_blank, download, atau
+  // ctrl/cmd+klik tidak memicunya, jadi tidak ada bar yang nyangkut.
+  let skip = false;
+  window.addEventListener('beforeunload', () => {
+    if (!skip && document.body) getBar().classList.add('on');
+  });
+  // Download file lewat location.href juga memicu beforeunload padahal halaman tidak berpindah,
+  // jadi lewat helper ini bar-nya dilewati.
+  window.downloadUrl = (url) => {
+    skip = true;
+    location.href = url;
+    setTimeout(() => { skip = false; }, 1000);
   };
-  const done = () => {
-    if (pending > 0 && --pending === 0) {
-      clearTimeout(timer);
-      if (bar) bar.classList.remove('on');
-    }
-  };
-  const orig = window.fetch.bind(window);
-  window.fetch = function () {
-    start();
-    return orig.apply(null, arguments).finally(done);
-  };
+  // Kembali lewat back/forward (bfcache) menampilkan halaman lama dengan bar masih menyala.
+  window.addEventListener('pageshow', () => {
+    if (bar) bar.classList.remove('on');
+  });
 })();

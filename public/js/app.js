@@ -336,7 +336,7 @@ async function previewFsFile(filePath) {
   $('fsPreviewContent').innerHTML = loadingHtml('Memuat isi file…');
   $('fsPreviewNotice').style.display = 'none';
   $('fsPreviewDownloadBtn').onclick = () => {
-    location.href = `/api/fs/download?path=${encodeURIComponent(filePath)}`;
+    downloadUrl(`/api/fs/download?path=${encodeURIComponent(filePath)}`);
   };
   $('fsPreviewModal').classList.add('open');
 
@@ -3256,7 +3256,7 @@ $('fsSelAll').addEventListener('change', (e) => {
   updateFsSelUI();
 });
 $('fsBtnDownloadSel').addEventListener('click', () => {
-  if (fsSelected.size) location.href = fsArchiveUrl(fsCurrentPath, [...fsSelected]);
+  if (fsSelected.size) downloadUrl(fsArchiveUrl(fsCurrentPath, [...fsSelected]));
 });
 
 $('fsList').addEventListener('click', (e) => {
