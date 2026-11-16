@@ -210,7 +210,7 @@
           <span class="badge" id="projCount">0</span>
         </h3>
         <div class="proc-controls">
-          <input type="search" id="projSearch" class="input" placeholder="Filter project, repo, database, domain..." style="min-width:240px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="projSearch" class="input" placeholder="Filter project, repo, database, domain..." style="min-width:240px" />
           <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="projErrOnly" /> Hanya yang error</label>
           <button class="btn ok" id="projNew" style="background:var(--bg-elev);border-color:var(--ok);color:var(--ok)">+ New Project</button>
           <button class="btn" id="projToggleAll" title="Buka / tutup semua kategori">Collapse all</button>
@@ -322,7 +322,7 @@
         <span class="badge" id="workerBadge">—</span>
       </h3>
       <div class="proc-controls">
-        <input type="search" id="workerSearch" class="input" placeholder="Filter worker name or PID..." style="min-width:200px" />
+        <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="workerSearch" class="input" placeholder="Filter worker name or PID..." style="min-width:200px" />
         <div class="tabs" id="workerFilterTabs">
           <button class="tab active" data-filter="all">All</button>
           <button class="tab" data-filter="running">Running</button>
@@ -379,7 +379,7 @@
         <span class="badge" id="gitCount">0</span>
       </h3>
       <div class="proc-controls">
-        <input type="search" id="gitSearch" class="input" placeholder="Filter repos, folders, branches..." />
+        <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="gitSearch" class="input" placeholder="Filter repos, folders, branches..." />
         <button class="btn-batch" id="gitBatchPull" style="display:none">↻ Update Selected (<span id="gitSelectedCount">0</span>)</button>
         <button class="btn" id="gitRefresh">Scan Repos</button>
       </div>
@@ -444,7 +444,7 @@
         <span class="badge" id="procCount">0</span>
       </h3>
       <div class="proc-controls">
-        <input type="search" id="procSearch" class="input" placeholder="Filter command, user, or PID..." />
+        <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="procSearch" class="input" placeholder="Filter command, user, or PID..." />
         <input type="number" id="procMinCpu" class="input" style="width:105px" min="0" max="1000" step="1" placeholder="Min CPU %" title="Show processes at or above this CPU %" />
         <div class="tabs" id="sortTabs">
           <button class="tab active" data-sort="cpu">CPU%</button>
@@ -483,7 +483,7 @@
         <span class="badge" id="mysqlQueryCount">0</span>
       </h3>
       <div class="proc-controls">
-        <input type="search" id="mysqlQuerySearch" class="input" placeholder="Filter query, user, or database..." />
+        <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="mysqlQuerySearch" class="input" placeholder="Filter query, user, or database..." />
         <label style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" id="mysqlShowSleep" /> Show idle</label>
         <button class="btn-sm" id="mysqlQueryRefresh">↻ Refresh</button>
       </div>
@@ -573,7 +573,7 @@
           <span class="badge" id="backupFilteredCount">0</span>
         </h3>
         <div class="proc-controls">
-          <input type="search" id="backupSearch" class="input" placeholder="Filter database atau nama file..." style="min-width:200px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="backupSearch" class="input" placeholder="Filter database atau nama file..." style="min-width:200px" />
           <div class="tabs" id="backupFilterTabs">
             <button class="tab active" data-cat="all">Semua</button>
             <button class="tab" data-cat="daily">Daily</button>
@@ -636,7 +636,7 @@
           <span class="badge" id="fsEntriesCount">0 items</span>
         </h3>
         <div class="proc-controls">
-          <input type="search" id="fsFilterInput" class="input" placeholder="Filter files in folder..." style="min-width:180px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="fsFilterInput" class="input" placeholder="Filter files in folder..." style="min-width:180px" />
           <button class="btn" id="fsBtnUp">⬆ Up</button>
           <button class="btn" id="fsBtnDownloadSel" style="display:none">⬇ Download terpilih</button>
           <button class="btn" id="fsBtnRefresh">↻ Refresh</button>
@@ -717,7 +717,7 @@
           <span class="badge" id="sitesCount">0</span>
         </h3>
         <div class="proc-controls">
-          <input type="search" id="sitesSearch" class="input" placeholder="Filter domain / root / file..." style="min-width:200px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="sitesSearch" class="input" placeholder="Filter domain / root / file..." style="min-width:200px" />
           <select id="sitesFilter" class="input">
             <option value="all">Semua site</option>
             <option value="inactive">Tidak aktif saja</option>
@@ -755,8 +755,8 @@
           <span class="badge" id="activityCount">0</span>
         </h3>
         <div class="proc-controls">
-          <input type="search" id="activitySearch" class="input" placeholder="Filter target / detail..." style="min-width:180px" />
-          <input type="search" id="activityUser" class="input" placeholder="User..." style="width:110px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="activitySearch" class="input" placeholder="Filter target / detail..." style="min-width:180px" />
+          <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="activityUser" class="input" placeholder="User..." style="width:110px" />
           <select id="activityAction" class="input">
             <option value="">Semua aksi</option>
             <option value="ui.view">Viewing page</option>
@@ -948,9 +948,9 @@
         <textarea id="projDesc" class="input" style="width:100%;min-height:54px;resize:vertical" maxlength="500"></textarea>
       </div>
       <div class="proj-picks">
-        <div class="proj-pick"><div class="proj-lbl">Git deployments <span class="badge" id="pickRepoCount">0</span></div><input type="search" class="input" id="pickRepoQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickRepos"></div></div>
-        <div class="proj-pick"><div class="proj-lbl">Databases <span class="badge" id="pickDbCount">0</span></div><input type="search" class="input" id="pickDbQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickDbs"></div></div>
-        <div class="proj-pick"><div class="proj-lbl">Hosted sites <span class="badge" id="pickSiteCount">0</span></div><input type="search" class="input" id="pickSiteQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickSites"></div></div>
+        <div class="proj-pick"><div class="proj-lbl">Git deployments <span class="badge" id="pickRepoCount">0</span></div><input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" class="input" id="pickRepoQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickRepos"></div></div>
+        <div class="proj-pick"><div class="proj-lbl">Databases <span class="badge" id="pickDbCount">0</span></div><input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" class="input" id="pickDbQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickDbs"></div></div>
+        <div class="proj-pick"><div class="proj-lbl">Hosted sites <span class="badge" id="pickSiteCount">0</span></div><input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" class="input" id="pickSiteQ" placeholder="Filter..." /><div class="proj-pick-list" id="pickSites"></div></div>
       </div>
       <div id="projFormErr" style="color:var(--bad);display:none;white-space:pre-wrap"></div>
       <div style="display:flex;justify-content:flex-end;gap:8px">
@@ -1017,7 +1017,7 @@
       <button class="btn" id="dbDumpClose" style="padding:2px 8px">✕</button>
     </div>
     <div style="padding:14px 16px 0;display:flex;gap:8px">
-      <input type="search" id="dbDumpSearch" class="input" placeholder="Filter database..." style="flex:1;min-width:0" />
+      <input type="search" autocomplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" id="dbDumpSearch" class="input" placeholder="Filter database..." style="flex:1;min-width:0" />
       <select id="dbDumpSort" class="input">
         <option value="name-asc">Nama A–Z</option>
         <option value="name-desc">Nama Z–A</option>
