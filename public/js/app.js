@@ -1146,7 +1146,7 @@ async function hist() {
     const labels = d.points.map(p => new Date(p.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     const datasets = [
       {
-        label: 'CPU %',
+        label: 'CPU (prosesor) %',
         data: d.points.map(p => p.cpu),
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59, 130, 246, 0.12)',
@@ -1156,7 +1156,7 @@ async function hist() {
         tension: 0.3
       },
       {
-        label: 'MEM %',
+        label: 'RAM terpakai %',
         data: d.points.map(p => p.mem),
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.08)',
@@ -1166,7 +1166,7 @@ async function hist() {
         tension: 0.3
       },
       {
-        label: 'Load1 (x10)',
+        label: 'Beban CPU 1 mnt (x10)',
         data: d.points.map(p => +(p.l1 * 10).toFixed(1)),
         borderColor: '#f59e0b',
         borderWidth: 1.5,
@@ -1199,7 +1199,10 @@ async function hist() {
               titleColor: cssVar('--tx'),
               bodyColor: cssVar('--soft-tx'),
               borderColor: cssVar('--border-light'),
-              borderWidth: 1
+              borderWidth: 1,
+              callbacks: {
+                footer: () => ['Beban CPU = jumlah proses yang dikerjakan/antre', 'di core CPU (angka chart = nilai x10).', 'Nilai sama dengan jumlah core = penuh.']
+              }
             }
           },
           scales: {
