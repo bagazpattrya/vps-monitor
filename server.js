@@ -2038,6 +2038,17 @@ function pullGitProject(targetPath) {
   });
 }
 
+// Nama proses ringkas untuk riwayat chart: tanpa argumen (bisa berisi secret), kecuali nama skrip setelah interpreter.
+function shortProcName(cmd) {
+  const t = String(cmd || '').split(' ').filter(Boolean);
+  let n = path.basename(t[0] || '?');
+  if (/^(php|node|python3?|sh|bash)$/.test(n) && t[1] && !t[1].startsWith('-')) n += ' ' + path.basename(t[1]);
+  return n.slice(0, 40);
+}
+function topProcsNow() {
+  return lastProcSnapshot.rows.filter((r) => r.cpu > 0).sort((a, b) => b.cpu - a.cpu).slice(0, 5)
+    .map((r) => ({ n: shortProcName(r.cmd), c: r.cpu, u: r.user, s: r.stat }));
+}
 // ---- sampler ----
 let lastStats = null;
 function sample() {
@@ -2050,6 +2061,7 @@ function sample() {
     disk: lastStats.disk.pct,
     l1: Number(lastStats.load.l1.toFixed(2)),
     l5: Number(lastStats.load.l5.toFixed(2)),
+    top: topProcsNow(),
   });
   if (history.length > MAX_POINTS) history = history.slice(-MAX_POINTS);
 }
@@ -4128,19 +4140,6 @@ const server = http.createServer(async (req, res) => {
     const { hiddenKeywords: _hk, ...me } = session; // keyword tidak perlu sampai ke browser
     return send(res, 200, JSON.stringify({ ...me, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
   }
-  if (p === '/api/top-processes' && req.method === 'GET') {
-    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
-    // top sampel ke-2 = CPU sesaat (sampel ke-1 itu rata-rata sejak proses start). Hanya nama proses, tanpa argumen.
-    return execFile('top', ['-b', '-n', '2', '-d', '1', '-w', '512', '-o', '%CPU'], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
-      if (err) return send(res, 500, JSON.stringify({ error: 'Gagal membaca proses' }));
-      const lines = String(out).split('\n');
-      const hdr = lines.map((l, i) => (/^\s*PID\s+USER/.test(l) ? i : -1)).filter((i) => i >= 0).pop();
-      const rows = lines.slice(hdr + 1).map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 12 && /^\d+$/.test(f[0]))
-        .map((f) => ({ pid: +f[0], user: f[1], state: f[7], cpu: parseFloat(f[8]) || 0, mem: parseFloat(f[9]) || 0, name: f.slice(11).join(' ') }))
-        .slice(0, 15);
-      send(res, 200, JSON.stringify({ processes: rows }));
-    });
-  }
   if (p === '/api/stats') {
     const s = lastStats && (Date.now() - lastStats.time < SAMPLE_INTERVAL_MS * 1.5) ? lastStats : getStats();
     if (!lastStats || s !== lastStats) lastStats = s;
@@ -4355,7 +4354,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/api/history') {
     const limit = Math.min(8640, Math.max(10, parseInt(url.searchParams.get('limit') || '720', 10)));
-    return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit) }));
+    return send(res, 200, JSON.stringify({ intervalMs: SAMPLE_INTERVAL_MS, points: history.slice(-limit).map(({ top: _t, ...pt }) => pt) }));
+  }
+  if (p === '/api/history/top') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    const t = parseInt(new URL(req.url, 'http://x').searchParams.get('t'), 10);
+    if (!Number.isFinite(t)) return send(res, 400, JSON.stringify({ error: 'Bad request' }));
+    const pt = history.reduce((best, x) => (!best || Math.abs(x.t - t) < Math.abs(best.t - t) ? x : best), null);
+    return send(res, 200, JSON.stringify({ t: pt ? pt.t : t, cpu: pt ? pt.cpu : null, top: (pt && pt.top) || [] }));
   }
   if (p === '/api/activity/track' && req.method === 'POST') {
     let body;

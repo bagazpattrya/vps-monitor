@@ -1138,9 +1138,11 @@ document.addEventListener('themechange', () => {
   chart.update();
 });
 
+let histTimes = [];
 async function hist() {
   try {
     const d = await j(`/api/history?limit=${histLimit}`);
+    histTimes = d.points.map(p => p.t);
     const labels = d.points.map(p => new Date(p.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     const datasets = [
       {
@@ -1183,6 +1185,11 @@ async function hist() {
           maintainAspectRatio: false,
           animation: false,
           interaction: { mode: 'index', intersect: false },
+          onClick: (_e, _el, ch) => {
+            const a = ch.tooltip && ch.tooltip.dataPoints && ch.tooltip.dataPoints[0];
+            if (a) showHistTop(histTimes[a.dataIndex], ch.data.labels[a.dataIndex]);
+          },
+          onHover: (e, _el, ch) => { e.native.target.style.cursor = 'pointer'; },
           plugins: {
             legend: {
               labels: { color: cssVar('--chart-tx'), boxWidth: 12, usePointStyle: true, font: { size: 11 } }
@@ -3220,18 +3227,19 @@ $('dbDumpBtn').addEventListener('click', async () => {
     renderDbDump();
   } catch (err) { $('dbDumpList').textContent = err.message || 'Gagal memuat database'; }
 });
-$('cpuCard').addEventListener('click', async () => {
+async function showHistTop(t, label) {
+  $('topProcTitle').textContent = `Proses pada ${label}`;
   $('topProcModal').classList.add('open');
-  $('topProcList').innerHTML = loadingHtml('Mengukur CPU…');
+  $('topProcList').innerHTML = loadingHtml('Memuat…');
   try {
-    const { processes } = await api('GET', '/api/top-processes');
-    $('topProcList').innerHTML = processes.map((x) => `
+    const d = await api('GET', `/api/history/top?t=${t}`);
+    $('topProcList').innerHTML = (d.top.length ? `<div style="margin-bottom:8px;color:var(--mut)">CPU total: ${d.cpu}%</div>` : '') + (d.top.map((x) => `
       <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border)">
-        <div><strong>${escHtml(x.name)}</strong> <span style="color:var(--mut);font-size:12px">pid ${x.pid} · ${escHtml(x.user)} · ${escHtml(x.state)}</span></div>
-        <div style="white-space:nowrap">${x.cpu.toFixed(1)}% CPU · ${x.mem.toFixed(1)}% MEM</div>
-      </div>`).join('') || '<div style="color:var(--mut)">Tidak ada data.</div>';
+        <div><strong>${escHtml(x.n)}</strong> <span style="color:var(--mut);font-size:12px">${escHtml(x.u)} · ${escHtml(x.s)}</span></div>
+        <div style="white-space:nowrap">${x.c.toFixed(1)}% CPU</div>
+      </div>`).join('') || '<div style="color:var(--mut)">Tidak ada data proses untuk titik ini (data lama sebelum fitur ini aktif).</div>');
   } catch (err) { $('topProcList').textContent = err.message || 'Gagal memuat proses'; }
-});
+}
 $('topProcModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('open'); });
 $('topProcClose').addEventListener('click', () => $('topProcModal').classList.remove('open'));
 $('dbDumpSearch').addEventListener('input', renderDbDump);

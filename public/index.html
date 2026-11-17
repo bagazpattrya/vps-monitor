@@ -90,7 +90,7 @@
   <!-- VIEW: OVERVIEW -->
   <div class="view-pane active" id="view-overview">
     <!-- CPU -->
-    <div class="card c3" id="cpuCard" style="cursor:pointer" title="Klik untuk lihat proses yang memakai CPU">
+    <div class="card c3">
       <div>
         <div class="card-head">
           <span>CPU Usage</span>
@@ -1013,10 +1013,10 @@
 <div class="modal-backdrop drawer-backdrop" id="topProcModal">
   <aside class="drawer">
     <div class="modal-head">
-      <span>Proses Teratas (CPU)</span>
+      <span id="topProcTitle">Proses saat itu</span>
       <button class="btn" id="topProcClose" style="padding:2px 8px">✕</button>
     </div>
-    <div style="padding:10px 16px 0;font-size:12px;color:var(--mut)">Sampel 1 detik. S: R=berjalan, S=tidur, D=menunggu I/O. Hanya nama proses.</div>
+    <div style="padding:10px 16px 0;font-size:12px;color:var(--mut)">Proses dengan CPU tertinggi pada titik chart yang diklik (maks 5). State: R=berjalan, S=tidur, D=menunggu I/O. Hanya nama proses.</div>
     <div style="padding:6px 16px 14px;overflow:auto;flex:1;font-size:13px" id="topProcList"></div>
   </aside>
 </div>
