@@ -3220,6 +3220,20 @@ $('dbDumpBtn').addEventListener('click', async () => {
     renderDbDump();
   } catch (err) { $('dbDumpList').textContent = err.message || 'Gagal memuat database'; }
 });
+$('cpuCard').addEventListener('click', async () => {
+  $('topProcModal').classList.add('open');
+  $('topProcList').innerHTML = loadingHtml('Mengukur CPU…');
+  try {
+    const { processes } = await api('GET', '/api/top-processes');
+    $('topProcList').innerHTML = processes.map((x) => `
+      <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border)">
+        <div><strong>${escHtml(x.name)}</strong> <span style="color:var(--mut);font-size:12px">pid ${x.pid} · ${escHtml(x.user)} · ${escHtml(x.state)}</span></div>
+        <div style="white-space:nowrap">${x.cpu.toFixed(1)}% CPU · ${x.mem.toFixed(1)}% MEM</div>
+      </div>`).join('') || '<div style="color:var(--mut)">Tidak ada data.</div>';
+  } catch (err) { $('topProcList').textContent = err.message || 'Gagal memuat proses'; }
+});
+$('topProcModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('open'); });
+$('topProcClose').addEventListener('click', () => $('topProcModal').classList.remove('open'));
 $('dbDumpSearch').addEventListener('input', renderDbDump);
 $('dbDumpSort').addEventListener('change', renderDbDump);
 $('dbDumpModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.remove('open'); });

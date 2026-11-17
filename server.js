@@ -131,7 +131,7 @@ function diskInfo() {
     const free = s.bfree * s.bsize;
     const used = total - free;
     const pct = total ? (used / total) * 100 : 0;
-    const inodesPct = s.files ? ((s.files - s.ffree) / s.files) * 100 : null;
+    const inodesPct = s.files ? +(((s.files - s.ffree) / s.files) * 100).toFixed(1) : null;
     return { total, used, avail, pct, inodesPct, mount: '/' };
   } catch {
     return { total: 0, used: 0, avail: 0, pct: 0, inodesPct: null, mount: '/' };
@@ -4127,6 +4127,19 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/me') {
     const { hiddenKeywords: _hk, ...me } = session; // keyword tidak perlu sampai ke browser
     return send(res, 200, JSON.stringify({ ...me, linuxLogin: auth.ALLOW_LINUX_LOGIN }));
+  }
+  if (p === '/api/top-processes' && req.method === 'GET') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    // top sampel ke-2 = CPU sesaat (sampel ke-1 itu rata-rata sejak proses start). Hanya nama proses, tanpa argumen.
+    return execFile('top', ['-b', '-n', '2', '-d', '1', '-w', '512', '-o', '%CPU'], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
+      if (err) return send(res, 500, JSON.stringify({ error: 'Gagal membaca proses' }));
+      const lines = String(out).split('\n');
+      const hdr = lines.map((l, i) => (/^\s*PID\s+USER/.test(l) ? i : -1)).filter((i) => i >= 0).pop();
+      const rows = lines.slice(hdr + 1).map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 12 && /^\d+$/.test(f[0]))
+        .map((f) => ({ pid: +f[0], user: f[1], state: f[7], cpu: parseFloat(f[8]) || 0, mem: parseFloat(f[9]) || 0, name: f.slice(11).join(' ') }))
+        .slice(0, 15);
+      send(res, 200, JSON.stringify({ processes: rows }));
+    });
   }
   if (p === '/api/stats') {
     const s = lastStats && (Date.now() - lastStats.time < SAMPLE_INTERVAL_MS * 1.5) ? lastStats : getStats();
