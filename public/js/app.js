@@ -1955,7 +1955,8 @@ function navigateView(name, refresh = true) {
     }
     if (view === 'storage') storage();
     if (view === 'workers') workers();
-    if (view === 'git') gitProjects();
+    // Scan git hanya manual (tombol Scan Repos); buka tab tidak memicu scan.
+    if (view === 'git' && !rawGitProjects.length) $('gitList').innerHTML = '<span style="color:var(--mut);font-size:12px">Klik "Scan Repos" untuk memindai repository.</span>';
     if (view === 'processes') { procs(); mysqlQueries(); }
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
