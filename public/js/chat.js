@@ -143,6 +143,19 @@ function addErr(text) {
   scrollDown(true);
 }
 
+// Auto-run tinker with rollback (setting kept per browser) + browser notification for requests that need a manual answer.
+const autoBox = $('autoTinker');
+try { autoBox.checked = localStorage.getItem('chatAutoTinker') === '1'; } catch {}
+autoBox.addEventListener('change', () => {
+  try { localStorage.setItem('chatAutoTinker', autoBox.checked ? '1' : '0'); } catch {}
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+});
+function notifyConfirm(c) {
+  if (!('Notification' in window) || Notification.permission !== 'granted' || !document.hidden) return;
+  const n = new Notification('Claude minta persetujuan', { body: (c.tool === 'tinker' ? 'tinker di ' + c.project + ': ' + c.code : c.command).slice(0, 150), tag: 'chat-confirm-' + c.id });
+  n.onclick = () => { window.focus(); n.close(); };
+}
+
 // Card asking the user to approve a command or tinker code Claude wants to run.
 function showConfirm(parent, c, before) {
   const isTinker = c.tool === 'tinker';
@@ -178,6 +191,8 @@ function showConfirm(parent, c, before) {
   card.appendChild(bar);
   parent.insertBefore(card, before || null);
   scrollDown(true);
+  if (isTinker && autoBox.checked) answer(true, 'rollback');
+  else notifyConfirm(c);
 }
 
 const setBot = (body, text) => body.replaceChildren(renderMarkdown(text));
