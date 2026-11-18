@@ -80,16 +80,18 @@ j('/api/me').then(m => {
     if ($('navLinkActivity')) $('navLinkActivity').style.display = '';
     if ($('navLinkErrors')) $('navLinkErrors').style.display = '';
     if ($('navLinkChat')) $('navLinkChat').style.display = '';
+    if ($('navLinkTraffic')) $('navLinkTraffic').style.display = '';
     if ($('procSpikeCard')) $('procSpikeCard').style.display = '';
     if ($('mysqlQueryCard')) $('mysqlQueryCard').style.display = '';
     $('pm2RestartBtn').style.display = '';
   }
-  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites'].includes(currentView())) location.hash = '#/overview';
+  if (!m.admin && ['users', 'files', 'backups', 'deploy', 'activity', 'sites', 'traffic'].includes(currentView())) location.hash = '#/overview';
   if (!m.superadmin && ['users', 'files'].includes(currentView())) location.hash = '#/overview';
   if (!m.admin && currentView() === 'projects') location.hash = '#/overview';
   if (!m.admin) document.body.classList.add('no-proj-edit');
     if (m.admin && currentView() === 'projects') loadProjects();
     if (m.admin && currentView() === 'processes') { procs(); mysqlQueries(); }
+    if (m.admin && currentView() === 'traffic') traffic();
   document.body.classList.toggle('no-pull', !m.admin);
 }).catch(() => {});
 
@@ -907,8 +909,7 @@ async function procs() {
 }
 
 // ---- MySQL running queries ----
-let rawMysqlQueries = [];
-let mysqlQueryError = '';
+let rawMysqlQueries = [];let mysqlQueryError = '';
 
 function renderMysqlQueries() {
   if (!$('mysqlQueries')) return;
@@ -977,6 +978,94 @@ async function mysqlQueries() {
     }
     renderMysqlQueries();
   } catch (e) {}
+}
+
+// ---- Inbound Traffic & Access Log ----
+let rawTraffic = { inbound: [], requests: [], stats: {}, listenPorts: [], logs: [], topPaths: [] };
+let trafficReqFilter = 'all';
+
+async function traffic(force = false) {
+  if (!isAdmin) return;
+  try {
+    const d = await j('/api/traffic' + (force ? '?force=1' : ''));
+    rawTraffic = d || {};
+    renderTraffic();
+  } catch (e) {}
+}
+
+function renderTraffic() {
+  if (!$('trafficConns')) return;
+  const inb = rawTraffic.inbound || [];
+  const reqs = rawTraffic.requests || [];
+  const st = rawTraffic.stats || {};
+  const remoteCount = rawTraffic.remoteInbound || 0;
+
+  $('trafficConnCount').textContent = inb.length;
+  $('trafficConnSub').textContent = `${remoteCount} remote, ${inb.length - remoteCount} local`;
+  $('trafficConnPill').textContent = remoteCount > 0 ? `${remoteCount} REMOTE` : 'QUIET';
+  $('trafficConnPill').className = 'pill ' + (remoteCount > 50 ? 'warn' : remoteCount > 0 ? 'ok' : '');
+  $('trafficPorts').textContent = (rawTraffic.listenPorts || []).slice(0, 8).join(', ') || '—';
+
+  $('trafficReqTotal').textContent = st.total || 0;
+  $('trafficReqIps').textContent = `${st.uniqueIps || 0} unique IPs`;
+  $('trafficReqBadge').textContent = st.total || 0;
+  $('trafficLogs').textContent = (rawTraffic.logs || []).join(', ') || 'tidak ada log nginx';
+
+  $('trafficProbeCount').textContent = st.probes || 0;
+  $('trafficProbePill').textContent = (st.probes || 0) > 0 ? `${st.probes} PROBES` : 'CLEAN';
+  $('trafficProbePill').className = 'pill ' + ((st.probes || 0) > 0 ? 'warn' : 'ok');
+  $('trafficErrCount').textContent = `${st.client || 0} / ${st.server || 0}`;
+
+  if ($('trafficTopPaths')) {
+    const tp = (rawTraffic.topPaths || []).slice(0, 3).map(([p, n]) => `<code>${escHtml(p)}</code> (${n})`).join(' · ');
+    $('trafficTopPaths').innerHTML = tp ? ' · Top: ' + tp : '';
+  }
+
+  // Inbound table
+  const cq = ($('trafficConnSearch') ? $('trafficConnSearch').value : '').trim().toLowerCase();
+  const cFiltered = inb.filter(r => !cq || `${r.peerHost}:${r.peerPort} ${r.localHost}:${r.localPort} ${r.proc} ${r.pid}`.toLowerCase().includes(cq));
+  $('trafficConnBadge').textContent = `${cFiltered.length} / ${inb.length}`;
+  if (!cFiltered.length) {
+    $('trafficConns').innerHTML = '<tr><td colspan="6" style="color:var(--mut)">Tidak ada koneksi inbound yang cocok</td></tr>';
+  } else {
+    $('trafficConns').innerHTML = cFiltered.map(r => `<tr>
+      <td><code>${escHtml(r.peerHost)}:${escHtml(r.peerPort)}</code>${r.loopback ? ' <span class="badge" style="opacity:0.7">local</span>' : ''}</td>
+      <td><code>${escHtml(r.localHost)}:${escHtml(r.localPort)}</code></td>
+      <td><strong>${escHtml(r.proc || '—')}</strong></td>
+      <td><code>${escHtml(r.pid || '—')}</code></td>
+      <td style="color:var(--mut)">${r.recvQ}</td>
+      <td style="color:var(--mut)">${r.sendQ}</td>
+    </tr>`).join('');
+  }
+
+  // Requests table
+  const rq = ($('trafficReqSearch') ? $('trafficReqSearch').value : '').trim().toLowerCase();
+  const rFiltered = reqs.filter(r => {
+    if (trafficReqFilter === 'probe' && !r.probe) return false;
+    if (trafficReqFilter === 'err' && r.status < 400) return false;
+    if (!rq) return true;
+    return `${r.ip} ${r.method} ${r.path} ${r.status} ${r.ua} ${r.probe}`.toLowerCase().includes(rq);
+  });
+  $('trafficReqCount').textContent = `${rFiltered.length} / ${reqs.length}`;
+
+  if (!rFiltered.length) {
+    $('trafficReqs').innerHTML = '<tr><td colspan="8" style="color:var(--mut)">Tidak ada request yang cocok (atau log nginx belum ada)</td></tr>';
+  } else {
+    $('trafficReqs').innerHTML = rFiltered.map(r => {
+      const statusClass = r.status >= 500 ? 'pill down' : r.status >= 400 ? 'pill warn' : r.status >= 300 ? 'pill' : 'pill ok';
+      const probeBadge = r.probe ? `<span class="badge" style="color:var(--bad);border-color:currentColor">${escHtml(r.probe)}</span>` : '<span style="color:var(--mut)">—</span>';
+      return `<tr class="${r.probe ? 'proc-row-spike' : ''}">
+        <td style="color:var(--mut);white-space:nowrap;font-size:11px">${escHtml(r.time || '—')}</td>
+        <td><code>${escHtml(r.ip || '—')}</code></td>
+        <td><strong>${escHtml(r.method || '—')}</strong></td>
+        <td><code class="cmd-code" title="${escHtml(r.path)}">${escHtml(r.path)}</code></td>
+        <td><span class="${statusClass}">${r.status}</span></td>
+        <td style="color:var(--mut);white-space:nowrap">${fmtBytes(r.bytes)}</td>
+        <td>${probeBadge}</td>
+        <td style="color:var(--mut);font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(r.ua)}">${escHtml(r.ua || '—')}</td>
+      </tr>`;
+    }).join('');
+  }
 }
 
 async function storage(force = false) {
@@ -1228,6 +1317,19 @@ async function hist() {
 }
 
 // UI Events
+if ($('trafficRefresh')) $('trafficRefresh').addEventListener('click', () => traffic(true));
+if ($('trafficConnSearch')) $('trafficConnSearch').addEventListener('input', renderTraffic);
+if ($('trafficReqSearch')) $('trafficReqSearch').addEventListener('input', renderTraffic);
+if ($('trafficReqTabs')) {
+  $('trafficReqTabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.tab');
+    if (!tab) return;
+    $('trafficReqTabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    trafficReqFilter = tab.dataset.af || 'all';
+    renderTraffic();
+  });
+}
 $('procSearch').addEventListener('input', renderProcs);
 if ($('procMinCpu')) $('procMinCpu').addEventListener('input', renderProcs);
 if ($('procRefresh')) $('procRefresh').addEventListener('click', procs);
@@ -1928,7 +2030,7 @@ const toggleSidebar = (open) => {
   ov.classList.toggle('open', show);
 };
 
-const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'backups', 'files', 'users', 'activity', 'deploy', 'sites', 'projects'];
+const VALID_VIEWS = ['overview', 'storage', 'workers', 'git', 'processes', 'traffic', 'backups', 'files', 'users', 'activity', 'deploy', 'sites', 'projects'];
 
 function currentView() {
   const h = (location.hash || '').replace(/^#\/?/, '').split('?')[0].trim().toLowerCase();
@@ -1958,6 +2060,7 @@ function navigateView(name, refresh = true) {
     // Scan git otomatis hanya saat pertama masuk; selanjutnya manual (tombol Scan Repos).
     if (view === 'git' && !rawGitProjects.length) gitProjects();
     if (view === 'processes') { procs(); mysqlQueries(); }
+    if (view === 'traffic') traffic();
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
     if (view === 'users') users();
@@ -3481,7 +3584,10 @@ setInterval(() => {
 }, 15000);
 
 // Processes dipoll lebih cepat (5 detik), hanya saat view Processes aktif
-setInterval(() => { if (currentView() === 'processes') { procs(); mysqlQueries(); } }, 5000);
+setInterval(() => {
+  if (currentView() === 'processes') { procs(); mysqlQueries(); }
+  if (currentView() === 'traffic') traffic();
+}, 5000);
 
 // Section collapsible (Running Processes, MySQL Queries, Spike History), state disimpan di localStorage
 document.querySelectorAll('[data-collapsible]').forEach((card) => {

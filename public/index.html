@@ -30,6 +30,7 @@
   <a href="/chat" class="nav-link" id="navLinkChat" style="display:none;--c:99,102,241"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>AI Chat</a>
   <a href="#/git" class="nav-link" data-view="git" style="--c:249,115,22"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>Git Deployments</a>
   <a href="#/processes" class="nav-link" data-view="processes" style="--c:16,185,129"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg></span>Processes</a>
+  <a href="#/traffic" class="nav-link" id="navLinkTraffic" data-view="traffic" style="display:none;--c:6,182,212"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>Traffic</a>
   <a href="#/backups" class="nav-link" id="navLinkBackups" data-view="backups" style="display:none;--c:20,184,166"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>Backups</a>
   <a href="#/sites" class="nav-link" id="navLinkSites" data-view="sites" style="display:none;--c:14,165,233"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span>Hosted Sites</a>
   <a href="#/files" class="nav-link" id="navLinkFiles" data-view="files" style="display:none;--c:234,179,8"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span>File Explorer</a>
@@ -535,6 +536,74 @@
     </div>
   </div>
   </div><!-- /view-processes -->
+
+  <!-- VIEW: TRAFFIC -->
+  <div class="view-pane" id="view-traffic">
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>Inbound Connections</span><span class="pill" id="trafficConnPill">—</span></div>
+        <div class="metric-row"><div class="big" id="trafficConnCount">—</div><div class="sub-val" id="trafficConnSub">established</div></div>
+      </div>
+      <div class="card-foot"><span>Listening ports</span><strong id="trafficPorts">—</strong></div>
+    </div>
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>Requests Seen</span><span class="badge" id="trafficReqBadge">0</span></div>
+        <div class="metric-row"><div class="big" id="trafficReqTotal">—</div><div class="sub-val" id="trafficReqIps">—</div></div>
+      </div>
+      <div class="card-foot"><span>Source</span><strong id="trafficLogs">—</strong></div>
+    </div>
+    <div class="card c4">
+      <div>
+        <div class="card-head"><span>Blocked Probes</span><span class="pill down" id="trafficProbePill">—</span></div>
+        <div class="metric-row"><div class="big" id="trafficProbeCount">—</div><div class="sub-val" id="trafficProbeSub">4xx/5xx on scanner paths</div></div>
+      </div>
+      <div class="card-foot"><span>4xx / 5xx</span><strong id="trafficErrCount">—</strong></div>
+    </div>
+
+    <div class="card c12" data-collapsible id="trafficConnCard">
+      <div class="sec-head">
+        <h3 class="sec-title"><span>Live Inbound</span><span class="badge" id="trafficConnBadge">0</span></h3>
+        <div class="proc-controls">
+          <input type="search" autocomplete="off" id="trafficConnSearch" class="input" placeholder="Filter ip, port, process..." />
+          <button class="btn-sm" id="trafficRefresh">↻ Refresh</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+        Established TCP yang masuk ke port tempat server ini listen (ss). Loopback ikut tampil, tandanya <code>(local)</code>.
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Peer</th><th>Local</th><th>Process</th><th>PID</th><th>Recv-Q</th><th>Send-Q</th></tr></thead>
+          <tbody id="trafficConns"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card c12" data-collapsible id="trafficReqCard">
+      <div class="sec-head">
+        <h3 class="sec-title"><span>Access Attempts</span><span class="badge" id="trafficReqCount">0</span></h3>
+        <div class="proc-controls">
+          <input type="search" autocomplete="off" id="trafficReqSearch" class="input" placeholder="Filter ip, path, status..." />
+          <div class="tabs" id="trafficReqTabs">
+            <button class="tab active" data-af="all">All</button>
+            <button class="tab" data-af="probe">Probes</button>
+            <button class="tab" data-af="err">4xx/5xx</button>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+        Baris baru dari access log nginx (offset disimpan per file, jadi tidak membaca ulang seluruh log). Path scanner ditandai.
+        <span id="trafficTopPaths"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>IP</th><th>Method</th><th>Path</th><th>Status</th><th>Bytes</th><th>Probe</th><th>User-Agent</th></tr></thead>
+          <tbody id="trafficReqs"></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /view-traffic -->
 
   <!-- VIEW: BACKUPS -->
   <div class="view-pane" id="view-backups">

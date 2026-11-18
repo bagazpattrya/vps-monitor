@@ -14,6 +14,7 @@ const chat = require('./chat');
 const chats = require('./chats');
 const projects = require('./projects');
 const consoleWs = require('./console');
+const traffic = require('./traffic');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -4223,6 +4224,10 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify(r));
   }
   if (p === '/api/services') return send(res, 200, JSON.stringify({ time: Date.now(), services: getServices() }));
+  if (p === '/api/traffic') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    return send(res, 200, JSON.stringify(traffic.collect(url.searchParams.get('force') === '1')));
+  }
   if (p === '/api/storage') {
     const force = url.searchParams.get('force') === '1';
     const s = getStorageBreakdown(force);
