@@ -1955,8 +1955,8 @@ function navigateView(name, refresh = true) {
     }
     if (view === 'storage') storage();
     if (view === 'workers') workers();
-    // Scan git hanya manual (tombol Scan Repos); buka tab tidak memicu scan.
-    if (view === 'git' && !rawGitProjects.length) $('gitList').innerHTML = '<span style="color:var(--mut);font-size:12px">Klik "Scan Repos" untuk memindai repository.</span>';
+    // Scan git otomatis hanya saat pertama masuk; selanjutnya manual (tombol Scan Repos).
+    if (view === 'git' && !rawGitProjects.length) gitProjects();
     if (view === 'processes') { procs(); mysqlQueries(); }
     if (view === 'backups') backups();
     if (view === 'files') loadFs(fsCurrentPath);
@@ -3476,7 +3476,6 @@ setInterval(() => {
   if (v === 'overview') { svc(); hist(); }
   else if (v === 'workers') { workers(); }
   else if (v === 'storage') { storage(); }
-  else if (v === 'git') { gitProjects(); }
   else if (v === 'backups') { backups(); }
   else if (v === 'users') { users(); }
 }, 15000);
