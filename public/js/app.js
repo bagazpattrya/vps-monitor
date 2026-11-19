@@ -981,8 +981,15 @@ async function mysqlQueries() {
 }
 
 // ---- Inbound Traffic & Access Log ----
-let rawTraffic = { inbound: [], requests: [], stats: {}, listenPorts: [], logs: [], topPaths: [] };
+let rawTraffic = { inbound: [], requests: [], stats: {}, listenPorts: [], logs: [], topPaths: [], visitors: [], uniqueIpList: [] };
 let trafficReqFilter = 'all';
+let trafficIpFilter = 'all';
+
+const VISITOR_LABEL = { bot: 'bot', whatsapp: 'WhatsApp', 'in-app': 'in-app', mobile: 'mobile', desktop: 'desktop', unknown: '?', other: 'other' };
+function visitorBadge(v) {
+  const cls = v === 'bot' ? 'down' : v === 'whatsapp' || v === 'in-app' ? 'warn' : v === 'unknown' ? '' : 'ok';
+  return `<span class="pill ${cls}" title="${escHtml(v || '')}">${escHtml(VISITOR_LABEL[v] || v || '?')}</span>`;
+}
 
 async function traffic(force = false) {
   if (!isAdmin) return;
@@ -1021,6 +1028,33 @@ function renderTraffic() {
     $('trafficTopPaths').innerHTML = tp ? ' · Top: ' + tp : '';
   }
 
+  // Breakdown tipe visitor dari ring terakhir
+  if ($('trafficVisitors')) {
+    const vs = (rawTraffic.visitors || []).map(([v, n]) => `${VISITOR_LABEL[v] || v} ${n}`).join(' · ');
+    $('trafficVisitors').innerHTML = vs ? ' · ' + escHtml(vs) : '';
+  }
+
+  // Unique visitors (kumulatif sejak panel hidup)
+  const uniq = rawTraffic.uniqueIpList || [];
+  const iq = ($('trafficIpSearch') ? $('trafficIpSearch').value : '').trim().toLowerCase();
+  const iFiltered = uniq.filter(r => {
+    if (trafficIpFilter === 'bot' && r.visitor !== 'bot') return false;
+    if (trafficIpFilter === 'human' && r.visitor === 'bot') return false;
+    return !iq || `${r.ip} ${r.visitor}`.toLowerCase().includes(iq);
+  });
+  $('trafficIpBadge').textContent = `${iFiltered.length} / ${st.uniqueIpsTotal || uniq.length}`;
+  if (!iFiltered.length) {
+    $('trafficIps').innerHTML = '<tr><td colspan="5" style="color:var(--mut)">Belum ada IP tercatat</td></tr>';
+  } else {
+    $('trafficIps').innerHTML = iFiltered.map(r => `<tr>
+      <td><code>${escHtml(r.ip)}</code></td>
+      <td>${r.hits}</td>
+      <td>${visitorBadge(r.visitor)}</td>
+      <td style="color:var(--mut);font-size:11px">${escHtml(r.first || '—')}</td>
+      <td style="color:var(--mut);font-size:11px">${escHtml(r.last || '—')}</td>
+    </tr>`).join('');
+  }
+
   // Inbound table
   const cq = ($('trafficConnSearch') ? $('trafficConnSearch').value : '').trim().toLowerCase();
   const cFiltered = inb.filter(r => !cq || `${r.peerHost}:${r.peerPort} ${r.localHost}:${r.localPort} ${r.proc} ${r.pid}`.toLowerCase().includes(cq));
@@ -1057,6 +1091,7 @@ function renderTraffic() {
       return `<tr class="${r.probe ? 'proc-row-spike' : ''}">
         <td style="color:var(--mut);white-space:nowrap;font-size:11px">${escHtml(r.time || '—')}</td>
         <td><code>${escHtml(r.ip || '—')}</code></td>
+        <td>${visitorBadge(r.visitor)}</td>
         <td><strong>${escHtml(r.method || '—')}</strong></td>
         <td><code class="cmd-code" title="${escHtml(r.path)}">${escHtml(r.path)}</code></td>
         <td><span class="${statusClass}">${r.status}</span></td>
@@ -1320,6 +1355,17 @@ async function hist() {
 if ($('trafficRefresh')) $('trafficRefresh').addEventListener('click', () => traffic(true));
 if ($('trafficConnSearch')) $('trafficConnSearch').addEventListener('input', renderTraffic);
 if ($('trafficReqSearch')) $('trafficReqSearch').addEventListener('input', renderTraffic);
+if ($('trafficIpSearch')) $('trafficIpSearch').addEventListener('input', renderTraffic);
+if ($('trafficIpTabs')) {
+  $('trafficIpTabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.tab');
+    if (!tab) return;
+    $('trafficIpTabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    trafficIpFilter = tab.dataset.vf || 'all';
+    renderTraffic();
+  });
+}
 if ($('trafficReqTabs')) {
   $('trafficReqTabs').addEventListener('click', (e) => {
     const tab = e.target.closest('.tab');

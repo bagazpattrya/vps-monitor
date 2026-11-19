@@ -81,7 +81,7 @@ const isLoopback = (h) => h === '127.0.0.1' || h === '::1' || h === '0.0.0.0' ||
 // Siapa di balik request: bot/agent, in-app browser (WA/IG/FB), HP, atau desktop.
 // Urutan penting: bot dicek dulu supaya "WhatsApp/2.x" tidak dianggap bot.
 const CLIENTS = [
-  [/bot|crawler|spider|scrap|curl\/|wget|python-requests|go-http-client|okhttp|node-fetch|axios|libwww|headless|phantom|sqlmap|nmap|masscan|zgrab|nuclei|semrush|ahrefs|censys/i, 'bot'],
+  [/bot|crawler|spider|scrap|sync\/|curl\/|wget|python-requests|go-http-client|okhttp|node-fetch|axios|libwww|headless|phantom|sqlmap|nmap|masscan|zgrab|nuclei|semrush|ahrefs|censys/i, 'bot'],
   [/whatsapp/i, 'whatsapp'],
   [/fbav|fban|instagram|line\/|telegram|twitterbot|tiktok|micromessenger/i, 'in-app'],
   [/android|iphone|ipad|ipod|mobile|opera mini/i, 'mobile'],

@@ -580,6 +580,30 @@
       </div>
     </div>
 
+    <div class="card c12" data-collapsible id="trafficIpCard">
+      <div class="sec-head">
+        <h3 class="sec-title"><span>Unique Visitors</span><span class="badge" id="trafficIpBadge">0</span></h3>
+        <div class="proc-controls">
+          <input type="search" autocomplete="off" id="trafficIpSearch" class="input" placeholder="Filter IP atau tipe visitor..." />
+          <div class="tabs" id="trafficIpTabs">
+            <button class="tab active" data-vf="all">All</button>
+            <button class="tab" data-vf="human">Human</button>
+            <button class="tab" data-vf="bot">Bot</button>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-bottom:8px">
+        Semua IP unik sejak panel hidup (bukan cuma 500 baris terakhir). Tipe ditentukan dari User-Agent: bot/agent, in-app (WA/IG/FB), mobile, desktop.
+        <span id="trafficVisitors"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>IP</th><th>Hits</th><th>Visitor</th><th>First seen</th><th>Last seen</th></tr></thead>
+          <tbody id="trafficIps"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="card c12" data-collapsible id="trafficReqCard">
       <div class="sec-head">
         <h3 class="sec-title"><span>Access Attempts</span><span class="badge" id="trafficReqCount">0</span></h3>
@@ -598,7 +622,7 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Time</th><th>IP</th><th>Method</th><th>Path</th><th>Status</th><th>Bytes</th><th>Probe</th><th>User-Agent</th></tr></thead>
+          <thead><tr><th>Time</th><th>IP</th><th>Visitor</th><th>Method</th><th>Path</th><th>Status</th><th>Bytes</th><th>Probe</th><th>User-Agent</th></tr></thead>
           <tbody id="trafficReqs"></tbody>
         </table>
       </div>

@@ -79,6 +79,28 @@ test('readIncremental returns only new complete lines and survives truncation', 
   assert.strictEqual(t.readIncremental(file, state), 'z\n');
 });
 
+test('classifyClient sorts bots before in-app browsers', () => {
+  assert.strictEqual(t.classifyClient('WhatsApp/2.23.20.0'), 'whatsapp');
+  assert.strictEqual(t.classifyClient('TheOsoOfficial-Sync/1.0'), 'bot');
+  assert.strictEqual(t.classifyClient('Mozilla/5.0 (Linux; Android 10; K)'), 'mobile');
+  assert.strictEqual(t.classifyClient('Mozilla/5.0 (X11; Linux x86_64)'), 'desktop');
+  assert.strictEqual(t.classifyClient(''), 'unknown');
+  assert.strictEqual(t.classifyClient('WeirdThing/1.0'), 'other');
+});
+
+test('summarize aggregates per-IP hits and visitor types', () => {
+  const rows = [
+    { ip: '1.1.1.1', method: 'GET', path: '/', status: 200, bytes: 10, probe: '', visitor: 'mobile' },
+    { ip: '1.1.1.1', method: 'GET', path: '/a', status: 200, bytes: 5, probe: '', visitor: 'mobile' },
+    { ip: '2.2.2.2', method: 'GET', path: '/.env', status: 404, bytes: 0, probe: 'secret-file', visitor: 'bot' },
+  ];
+  const s = t.summarize(rows);
+  assert.strictEqual(s.stats.uniqueIps, 2);
+  assert.strictEqual(s.stats.bots, 1);
+  assert.deepStrictEqual(s.ipStats[0], { ip: '1.1.1.1', hits: 2, bytes: 15, visitor: 'mobile', ua: '', probes: 0 });
+  assert.deepStrictEqual(s.visitors, [['mobile', 2], ['bot', 1]]);
+});
+
 test('summarize counts status buckets, probes and top lists', () => {
   const rows = [
     { ip: '1.1.1.1', method: 'GET', path: '/', status: 200, probe: '' },
