@@ -97,3 +97,12 @@ test('summarize counts status buckets, probes and top lists', () => {
   assert.deepStrictEqual(s.topIps[0], ['1.1.1.1', 2]);
   assert.ok(s.topPaths.some(([k]) => k === 'GET /.env'));
 });
+
+test('trackIps: unique IP kumulatif, XFF dipakai bila remote lokal', () => {
+  t.seenIps.clear();
+  t.trackIps([{ ip: '1.1.1.1', time: 'a' }, { ip: '1.1.1.1', time: 'b' }, { ip: '2.2.2.2', time: 'c' }]);
+  assert.strictEqual(t.seenIps.size, 2);
+  assert.strictEqual(t.seenIps.get('1.1.1.1').hits, 2);
+  const r = t.parseAccessLine('127.0.0.1 - - [10/Oct/2026:13:55:36 +0000] "GET / HTTP/1.1" 200 5 "-" "curl/8" "9.9.9.9, 10.0.0.1"');
+  assert.strictEqual(r.ip, '9.9.9.9');
+});

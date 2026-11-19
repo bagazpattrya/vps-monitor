@@ -1007,7 +1007,7 @@ function renderTraffic() {
   $('trafficPorts').textContent = (rawTraffic.listenPorts || []).slice(0, 8).join(', ') || '—';
 
   $('trafficReqTotal').textContent = st.total || 0;
-  $('trafficReqIps').textContent = `${st.uniqueIps || 0} unique IPs`;
+  $('trafficReqIps').textContent = `${st.uniqueIpsTotal || st.uniqueIps || 0} unique IPs`;
   $('trafficReqBadge').textContent = st.total || 0;
   $('trafficLogs').textContent = (rawTraffic.logs || []).join(', ') || 'tidak ada log nginx';
 

@@ -75,7 +75,25 @@ function splitTraffic(estRows, listenSet) {
   return { inbound, outbound };
 }
 
+const isPrivate = (h) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd][0-9a-f]{2}:)/i.test(h);
 const isLoopback = (h) => h === '127.0.0.1' || h === '::1' || h === '0.0.0.0' || h === '::' || /^127\./.test(h);
+
+// Siapa di balik request: bot/agent, in-app browser (WA/IG/FB), HP, atau desktop.
+// Urutan penting: bot dicek dulu supaya "WhatsApp/2.x" tidak dianggap bot.
+const CLIENTS = [
+  [/bot|crawler|spider|scrap|curl\/|wget|python-requests|go-http-client|okhttp|node-fetch|axios|libwww|headless|phantom|sqlmap|nmap|masscan|zgrab|nuclei|semrush|ahrefs|censys/i, 'bot'],
+  [/whatsapp/i, 'whatsapp'],
+  [/fbav|fban|instagram|line\/|telegram|twitterbot|tiktok|micromessenger/i, 'in-app'],
+  [/android|iphone|ipad|ipod|mobile|opera mini/i, 'mobile'],
+  [/windows nt|macintosh|x11|linux|cros/i, 'desktop'],
+];
+
+function classifyClient(ua) {
+  const s = String(ua || '');
+  if (!s || s === '-') return 'unknown';
+  for (const [re, tag] of CLIENTS) if (re.test(s)) return tag;
+  return 'other';
+}
 
 // Pola path yang biasanya hanya dipakai scanner/exploit, bukan pengunjung asli.
 const PROBES = [
@@ -98,11 +116,14 @@ function classifyPath(p) {
 // Format vhost sering diawali "$host" atau "$server_name" -> token IP dicari, bukan diasumsikan.
 function parseAccessLine(line) {
   if (!line || line[0] === '#') return null;
-  const m = line.match(/\[([^\]]+)\]\s+"([^"]*)"\s+(\d{3})\s+(\d+|-)(?:\s+"([^"]*)"\s+"([^"]*)")?/);
+  const m = line.match(/\[([^\]]+)\]\s+"([^"]*)"\s+(\d{3})\s+(\d+|-)(?:\s+"([^"]*)"\s+"([^"]*)"(?:\s+"([^"]*)")?)?/);
   if (!m) return null;
   const head = line.slice(0, m.index).trim().split(/\s+/);
   let ip = head.find((t) => /^[0-9a-f:.]+$/i.test(t) && (t.includes('.') || t.includes(':'))) || '';
   ip = ip.replace(/^"|"$/g, '');
+  // Di belakang proxy lokal, IP asli ada di X-Forwarded-For (field ke-3 setelah UA, bila log_format memuatnya).
+  const xff = (m[7] || '').split(',')[0].trim();
+  if (xff && xff !== '-' && /^[0-9a-f:.]+$/i.test(xff) && (isLoopback(ip) || isPrivate(ip))) ip = xff;
   const req = m[2].split(' ');
   const pathPart = req[1] || '';
   return {
@@ -115,6 +136,7 @@ function parseAccessLine(line) {
     bytes: m[4] === '-' ? 0 : parseInt(m[4], 10) || 0,
     ref: m[5] || '',
     ua: (m[6] || '').slice(0, 200),
+    visitor: classifyClient(m[6]),
     probe: classifyPath(pathPart),
   };
 }
@@ -139,6 +161,18 @@ function readIncremental(file, state) {
   return text;
 }
 
+// Semua IP unik sejak server hidup (ring 500 baris terlalu pendek: bot bisa menggeser IP lama).
+const MAX_SEEN_IPS = 20000; // shortcut: batas memori, naikkan atau simpan ke disk bila perlu histori lintas restart
+const seenIps = new Map();
+function trackIps(rows) {
+  for (const r of rows) {
+    if (!r.ip) continue;
+    const e = seenIps.get(r.ip);
+    if (e) { e.hits++; e.last = r.time; seenIps.delete(r.ip); seenIps.set(r.ip, e); }
+    else { seenIps.set(r.ip, { ip: r.ip, hits: 1, first: r.time, last: r.time, visitor: r.visitor }); if (seenIps.size > MAX_SEEN_IPS) seenIps.delete(seenIps.keys().next().value); }
+  }
+}
+
 let reqRing = [];
 let offsets = new Map();
 let cache = { time: 0, data: null };
@@ -156,26 +190,40 @@ function drainLogs(state) {
     }
   }
   if (out.length) {
+    trackIps(out);
     reqRing = reqRing.concat(out).slice(-MAX_REQUESTS);
   }
   return out.length;
 }
 
 function summarize(rows) {
-  const st = { total: rows.length, ok: 0, redirect: 0, client: 0, server: 0, probes: 0, uniqueIps: 0 };
-  const ips = new Map(), paths = new Map();
+  const st = { total: rows.length, ok: 0, redirect: 0, client: 0, server: 0, probes: 0, uniqueIps: 0, bots: 0 };
+  const ips = new Map(), paths = new Map(), visitors = new Map();
   for (const r of rows) {
     if (r.status >= 500) st.server++;
     else if (r.status >= 400) st.client++;
     else if (r.status >= 300) st.redirect++;
     else st.ok++;
     if (r.probe && r.status >= PROBE_STATUS) st.probes++;
-    ips.set(r.ip, (ips.get(r.ip) || 0) + 1);
+    if (r.visitor === 'bot') st.bots++;
+    visitors.set(r.visitor || 'unknown', (visitors.get(r.visitor || 'unknown') || 0) + 1);
     paths.set(r.method + ' ' + r.path, (paths.get(r.method + ' ' + r.path) || 0) + 1);
+    const a = ips.get(r.ip) || { ip: r.ip, hits: 0, bytes: 0, visitor: r.visitor || 'unknown', ua: '', probes: 0 };
+    a.hits++;
+    a.bytes += r.bytes || 0;
+    a.probes += r.probe && r.status >= PROBE_STATUS ? 1 : 0;
+    if (!a.ua && r.ua) a.ua = r.ua;
+    ips.set(r.ip, a);
   }
   const top = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => [k, v]);
   st.uniqueIps = ips.size;
-  return { stats: st, topIps: top(ips, 8), topPaths: top(paths, 8) };
+  return {
+    stats: st,
+    topIps: [...ips.values()].sort((a, b) => b.hits - a.hits).slice(0, 8).map((a) => [a.ip, a.hits]),
+    topPaths: top(paths, 8),
+    visitors: top(visitors, 8),
+    ipStats: [...ips.values()].sort((a, b) => b.hits - a.hits).slice(0, 50),
+  };
 }
 
 function ss(args) {
@@ -191,10 +239,12 @@ function collect(force = false) {
   drainLogs(offsets);
 
   const requests = reqRing.slice().reverse();
-  const { stats, topIps, topPaths } = summarize(reqRing);
+  const { stats, topIps, topPaths, visitors, ipStats } = summarize(reqRing);
   const connView = (r) => ({ ...r, loopback: isLoopback(r.peerHost) });
+  stats.uniqueIpsTotal = seenIps.size;
   const data = {
     time: Date.now(),
+    uniqueIpList: [...seenIps.values()].reverse().slice(0, 200),
     listenPorts: [...listenSet].sort((a, b) => a - b),
     inbound: inbound.map(connView).sort((a, b) => b.recvQ + b.sendQ - (a.recvQ + a.sendQ)),
     outbound: outbound.length,
@@ -202,6 +252,8 @@ function collect(force = false) {
     stats,
     topIps,
     topPaths,
+    visitors,
+    ipStats,
     requests: requests.slice(0, MAX_REQUESTS),
     logs: accessLogFiles().map((f) => path.basename(f)),
   };
@@ -209,4 +261,4 @@ function collect(force = false) {
   return data;
 }
 
-module.exports = { accessLogFiles, splitHostPort, parseSs, listeningPorts, splitTraffic, classifyPath, parseAccessLine, readIncremental, summarize, collect, MAX_REQUESTS };
+module.exports = { accessLogFiles, splitHostPort, parseSs, listeningPorts, splitTraffic, classifyClient, classifyPath, parseAccessLine, readIncremental, summarize, trackIps, seenIps, collect, MAX_REQUESTS };

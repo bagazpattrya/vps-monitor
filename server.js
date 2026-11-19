@@ -1605,6 +1605,16 @@ function refreshGitProjectsAsync() {
   return gitRefreshing;
 }
 
+// Setelah git pull cukup scan ulang repo itu saja, bukan menolkan cache (itu memicu scan SEMUA repo,
+// dan getGitProjects() sinkron akan memblokir event loop sampai selesai).
+function refreshOneRepo(dir) {
+  scanGitRepoAsync(dir).then((r) => {
+    const i = gitCache.projects.findIndex((x) => x.path === dir);
+    if (i >= 0) gitCache.projects[i] = r; else gitCache.projects.push(r);
+    gitCache.time = Date.now();
+  }).catch(() => { gitCache.time = 0; }); // gagal -> fallback ke scan penuh
+}
+
 // Stale-while-revalidate: cache segar -> langsung; cache basi tapi ada -> kembalikan basi + refresh di
 // belakang; belum ada / sengaja di-invalidate (time=0, mis. setelah pull) / fresh=true -> tunggu scan baru.
 async function getGitProjectsAsync(fresh = false) {
@@ -1966,7 +1976,7 @@ function pullGitProject(targetPath) {
       return { ok: true, output: combined, restart: selfRestart };
     };
     exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
-      gitCache.time = 0; // invalidate cache
+      refreshOneRepo(targetPath);
       const out = (stdout || '') + (stderr || '');
       if (!err) return resolve(runFix(out));
       // Jika gagal karena local changes (umumnya sisa mode/permission, bukan edit beneran),
@@ -1993,7 +2003,7 @@ function pullGitProject(targetPath) {
           // Kalau stash gagal, jangan lanjut: reset --hard di bawah bisa menghapus perubahan lokal.
           if (serr) return resolve({ ok: false, error: 'Gagal menyimpan local changes ke stash: ' + serr.message, output: out + '\n--- autostash ---\n' + sout });
           exec(gitCmd, { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err2, stdout2, stderr2) => {
-            gitCache.time = 0;
+            refreshOneRepo(targetPath);
             const out2 = out + '\n--- autostash ---\n' + sout + '\n--- retry pull ---\n' + ((stdout2 || '') + (stderr2 || ''));
             if (err2) {
               // Pull kedua juga gagal (mis. conflict dengan perubahan upstream). Jangan tinggalkan
@@ -2002,7 +2012,7 @@ function pullGitProject(targetPath) {
                 try { execSync(`${asOwner(a)} 2>&1`, { timeout: 15_000 }); } catch {}
               }
               try { execSync(`${asOwner('reset --hard HEAD')} 2>&1`, { timeout: 15_000 }); } catch {}
-              gitCache.time = 0;
+              refreshOneRepo(targetPath);
               return resolve({ ok: false, error: err2.message + ' (perubahan lokal aman di git stash, repo dikembalikan ke kondisi bersih)', output: out2 });
             }
             // Pull berhasil: kembalikan perubahan lokal yang tadi di-stash supaya fix lokal tidak hilang.
@@ -2010,7 +2020,7 @@ function pullGitProject(targetPath) {
             try { topStash = execSync(`${asOwner('stash list -1 --format=%s')} 2>&1`, { timeout: 10_000 }).toString().trim(); } catch {}
             if (!topStash.endsWith(stashMsg)) return resolve(runFix(out2));
             exec(asOwner('stash pop'), { timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (perr, pstdout, pstderr) => {
-              gitCache.time = 0;
+              refreshOneRepo(targetPath);
               let out3 = out2 + '\n--- restore local changes (stash pop) ---\n' + ((pstdout || '') + (pstderr || ''));
               // stash pop yang conflict meninggalkan index unmerged + conflict marker di file.
               // Stash tetap tersimpan, jadi bersihkan working tree agar pull berikutnya tidak gagal.
@@ -2025,7 +2035,7 @@ function pullGitProject(targetPath) {
               }
               if (perr) {
                 try { execSync(`${asOwner('reset --hard HEAD')} 2>&1`, { timeout: 15_000 }); } catch {}
-                gitCache.time = 0;
+                refreshOneRepo(targetPath);
                 return resolve({ ok: false, error: 'Pull berhasil, tapi perubahan lokal tidak bisa digabung otomatis (conflict). Perubahan lokal aman di git stash; repo dikembalikan ke versi hasil pull. Cek repo: ' + targetPath, output: out3 });
               }
               return resolve(runFix(out3));

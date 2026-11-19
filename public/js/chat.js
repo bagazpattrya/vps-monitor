@@ -150,8 +150,14 @@ autoBox.addEventListener('change', () => {
   try { localStorage.setItem('chatAutoTinker', autoBox.checked ? '1' : '0'); } catch {}
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 });
+// Firefox/Safari need a user gesture to ask, so ask on the first click/keypress on the page.
+if ('Notification' in window && Notification.permission === 'default') {
+  const ask = () => { Notification.requestPermission(); removeEventListener('click', ask); removeEventListener('keydown', ask); };
+  addEventListener('click', ask);
+  addEventListener('keydown', ask);
+}
 function notifyConfirm(c) {
-  if (!('Notification' in window) || Notification.permission !== 'granted' || !document.hidden) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted' || document.hasFocus()) return;
   const n = new Notification('Claude minta persetujuan', { body: (c.tool === 'tinker' ? 'tinker di ' + c.project + ': ' + c.code : c.command).slice(0, 150), tag: 'chat-confirm-' + c.id });
   n.onclick = () => { window.focus(); n.close(); };
 }
