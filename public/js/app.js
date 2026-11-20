@@ -2139,11 +2139,6 @@ document.addEventListener('keydown', (e) => {
   target.select();
 });
 
-$('navSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
-$('navSearch').addEventListener('input', (e) => {
-  const q = e.target.textContent.trim().toLowerCase();
-  document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.toggle('nav-hide', !!q && !l.textContent.toLowerCase().includes(q)));
-});
 document.querySelectorAll('.sidebar .nav-link').forEach(link => {
   link.addEventListener('click', () => {
     toggleSidebar(false);

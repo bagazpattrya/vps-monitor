@@ -1,15 +1,13 @@
 // Keyboard navigation for the sidebar drawer (shared by every page).
 //   Tab Tab        open the sidebar (two Tab presses within 400ms, focus not in a text field/terminal)
 //   ↑ / ↓ / Tab    move between menu items (wraps around), Home / End jump to first / last
-//   Enter          open the focused item (Enter in the search box opens the first match)
-//   typing         jumps to the search box and filters the menu
+//   Enter          open the focused item
 //   Esc            close the sidebar and return focus to where it was
 // Works with the existing markup: it only reads/sets the `open` class on #sidebar and
 // #sidebarOverlay, so mouse open/close (hamburger, ✕, overlay) gets the same focus handling.
 (() => {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
-  const search = document.getElementById('navSearch');
   const brandBtn = document.getElementById('vpsMonitorBtn');
   if (!sidebar || !overlay) return;
 
@@ -17,10 +15,7 @@
   const isOpen = () => sidebar.classList.contains('open');
   const visible = (el) => el.getClientRects().length > 0;
 
-  const items = () => [
-    search,
-    ...sidebar.querySelectorAll('.nav-link, .nav-action:not(:disabled), .side-user-logout'),
-  ].filter((el) => el && visible(el));
+  const items = () => [...sidebar.querySelectorAll('.nav-link, .nav-action:not(:disabled), .side-user-logout')].filter(visible);
   const links = () => [...sidebar.querySelectorAll('.nav-link')].filter(visible);
 
   const setOpen = (show) => {
@@ -39,7 +34,7 @@
     wasOpen = open;
     if (open) {
       returnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
-      const target = sidebar.querySelector('.nav-link.active') || links()[0] || search;
+      const target = sidebar.querySelector('.nav-link.active') || links()[0];
       if (target && visible(target)) target.focus();
     } else {
       // Only restore focus if it is still inside the (now hidden) sidebar or lost to <body>.
@@ -84,7 +79,6 @@
     }
 
     // Sidebar is open: it owns the keyboard.
-    const inSearch = document.activeElement === search;
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
@@ -96,22 +90,10 @@
       case 'Tab': e.preventDefault(); move(e.shiftKey ? -1 : 1); return; // keep focus inside the drawer
       case 'Home':
       case 'End':
-        if (inSearch) return; // cursor movement in the search box
         e.preventDefault();
         { const list = items(); const t = e.key === 'Home' ? list[0] : list[list.length - 1]; if (t) t.focus(); }
         return;
-      case 'Enter':
-        if (inSearch) { // open the first match
-          e.preventDefault();
-          const first = links()[0];
-          if (first) first.click();
-        }
-        return; // links and buttons activate natively
     }
 
-    // Printable key while a link/button is focused: send it to the search box.
-    if (e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey && search && !inSearch) {
-      search.focus();
-    }
   }, true);
 })();

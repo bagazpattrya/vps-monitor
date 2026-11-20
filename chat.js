@@ -446,7 +446,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
     };
     // Run timeout; it does not fire while the user is being asked to confirm something or tinker is running.
     const onTimeout = () => { if (run && (run.pending.size || run.busy)) { timer = setTimeout(onTimeout, 1000); return; } child.kill('SIGKILL'); finish('Timed out'); };
-    let timer = setTimeout(onTimeout, parseInt(process.env.CHAT_TIMEOUT_MS, 10) || 120_000);
+    let timer = setTimeout(onTimeout, parseInt(process.env.CHAT_TIMEOUT_MS, 10) || 300_000);
 
     res.on('close', () => { // client left (or response already ended)
       if (settled) return;

@@ -89,11 +89,6 @@ const toggleSidebar = (open) => {
 $('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
 $('sidebarClose').addEventListener('click', () => toggleSidebar(false));
 $('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
-$('navSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
-$('navSearch').addEventListener('input', (e) => {
-  const q = e.target.textContent.trim().toLowerCase();
-  document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.toggle('nav-hide', !!q && !l.textContent.toLowerCase().includes(q)));
-});
 
 document.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f') return;

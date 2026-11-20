@@ -74,11 +74,6 @@ const toggleSidebar = (open) => {
 $('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
 $('sidebarClose').addEventListener('click', () => toggleSidebar(false));
 $('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
-$('navSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
-$('navSearch').addEventListener('input', (e) => {
-  const q = e.target.textContent.trim().toLowerCase();
-  document.querySelectorAll('.sidebar .nav-link').forEach(l => l.classList.toggle('nav-hide', !!q && !l.textContent.toLowerCase().includes(q)));
-});
 
 // ---- Chat ----
 const MAX_IMAGES = 4, MAX_BYTES = 5 * 1024 * 1024;
