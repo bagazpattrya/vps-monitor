@@ -1338,3 +1338,20 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .send-btn { width: 34px; height: 34px; transition: transform 0.12s, opacity 0.12s; }
 .send-btn:not(:disabled):hover { transform: scale(1.08); }
 .chat-item { transition: background 0.12s; }
+
+/* Work Orders */
+.wo-budget { font-size: 12px; color: var(--mut); margin-bottom: 10px; }
+.wo-lbl { display: block; font-size: 12px; margin: 10px 0 4px; color: var(--tx); }
+.wo-hint { color: var(--mut); font-weight: 400; }
+.wo-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.wo-st { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--mut); }
+.wo-st.PENDING { color: var(--warn-tx); border-color: rgba(245, 158, 11, 0.35); }
+.wo-st.IN_PROGRESS { color: var(--ac); border-color: rgba(59, 130, 246, 0.4); }
+.wo-st.COMPLETED { color: var(--ok); border-color: rgba(16, 185, 129, 0.4); }
+.wo-st.NEEDS_REVIEW { color: var(--warn-tx); border-color: rgba(245, 158, 11, 0.5); }
+.wo-st.FAILED, .wo-st.OVER_BUDGET { color: var(--bad-tx); border-color: rgba(239, 68, 68, 0.4); }
+#woList tr { cursor: pointer; }
+.wo-pre { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 4px 0 10px; }
+.wo-kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; font-size: 12.5px; margin-bottom: 10px; }
+.wo-kv dt { color: var(--mut); } .wo-kv dd { margin: 0; word-break: break-word; }
+.wo-shot { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }

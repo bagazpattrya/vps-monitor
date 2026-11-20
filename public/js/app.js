@@ -73,6 +73,7 @@ j('/api/me').then(m => {
     if ($('navLinkUsers') && m.superadmin) $('navLinkUsers').style.display = '';
     if ($('navLinkFiles') && m.superadmin) $('navLinkFiles').style.display = '';
     if ($('navLinkConsole') && m.superadmin) $('navLinkConsole').style.display = '';
+    if ($('navLinkOrders') && m.superadmin) $('navLinkOrders').style.display = '';
     if ($('navLinkProjects')) $('navLinkProjects').style.display = '';
     if ($('navLinkBackups')) $('navLinkBackups').style.display = '';
     if ($('navLinkSites')) $('navLinkSites').style.display = '';

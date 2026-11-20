@@ -15,6 +15,7 @@ const chats = require('./chats');
 const projects = require('./projects');
 const consoleWs = require('./console');
 const traffic = require('./traffic');
+const orchestrator = require('./orchestrator');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -4080,6 +4081,14 @@ async function buildProjectsView(fresh = false, session = null) {
   };
 }
 
+// Antrean WO untuk worker laptop. Aktif untuk worker hanya jika ORCH_WORKER_TOKEN diisi (lihat docs/orchestrator.md).
+const orch = orchestrator.create({
+  dataDir: DATA_DIR,
+  workerToken: process.env.ORCH_WORKER_TOKEN,
+  dailyBudget: process.env.ORCH_DAILY_BUDGET_USD,
+  audit: logActivity,
+});
+
 const server = http.createServer(async (req, res) => {
 
 
@@ -4111,6 +4120,9 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/js/theme.js') return serveFile(req, res, p); // dipakai halaman login (sebelum auth)
 
+  // Worker laptop: Bearer token sendiri, bukan cookie session.
+  if (await orch.handleWorker({ req, res, url, readBody, send })) return;
+
   const session = auth.getSession(req);
   if (!session) {
     if (p.startsWith('/api/')) return send(res, 401, JSON.stringify({ error: 'Unauthorized' }));
@@ -4120,6 +4132,12 @@ const server = http.createServer(async (req, res) => {
 
   const needSuper = () => send(res, 403, JSON.stringify({ error: 'Superadmin required' }));
 
+  if (await orch.handleAdmin({ req, res, url, session, readBody, send })) return;
+
+  if ((p === '/orders' || p === '/js/orders.js') && !session.superadmin) {
+    res.writeHead(302, { Location: '/' });
+    return res.end();
+  }
   if ((p === '/console' || p === '/js/console.js' || p.startsWith('/vendor/xterm/')) && !session.superadmin) {
     res.writeHead(302, { Location: '/' });
     return res.end();
@@ -5062,7 +5080,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, id: job.id }));
   }
 
-  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p === '/console' ? '/console.html' : p;
+  let file = p === '/' ? '/index.html' : p === '/errors' ? '/errors.html' : p === '/chat' ? '/chat.html' : p === '/console' ? '/console.html' : p === '/orders' ? '/orders.html' : p;
   file = path.normalize(file).replace(/^(\.\.[\/\\])+/, '');
   serveFile(req, res, file);
 });
