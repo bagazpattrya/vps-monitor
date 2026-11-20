@@ -4134,7 +4134,7 @@ const server = http.createServer(async (req, res) => {
 
   if (await orch.handleAdmin({ req, res, url, session, readBody, send })) return;
 
-  if ((p === '/orders' || p === '/js/orders.js') && !session.superadmin) {
+  if ((p === '/orders' || p === '/js/orders.js') && !session.admin) {
     res.writeHead(302, { Location: '/' });
     return res.end();
   }

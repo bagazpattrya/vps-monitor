@@ -1,7 +1,7 @@
 'use strict';
 // ---- orchestrator: antrean Work Order (WO) untuk worker di laptop ----
 // Tanpa dependency. Server hanya menyimpan data: tidak ada exec/spawn di sini, agent jalan di laptop.
-// Admin (superadmin, lewat session) membuat dan melihat WO; worker (Bearer ORCH_WORKER_TOKEN)
+// Admin (admin/superadmin, lewat session) membuat dan melihat WO; worker (Bearer ORCH_WORKER_TOKEN)
 // mengambil, heartbeat, dan melapor. Lihat docs/orchestrator.md.
 const fs = require('fs');
 const path = require('path');
@@ -151,12 +151,12 @@ function create(opts = {}) {
     return send(ctx, 200, { wo: view(w) }), true;
   }
 
-  // Endpoint admin (session login, superadmin). Return true jika milik orchestrator.
+  // Endpoint admin (session login, role admin ke atas). Return true jika milik orchestrator.
   async function handleAdmin(ctx) {
     const { req, url, session } = ctx;
     const p = url.pathname;
     if (p !== '/api/wo' && !p.startsWith('/api/wo/')) return false;
-    if (!session || !session.superadmin) return send(ctx, 403, { error: 'Superadmin required' }), true;
+    if (!session || !session.admin) return send(ctx, 403, { error: 'Admin required' }), true;
 
     if (p === '/api/wo' && req.method === 'POST') {
       let b;

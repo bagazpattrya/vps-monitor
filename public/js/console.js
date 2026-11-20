@@ -26,8 +26,8 @@ j('/api/me').then(m => {
   $('sideUserRole').textContent = m.role === 'superadmin' ? 'superadmin' : m.admin ? 'admin' : 'viewer';
   $('sideUser').style.display = '';
   if (!m.superadmin) { location.href = '/'; return; }
-  ['Users', 'Files', 'Console', 'Orders'].forEach(n => { if (m.superadmin && $('navLink' + n)) $('navLink' + n).style.display = ''; });
-  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+  ['Users', 'Files', 'Console'].forEach(n => { if (m.superadmin && $('navLink' + n)) $('navLink' + n).style.display = ''; });
+  ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat', 'Orders'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
   $('pm2RestartBtn').style.display = '';
 }).catch(() => {});
 

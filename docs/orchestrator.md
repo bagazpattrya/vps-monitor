@@ -11,7 +11,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 ## Endpoint
 | Siapa | Endpoint | Auth |
 |---|---|---|
-| Admin | `POST /api/wo`, `GET /api/wo`, `GET /api/wo/:id`, `GET /api/wo/shot/:file` | session login superadmin |
+| Admin | `POST /api/wo`, `GET /api/wo`, `GET /api/wo/:id`, `GET /api/wo/shot/:file` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
 `POST /api/wo` body: `{ project_key, context, goals[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.

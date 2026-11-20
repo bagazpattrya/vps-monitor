@@ -23,10 +23,10 @@ async function boot(opts = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-'));
   let clock = 1_000_000;
   const o = orch.create({ dataDir, workerToken: 'wrk', leaseSec: 10, dailyBudget: 5, now: () => clock, ...opts });
-  const state = { superadmin: true };
+  const state = { admin: true };
   const srv = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
-    const ctx = { req, res, url, readBody, send, session: state.superadmin ? { user: 'admin', superadmin: true } : { user: 'v', superadmin: false } };
+    const ctx = { req, res, url, readBody, send, session: state.admin ? { user: 'admin', admin: true } : { user: 'v', admin: false } };
     if (await o.handleWorker(ctx)) return;
     if (await o.handleAdmin(ctx)) return;
     send(res, 404, '{}');
@@ -46,11 +46,11 @@ test('validate menolak input buruk', () => {
   assert.strictEqual(orch.validate(good), null);
 });
 
-test('worker route: tanpa/salah token -> 401, admin tidak boleh ambil WO, non-superadmin -> 403', async () => {
+test('worker route: tanpa/salah token -> 401, admin tidak boleh ambil WO, viewer -> 403', async () => {
   const t = await boot();
   assert.strictEqual((await t.call('GET', '/api/wo/next')).status, 401);
   assert.strictEqual((await t.call('GET', '/api/wo/next', 'salah')).status, 401);
-  t.state.superadmin = false;
+  t.state.admin = false;
   assert.strictEqual((await t.call('POST', '/api/wo', null, good)).status, 403);
   assert.strictEqual((await t.call('GET', '/api/wo')).status, 403);
   t.close();

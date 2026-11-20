@@ -24,13 +24,14 @@ function j_me() {
     if (r.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
     return r.json();
   }).then(m => {
-    if (!m.superadmin) { location.href = '/'; return; }
-    $('who').innerHTML = `<strong>${escHtml(m.user)}</strong><span class="role">superadmin</span>`;
+    if (!m.admin) { location.href = '/'; return; }
+    $('who').innerHTML = `<strong>${escHtml(m.user)}</strong>${m.role === 'superadmin' ? '<span class="role">superadmin</span>' : '<span class="role">admin</span>'}`;
     $('sideUserName').textContent = m.user;
     $('sideUserAvatar').textContent = String(m.user || '?').charAt(0);
-    $('sideUserRole').textContent = 'superadmin';
+    $('sideUserRole').textContent = m.role === 'superadmin' ? 'superadmin' : 'admin';
     $('sideUser').style.display = '';
-    ['Users', 'Files', 'Console', 'Orders', 'Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+    ['Backups', 'Sites', 'Deploy', 'Activity', 'Errors', 'Chat', 'Orders'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
+    if (m.superadmin) ['Users', 'Files', 'Console'].forEach(n => { if ($('navLink' + n)) $('navLink' + n).style.display = ''; });
     $('pm2RestartBtn').style.display = '';
     load();
     refreshTimer = setInterval(() => { if (!document.hidden) load(); }, 5000);
