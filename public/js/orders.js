@@ -70,6 +70,23 @@ $('logout').onclick = $('sideLogout').onclick = async () => {
   location.href = '/login';
 };
 
+$('pm2RestartBtn').onclick = async () => {
+  if (!confirm('Restart aplikasi VPS Monitor via pm2? Dashboard akan terputus beberapa detik.')) return;
+  const btn = $('pm2RestartBtn');
+  btn.disabled = true;
+  btn.classList.add('busy');
+  btn.querySelector('.nav-action-label').textContent = 'Restarting…';
+  try {
+    await api('POST', '/api/pm2/restart');
+    setTimeout(() => location.reload(), 4000);
+  } catch (e) {
+    alert('Restart gagal: ' + e.message);
+    btn.disabled = false;
+    btn.classList.remove('busy');
+    btn.querySelector('.nav-action-label').textContent = 'PM2 Restart';
+  }
+};
+
 async function load() {
   try {
     const d = await api('GET', '/api/wo?limit=200');
