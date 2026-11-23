@@ -42,6 +42,29 @@ function j_me() {
   }).catch(() => {});
 }
 
+async function stats() {
+  try {
+    const s = await (await fetch('/api/stats')).json();
+    $('host').innerHTML = `<strong>${escHtml(s.hostname)}</strong>`;
+    if (s.os && s.os !== s.hostname) { $('os').textContent = s.os; $('os').style.display = ''; $('hostBox').title = s.os; }
+    else { $('os').style.display = 'none'; $('hostBox').title = ''; }
+    const up = Math.floor(s.uptime);
+    $('uptime').textContent = `up ${Math.floor(up / 86400)}d ${Math.floor((up % 86400) / 3600)}h ${Math.floor((up % 3600) / 60)}m`;
+    $('time').textContent = new Date(s.time).toLocaleTimeString();
+  } catch (e) {}
+}
+stats();
+setInterval(stats, 3000);
+
+const toggleSidebar = (open) => {
+  const show = typeof open === 'boolean' ? open : !$('sidebar').classList.contains('open');
+  $('sidebar').classList.toggle('open', show);
+  $('sidebarOverlay').classList.toggle('open', show);
+};
+$('vpsMonitorBtn').addEventListener('click', () => toggleSidebar());
+$('sidebarClose').addEventListener('click', () => toggleSidebar(false));
+$('sidebarOverlay').addEventListener('click', () => toggleSidebar(false));
+
 $('logout').onclick = $('sideLogout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' });
   location.href = '/login';
