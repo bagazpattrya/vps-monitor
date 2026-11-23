@@ -193,9 +193,10 @@ function create(opts = {}) {
       let b;
       try { b = JSON.parse(await ctx.readBody(req, 64 * 1024)); } catch { return send(ctx, 400, { error: 'body bukan JSON / terlalu besar' }), true; }
       const list = b && b.projects;
-      const okItem = (x) => x && typeof x.key === 'string' && /^[\w.-]{1,64}$/.test(x.key) && (x.target == null || (typeof x.target === 'string' && /^[\w][\w./-]{0,99}$/.test(x.target)));
+      const okSources = (x) => x.db_sources == null || (Array.isArray(x.db_sources) && x.db_sources.length <= 30 && x.db_sources.every((d) => /^\w{1,64}$/.test(d)) && (x.db_default == null || x.db_sources.includes(x.db_default)));
+      const okItem = (x) => x && typeof x.key === 'string' && /^[\w.-]{1,64}$/.test(x.key) && (x.target == null || (typeof x.target === 'string' && /^[\w][\w./-]{0,99}$/.test(x.target))) && okSources(x);
       if (!Array.isArray(list) || list.length > 100 || !list.every(okItem) || new Set(list.map((x) => x.key)).size !== list.length) return send(ctx, 400, { error: 'projects tidak valid' }), true;
-      registry = { list: list.map((x) => ({ key: x.key, target: x.target || null })), updated_at: now() };
+      registry = { list: list.map((x) => ({ key: x.key, target: x.target || null, db_sources: x.db_sources || [], db_default: x.db_default || (x.db_sources && x.db_sources[0]) || null })), updated_at: now() };
       fs.writeFileSync(projFile, JSON.stringify(registry), { mode: 0o660 });
       return send(ctx, 200, { ok: true, count: list.length }), true;
     }
@@ -256,6 +257,12 @@ function create(opts = {}) {
       if (err) return send(ctx, 400, { error: err }), true;
       if (!registry.list.length) return send(ctx, 400, { error: 'belum ada project terdaftar: jalankan worker di laptop dulu' }), true;
       if (!registry.list.some((x) => x.key === b.project_key)) return send(ctx, 400, { error: `project "${b.project_key}" tidak dikenal worker. Pilihan: ${registry.list.map((x) => x.key).join(', ')}` }), true;
+      const reg = registry.list.find((x) => x.key === b.project_key);
+      let dbSource = null;
+      if (b.db_source !== undefined && b.db_source !== null && b.db_source !== '') {
+        if (typeof b.db_source !== 'string' || !(reg.db_sources || []).includes(b.db_source)) return send(ctx, 400, { error: `db_source tidak valid. Pilihan: ${(reg.db_sources || []).join(', ') || '(project ini tidak punya sumber DB)'}` }), true;
+        dbSource = b.db_source;
+      } else if ((reg.db_sources || []).length) dbSource = reg.db_default;
       let imgs;
       try { imgs = chats.decodeImages(b.images); } catch (e) { return send(ctx, 400, { error: e.message }), true; }
       const spent = spentToday();
@@ -270,6 +277,7 @@ function create(opts = {}) {
           limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 1, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
         },
       };
+      if (dbSource) w.payload.db_source = dbSource;
       if (imgs.length) {
         const dir = path.join(imgDir, w.id);
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

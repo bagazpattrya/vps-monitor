@@ -277,3 +277,18 @@ test('db-dump: hanya Bearer worker + allowlist; gagal dump memutus koneksi', asy
   assert.strictEqual(b.status, 500);
   t.close();
 });
+
+test('db_source: default dari registry, pilihan valid, tolak di luar daftar', async () => {
+  const t = await boot();
+  const reg = (projects) => t.call('POST', '/api/wo/projects', 'wrk', { projects });
+  assert.strictEqual((await reg([{ key: 'lapila', db_sources: ['a_db', 'b_db'], db_default: 'zzz' }])).status, 400); // default harus ada di sources
+  assert.strictEqual((await reg([{ key: 'lapila', db_sources: ['a;drop'] }])).status, 400);
+  assert.strictEqual((await reg([{ key: 'lapila', target: 'development', db_sources: ['a_db', 'b_db'], db_default: 'b_db' }, { key: 'demo' }])).status, 200);
+  const mk = async (b) => t.call('POST', '/api/wo', null, { ...good, ...b });
+  assert.strictEqual((await (await mk({})).json()).wo.db_source, 'b_db'); // tanpa pilihan: default
+  assert.strictEqual((await (await mk({ db_source: 'a_db' })).json()).wo.db_source, 'a_db');
+  assert.strictEqual((await mk({ db_source: 'c_db' })).status, 400);
+  assert.strictEqual((await mk({ project_key: 'demo', db_source: 'a_db' })).status, 400); // project tanpa sumber DB
+  assert.strictEqual((await (await mk({ project_key: 'demo' })).json()).wo.db_source, undefined);
+  t.close();
+});

@@ -43,3 +43,6 @@ Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve & merge** (dua klik) 
 ## Sync DB untuk worker
 
 `GET /api/wo/db-dump?db=NAMA` (Bearer worker) men-stream `mysqldump | gzip`. Hanya DB yang tercantum di `ORCH_DUMP_DBS` (env server, pisah koma); kosong = mati. Dipakai `db_sync` di `projects.json` laptop (lihat README agent-worker). Dump production berisi data pribadi: batasi allowlist seminimal mungkin.
+
+## Sumber DB per WO
+Worker mendaftarkan `db_sources` + `db_default` per project (dari `db_sync.sources` di `projects.json` laptop) lewat `POST /api/wo/projects`. `POST /api/wo` menerima `db_source` (harus ada di daftar project itu, jika kosong dipakai default); nilainya ikut di payload WO ke worker. Setiap DB harus ada di `ORCH_DUMP_DBS` (isi di `.env`, bukan `ecosystem.config.js` karena nilai ecosystem menimpa `.env`).

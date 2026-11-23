@@ -232,6 +232,7 @@ $('woNewSubmit').addEventListener('click', async () => {
   if (goals.length) body.goals = goals;
   const files = lines($('woFiles').value);
   if (files.length) body.files_hint = files;
+  if ($('woDbBox').style.display !== 'none' && $('woDb').value) body.db_source = $('woDb').value;
   if (pending.length) body.images = pending.map(p => p.dataUrl);
   const url = $('woUrl').value.trim();
   if (url) body.verification = { target_url: url };
@@ -309,10 +310,16 @@ function fillProjects() {
     sel.innerHTML = '<option value="">— pilih project —</option>' + projects.map(p => `<option value="${escHtml(p.key)}">${escHtml(p.key)}</option>`).join('');
     sel.value = projects.some(p => p.key === keep) ? keep : '';
   }
-  projectNote();
+  projectNote(); dbPicker();
 }
 function projectNote() {
   const p = projects.find(x => x.key === $('woProject').value);
   $('woProjectNote').textContent = !p ? '' : p.target ? `Setelah Approve, hasilnya di-merge ke branch “${p.target}” di laptop.` : 'Project ini belum diaktifkan untuk merge: hasil hanya berupa branch wo/… di laptop.';
 }
-$('woProject').addEventListener('change', projectNote);
+function dbPicker() {
+  const p = projects.find(x => x.key === $('woProject').value), src = (p && p.db_sources) || [];
+  $('woDbBox').style.display = src.length ? '' : 'none';
+  $('woDb').innerHTML = src.map(d => `<option value="${escHtml(d)}">${escHtml(d)}${d === p.db_default ? ' (default)' : ''}</option>`).join('');
+  if (src.length) $('woDb').value = p.db_default || src[0];
+}
+$('woProject').addEventListener('change', () => { projectNote(); dbPicker(); });
