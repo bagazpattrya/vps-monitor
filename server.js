@@ -4085,6 +4085,7 @@ async function buildProjectsView(fresh = false, session = null) {
 const orch = orchestrator.create({
   dataDir: DATA_DIR,
   workerToken: process.env.ORCH_WORKER_TOKEN,
+  dumpDbs: (process.env.ORCH_DUMP_DBS || '').split(',').map((x) => x.trim()).filter(Boolean),
   dailyBudget: process.env.ORCH_DAILY_BUDGET_USD,
   audit: logActivity,
 });

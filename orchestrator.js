@@ -7,6 +7,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
+const { spawn } = require('child_process');
+const chats = require('./chats');
 
 const FINAL = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW']; // status yang boleh dilaporkan worker setelah menjalankan agent
 const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
@@ -20,6 +23,10 @@ const KEEP_SHOT_MS = 30 * 86400000;
 const MAX_SHOT = 2 * 1024 * 1024;
 const BODY_LIMIT = 3 * 1024 * 1024; // PNG 2 MB dalam base64 ~2.8 MB
 const SHOT_RE = /^[a-f0-9]{32}\.png$/;
+const CREATE_LIMIT = 30 * 1024 * 1024; // 4 gambar x 5 MB dalam base64; hanya untuk POST /api/wo
+const IMG_RE = /^[a-f0-9]{16}\.(png|jpg|webp|gif)$/;
+const IMG_ROUTE = /^\/api\/wo\/([\w.-]+)\/img\/([^/]+)$/;
+const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
 
 const str = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
 const strList = (v, maxN, maxLen) => Array.isArray(v) && v.length <= maxN && v.every((x) => str(x, maxLen));
@@ -29,7 +36,7 @@ function validate(b) {
   if (!b || typeof b !== 'object') return 'body harus JSON object';
   if (typeof b.project_key !== 'string' || !/^[\w.-]{1,64}$/.test(b.project_key)) return 'project_key tidak valid';
   if (!str(b.context, 4000)) return 'context wajib (maks 4000 karakter)';
-  if (!strList(b.goals, 10, 500) || !b.goals.length) return 'goals wajib: 1-10 string';
+  if (b.goals !== undefined && !strList(b.goals, 10, 500)) return 'goals opsional: maks 10 string';
   if (b.files_hint !== undefined && !strList(b.files_hint, 20, 200)) return 'files_hint tidak valid';
   const l = b.limits || {};
   if (l.model !== undefined && !MODELS.includes(l.model)) return 'model harus salah satu: ' + MODELS.join(',');
@@ -43,10 +50,13 @@ function create(opts = {}) {
   const leaseMs = (Number(opts.leaseSec) || 120) * 1000;
   const dailyBudget = Number.isFinite(Number(opts.dailyBudget)) && opts.dailyBudget !== undefined ? Number(opts.dailyBudget) : 5;
   const workerToken = opts.workerToken || '';
+  const dumpDbs = opts.dumpDbs || []; // allowlist DB yang boleh ditarik worker (ORCH_DUMP_DBS)
+  const dumpBin = opts.dumpBin || 'mysqldump';
   const now = opts.now || Date.now;
   const audit = opts.audit || (() => {});
   const file = path.join(dataDir, 'work-orders.json');
   const shotDir = path.join(dataDir, 'wo-shots');
+  const imgDir = path.join(dataDir, 'wo-images');
   fs.mkdirSync(shotDir, { recursive: true });
 
   let wos = [];
@@ -104,14 +114,16 @@ function create(opts = {}) {
       if (i < 0) break;
       const [w] = wos.splice(i, 1);
       if (w.screenshot) fs.rm(path.join(shotDir, w.screenshot), () => {});
+      fs.rm(path.join(imgDir, w.id), { recursive: true, force: true }, () => {});
     }
     const cutoff = now() - KEEP_SHOT_MS;
     for (const w of wos) {
       if (w.screenshot && w.completed_at && w.completed_at < cutoff) { fs.rm(path.join(shotDir, w.screenshot), () => {}); w.screenshot = null; }
+      if (w.payload.images && w.payload.images.length && w.completed_at && w.completed_at < cutoff) { fs.rm(path.join(imgDir, w.id), { recursive: true, force: true }, () => {}); w.payload.images = []; }
     }
   }
 
-  const isWorkerRoute = (p, m) => (m === 'GET' && p === '/api/wo/next') || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result)$/.test(p)));
+  const isWorkerRoute = (p, m) => (m === 'GET' && (p === '/api/wo/next' || p === '/api/wo/db-dump')) || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result)$/.test(p)));
 
   function workerAuthOk(req) {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -120,13 +132,50 @@ function create(opts = {}) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
+  // Stream mysqldump | gzip untuk worker. Hanya DB di allowlist. Jika gagal, koneksi diputus (bukan diakhiri) supaya
+  // tidak tampak seperti dump utuh; worker juga menjalankan `gzip -t`.
+  function dumpDb(ctx, db) {
+    const { req, res } = ctx;
+    if (!/^\w{1,64}$/.test(db) || !dumpDbs.includes(db)) return send(ctx, 404, { error: 'DB tidak ada di ORCH_DUMP_DBS' });
+    audit('worker', 'wo.dump', db, '');
+    const d = spawn(dumpBin, ['--single-transaction', '--quick', '--routines', '--triggers', '--events', '--no-tablespaces', db], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const gz = zlib.createGzip();
+    let started = false, err = '';
+    const head = () => { if (!started) { started = true; res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store' }); } };
+    d.stderr.on('data', (c) => { err = (err + c).slice(-500); });
+    d.on('error', (e) => { if (!started) send(ctx, 500, { error: 'mysqldump gagal: ' + e.message }); else res.destroy(); });
+    gz.on('data', (c) => { head(); res.write(c); });
+    const gzDone = new Promise((r) => gz.on('end', r));
+    d.on('close', async (code) => {
+      if (code !== 0) { gz.destroy(); return started ? res.destroy() : send(ctx, 500, { error: 'mysqldump gagal: ' + err.trim() }); }
+      await gzDone; head(); res.end();
+    });
+    req.on('close', () => { try { d.kill(); } catch { /* sudah selesai */ } });
+    d.stdout.pipe(gz);
+  }
+
+  // Kirim lampiran WO. `w.id` dibuat server (hex), nama file divalidasi regex: tidak ada traversal.
+  function serveImg(ctx, m) {
+    const w = wos.find((x) => x.id === m[1]);
+    if (!w || !IMG_RE.test(m[2]) || !(w.payload.images || []).includes(m[2])) return send(ctx, 404, { error: 'Not found' });
+    try {
+      ctx.res.setHeader('X-Content-Type-Options', 'nosniff');
+      ctx.send(ctx.res, 200, fs.readFileSync(path.join(imgDir, w.id, m[2])), IMG_TYPES[m[2].split('.')[1]]);
+    } catch { send(ctx, 404, { error: 'Not found' }); }
+  }
+
   // Endpoint worker. Return true jika request ini milik orchestrator (sudah dijawab).
   async function handleWorker(ctx) {
     const { req, url } = ctx;
     const p = url.pathname;
-    if (!isWorkerRoute(p, req.method)) return false;
+    const im = req.method === 'GET' && req.headers.authorization && IMG_ROUTE.exec(p); // path sama dengan admin; dibedakan oleh header Bearer
+    if (!im && !isWorkerRoute(p, req.method)) return false;
     if (!workerToken) return send(ctx, 503, { error: 'ORCH_WORKER_TOKEN belum diatur' }), true;
     if (!workerAuthOk(req)) return send(ctx, 401, { error: 'unauthorized' }), true;
+
+    if (im) return serveImg(ctx, im), true;
+
+    if (p === '/api/wo/db-dump') { dumpDb(ctx, url.searchParams.get('db') || ''); return true; }
 
     if (p === '/api/wo/next') {
       const deadline = now() + clamp(url.searchParams.get('wait'), 0, 30, 0) * 1000;
@@ -202,11 +251,13 @@ function create(opts = {}) {
 
     if (p === '/api/wo' && req.method === 'POST') {
       let b;
-      try { b = JSON.parse(await ctx.readBody(req, 64 * 1024)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      try { b = JSON.parse(await ctx.readBody(req, CREATE_LIMIT)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
       const err = validate(b);
       if (err) return send(ctx, 400, { error: err }), true;
       if (!registry.list.length) return send(ctx, 400, { error: 'belum ada project terdaftar: jalankan worker di laptop dulu' }), true;
       if (!registry.list.some((x) => x.key === b.project_key)) return send(ctx, 400, { error: `project "${b.project_key}" tidak dikenal worker. Pilihan: ${registry.list.map((x) => x.key).join(', ')}` }), true;
+      let imgs;
+      try { imgs = chats.decodeImages(b.images); } catch (e) { return send(ctx, 400, { error: e.message }), true; }
       const spent = spentToday();
       if (spent >= dailyBudget) return send(ctx, 429, { error: `budget harian habis ($${spent.toFixed(2)}/$${dailyBudget})` }), true;
       const t = now();
@@ -215,10 +266,19 @@ function create(opts = {}) {
         status: 'PENDING', project_key: b.project_key, attempts: 0, lease_until: null, result: null, screenshot: null, cost_usd: 0,
         created_at: t, completed_at: null,
         payload: {
-          context: b.context, goals: b.goals, files_hint: b.files_hint || [], verification: b.verification || {},
+          context: b.context, goals: b.goals || [], files_hint: b.files_hint || [], verification: b.verification || {},
           limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 1, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
         },
       };
+      if (imgs.length) {
+        const dir = path.join(imgDir, w.id);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        w.payload.images = imgs.map(({ buf, ext }) => {
+          const name = crypto.randomBytes(8).toString('hex') + '.' + ext;
+          fs.writeFileSync(path.join(dir, name), buf, { mode: 0o600 });
+          return name;
+        });
+      }
       wos.push(w); prune(); save();
       audit(session.user, 'wo.create', w.id, b.project_key);
       return send(ctx, 201, { wo: view(w) }), true;
@@ -227,6 +287,8 @@ function create(opts = {}) {
       const limit = clamp(url.searchParams.get('limit'), 1, 200, 50);
       return send(ctx, 200, { cost_today_usd: spentToday(), daily_budget_usd: dailyBudget, projects: registry.list, projects_updated_at: registry.updated_at ? new Date(registry.updated_at).toISOString() : null, work_orders: wos.slice(-limit).reverse().map(view) }), true;
     }
+    const img = IMG_ROUTE.exec(p);
+    if (img && req.method === 'GET') return serveImg(ctx, img), true;
     const shot = /^\/api\/wo\/shot\/([^/]+)$/.exec(p);
     if (shot && req.method === 'GET') {
       if (!SHOT_RE.test(shot[1])) return send(ctx, 404, { error: 'Not found' }), true;

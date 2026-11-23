@@ -14,7 +14,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 | Admin | `POST /api/wo`, `GET /api/wo`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete`, `POST /api/wo/:id/merge-result` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
-`POST /api/wo` body: `{ project_key, context, goals[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
+`POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
 `complete` body: `{ status: COMPLETED|FAILED|OVER_BUDGET|NEEDS_REVIEW, result: {...}, screenshot_b64? }`.
 
 Membuat WO dari CLI (belum ada UI): login dulu untuk dapat cookie.
@@ -39,3 +39,7 @@ Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve & merge** (dua klik) 
 - Setiap approve/reject/merge masuk Activity Log (`wo.approve`, `wo.reject`, `wo.merge`).
 - WO lama tanpa `head_sha` tidak bisa di-approve (merge manual di laptop).
 - Update worker dan server bersamaan. Worker lama yang tidak mengenal `kind: "merge"` akan salah menjalankan agent untuk job merge.
+
+## Sync DB untuk worker
+
+`GET /api/wo/db-dump?db=NAMA` (Bearer worker) men-stream `mysqldump | gzip`. Hanya DB yang tercantum di `ORCH_DUMP_DBS` (env server, pisah koma); kosong = mati. Dipakai `db_sync` di `projects.json` laptop (lihat README agent-worker). Dump production berisi data pribadi: batasi allowlist seminimal mungkin.

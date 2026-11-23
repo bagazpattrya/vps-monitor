@@ -42,8 +42,13 @@ async function boot(opts = {}) {
 const good = { project_key: 'lapila', context: 'ctx', goals: ['a'] };
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString('base64');
 
+test('goals opsional', () => {
+  assert.strictEqual(orch.validate({ project_key: 'lapila', context: 'ctx' }), null);
+  assert.strictEqual(orch.validate({ project_key: 'lapila', context: 'ctx', goals: [] }), null);
+});
+
 test('validate menolak input buruk', () => {
-  for (const bad of [null, {}, { ...good, project_key: '../x' }, { ...good, goals: [] }, { ...good, limits: { model: 'gpt' } }, { ...good, context: 'x'.repeat(4001) }]) {
+  for (const bad of [null, {}, { ...good, project_key: '../x' }, { ...good, goals: Array(11).fill('a') }, { ...good, limits: { model: 'gpt' } }, { ...good, context: 'x'.repeat(4001) }]) {
     assert.ok(orch.validate(bad), JSON.stringify(bad));
   }
   assert.strictEqual(orch.validate(good), null);
@@ -233,5 +238,42 @@ test('registry selamat restart', async () => {
   const o = { req: { method: 'GET', headers: {} }, url: new URL('http://x/api/wo'), session: { admin: true }, send: (res, c, b) => { o.out = JSON.parse(b); } , res: {} };
   await again.handleAdmin(o);
   assert.strictEqual(o.out.projects.length, 2);
+  t.close();
+});
+
+test('lampiran gambar: simpan, unduh (admin & worker), tolak non-gambar, nama jahat', async () => {
+  const t = await boot();
+  const png = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString('base64');
+  assert.strictEqual((await t.call('POST', '/api/wo', null, { ...good, images: ['data:image/png;base64,' + Buffer.from('bukan gambar').toString('base64')] })).status, 400);
+  assert.strictEqual((await t.call('POST', '/api/wo', null, { ...good, images: [png, png, png, png, png] })).status, 400);
+  const r = await t.call('POST', '/api/wo', null, { ...good, images: [png] });
+  assert.strictEqual(r.status, 201);
+  const { wo } = await r.json();
+  assert.strictEqual(wo.images.length, 1);
+  const u = `/api/wo/${wo.id}/img/${wo.images[0]}`;
+  const a = await t.call('GET', u);
+  assert.strictEqual(a.status, 200);
+  assert.strictEqual(a.headers.get('content-type'), 'image/png');
+  assert.strictEqual(a.headers.get('x-content-type-options'), 'nosniff');
+  assert.strictEqual((await t.call('GET', u, 'wrk')).status, 200);
+  assert.strictEqual((await t.call('GET', u, 'salah')).status, 401);
+  assert.strictEqual((await t.call('GET', `/api/wo/${wo.id}/img/0000000000000000.png`)).status, 404);
+  assert.strictEqual((await t.call('GET', `/api/wo/${wo.id}/img/..%2Fx.png`)).status, 404);
+  t.close();
+});
+
+test('db-dump: hanya Bearer worker + allowlist; gagal dump memutus koneksi', async () => {
+  const ok = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dump-')), 'fake.sh');
+  fs.writeFileSync(ok, '#!/bin/sh\nfor a; do last=$a; done\n[ "$last" = broken ] && { echo oops >&2; exit 2; }\necho "-- dump $last"\n', { mode: 0o755 });
+  const t = await boot({ dumpDbs: ['good', 'broken'], dumpBin: ok });
+  assert.strictEqual((await t.call('GET', '/api/wo/db-dump?db=good')).status, 401); // tanpa Bearer: ditolak, sesi admin tidak cukup
+  assert.strictEqual((await t.call('GET', '/api/wo/db-dump?db=good', 'salah')).status, 401);
+  assert.strictEqual((await t.call('GET', '/api/wo/db-dump?db=other', 'wrk')).status, 404);
+  assert.strictEqual((await t.call('GET', '/api/wo/db-dump?db=a;b', 'wrk')).status, 404);
+  const r = await t.call('GET', '/api/wo/db-dump?db=good', 'wrk');
+  assert.strictEqual(r.status, 200);
+  assert.match(require('zlib').gunzipSync(Buffer.from(await r.arrayBuffer())).toString(), /-- dump good/);
+  const b = await t.call('GET', '/api/wo/db-dump?db=broken', 'wrk');
+  assert.strictEqual(b.status, 500);
   t.close();
 });

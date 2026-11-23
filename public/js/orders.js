@@ -139,8 +139,9 @@ function openDetail(id) {
   ]);
   if (w.merge && w.merge.detail) h += `<div class="wo-pre">${escHtml(w.merge.detail)}</div>`;
   h += `<div class="wo-lbl">Context</div><div class="wo-pre">${escHtml(w.context)}</div>`;
-  h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml((w.goals || []).map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
+  if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
+  if ((w.images || []).length) h += `<div class="wo-lbl">Lampiran</div><div class="chat-thumbs">${w.images.map(n => { const u = `/api/wo/${encodeURIComponent(w.id)}/img/${encodeURIComponent(n)}`; return `<a href="${escHtml(u)}" target="_blank" rel="noopener" class="thumb"><img src="${escHtml(u)}" alt="lampiran"></a>`; }).join('')}</div>`;
   if (r.patch) h += `<div class="wo-lbl">Patch${r.patch_truncated ? ' (dipotong 200 KB)' : ''}</div><div class="wo-pre wo-patch">${renderPatch(r.patch)}</div>`;
   if (r.diff_stat) h += `<div class="wo-lbl">Diff</div><div class="wo-pre">${escHtml(r.diff_stat)}</div>`;
   if (r.logs) h += `<div class="wo-lbl">Log / jawaban agent</div><div class="wo-pre">${escHtml(r.logs)}</div>`;
@@ -158,6 +159,45 @@ function openDetail(id) {
 $('woDetailClose').addEventListener('click', () => $('woDetailModal').classList.remove('open'));
 
 // ---- buat WO baru ----
+// ---- lampiran gambar (pola sama dengan chat.js) ----
+const MAX_IMAGES = 4, MAX_BYTES = 5 * 1024 * 1024;
+let pending = [];
+function renderThumbs() {
+  const box = $('woThumbs');
+  box.textContent = '';
+  pending.forEach((p, i) => {
+    const w = document.createElement('div');
+    w.className = 'thumb';
+    const im = document.createElement('img');
+    im.src = p.dataUrl;
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = '✕'; x.title = 'Hapus';
+    x.onclick = () => { pending.splice(i, 1); renderThumbs(); };
+    w.append(im, x);
+    box.appendChild(w);
+  });
+}
+function addFiles(files) {
+  const err = m => { $('woNewErr').textContent = m; };
+  for (const f of files) {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { err('File tidak didukung: ' + f.name + ' (PNG, JPEG, WebP, GIF)'); continue; }
+    if (f.size > MAX_BYTES) { err(f.name + ' lebih dari 5 MB'); continue; }
+    if (pending.length >= MAX_IMAGES) { err('Maks ' + MAX_IMAGES + ' gambar'); break; }
+    const r = new FileReader();
+    r.onload = () => { if (pending.length < MAX_IMAGES) { pending.push({ dataUrl: r.result }); renderThumbs(); } };
+    r.readAsDataURL(f);
+  }
+}
+$('woAttach').onclick = () => $('woFile').click();
+$('woFile').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+const woModal = $('woNewModal');
+woModal.addEventListener('paste', e => {
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])];
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+woModal.addEventListener('dragover', e => e.preventDefault());
+woModal.addEventListener('drop', e => { e.preventDefault(); addFiles(e.dataTransfer.files); });
+
 const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
 
 $('woNew').addEventListener('click', () => { $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); });
@@ -169,11 +209,13 @@ $('woNewSubmit').addEventListener('click', async () => {
   const body = {
     project_key: $('woProject').value,
     context: $('woContext').value.trim(),
-    goals: lines($('woGoals').value),
     limits: { model: $('woModel').value, max_budget_usd: Number($('woBudgetUsd').value), timeout_sec: Number($('woTimeout').value) },
   };
+  const goals = lines($('woGoals').value);
+  if (goals.length) body.goals = goals;
   const files = lines($('woFiles').value);
   if (files.length) body.files_hint = files;
+  if (pending.length) body.images = pending.map(p => p.dataUrl);
   const url = $('woUrl').value.trim();
   if (url) body.verification = { target_url: url };
   btn.disabled = true; $('woNewErr').textContent = '';
@@ -181,6 +223,7 @@ $('woNewSubmit').addEventListener('click', async () => {
     await api('POST', '/api/wo', body);
     $('woNewModal').classList.remove('open');
     ['woContext', 'woGoals', 'woFiles', 'woUrl'].forEach(i => { $(i).value = ''; });
+    pending = []; renderThumbs();
     await load();
   } catch (e) {
     $('woNewErr').textContent = e.message;

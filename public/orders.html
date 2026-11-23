@@ -135,7 +135,7 @@
       <div class="wo-hint" id="woProjectNote" style="margin-top:4px"></div>
       <label class="wo-lbl">Context</label>
       <textarea id="woContext" class="input" rows="3" style="width:100%" maxlength="4000" placeholder="Apa yang harus diperbaiki dan kenapa"></textarea>
-      <label class="wo-lbl">Goals <span class="wo-hint">(satu per baris, maks 10)</span></label>
+      <label class="wo-lbl">Goals <span class="wo-hint">(opsional, satu per baris, maks 10)</span></label>
       <textarea id="woGoals" class="input" rows="4" style="width:100%" placeholder="Bottom nav tidak tertutup footer&#10;Tanpa horizontal overflow"></textarea>
       <label class="wo-lbl">File untuk dimulai <span class="wo-hint">(opsional, satu per baris — menghemat token)</span></label>
       <textarea id="woFiles" class="input" rows="2" style="width:100%" placeholder="resources/views/layouts/nav.blade.php"></textarea>
@@ -149,6 +149,10 @@
       </div>
       <label class="wo-lbl">URL screenshot <span class="wo-hint">(opsional, hanya localhost di laptop)</span></label>
       <input id="woUrl" class="input" style="width:100%" maxlength="300" placeholder="http://localhost:8000" autocomplete="off" />
+      <label class="wo-lbl">Gambar <span class="wo-hint">(opsional, maks 4 × 5 MB: klik 📎, paste, atau drop)</span></label>
+      <button class="btn-sm" id="woAttach" type="button">📎 Lampirkan</button>
+      <input type="file" id="woFile" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+      <div class="chat-thumbs" id="woThumbs"></div>
       <div style="margin-top:12px;text-align:right">
         <span id="woNewErr" style="color:var(--bad);font-size:12px;margin-right:8px"></span>
         <button class="btn-sm ok" id="woNewSubmit">Kirim ke antrean</button>
