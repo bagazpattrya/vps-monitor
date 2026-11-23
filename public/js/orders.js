@@ -1,6 +1,10 @@
 const $ = id => document.getElementById(id);
 
 let orders = [];
+let projects = [];
+let projectSig = '';
+const ACTIVE = ['PENDING', 'IN_PROGRESS', 'APPROVED', 'MERGING'];
+const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED'];
 let refreshTimer = null;
 
 async function api(method, url, body) {
@@ -47,6 +51,8 @@ async function load() {
   try {
     const d = await api('GET', '/api/wo?limit=200');
     orders = d.work_orders || [];
+    projects = d.projects || [];
+    fillProjects();
     $('woBudget').textContent = `Biaya hari ini: ${fmtUsd(d.cost_today_usd)} dari batas harian $${d.daily_budget_usd}. Angka biaya dari total_cost_usd yang dilaporkan worker (notional jika memakai login subscription).`;
     render();
   } catch (e) {
@@ -56,8 +62,9 @@ async function load() {
 
 function render() {
   const f = $('woFilter').value;
-  const rows = orders.filter(w => !f || (f === 'active' ? ['PENDING', 'IN_PROGRESS'].includes(w.status) : w.status === f));
-  const active = orders.filter(w => ['PENDING', 'IN_PROGRESS'].includes(w.status)).length;
+  const pf = $('woProjectFilter').value;
+  const rows = orders.filter(w => (!pf || w.project_key === pf) && (!f || (f === 'active' ? ACTIVE.includes(w.status) : f === 'APPROVED' ? ['APPROVED', 'MERGING'].includes(w.status) : w.status === f)));
+  const active = orders.filter(w => ACTIVE.includes(w.status)).length;
   $('woBadge').textContent = `${orders.length} total · ${active} aktif`;
   if (!rows.length) {
     $('woList').innerHTML = `<tr><td colspan="6" style="color:var(--mut)">${orders.length ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada Work Order. Klik “+ Work Order”.'}</td></tr>`;
@@ -78,6 +85,7 @@ $('woList').addEventListener('click', e => {
   if (tr) openDetail(tr.dataset.id);
 });
 $('woFilter').addEventListener('change', render);
+$('woProjectFilter').addEventListener('change', render);
 $('woRefresh').addEventListener('click', load);
 
 function kv(rows) {
@@ -102,16 +110,27 @@ function openDetail(id) {
     ['Token', t.input != null ? `in ${t.input} · out ${t.output} · cache read ${t.cache_read} · cache write ${t.cache_creation}` : ''],
     ['Turn', r.turns],
     ['Verifikasi', r.verify_passed === true ? 'lulus' : r.verify_passed === false ? 'gagal' : ''],
+    ['Commit', r.head_sha ? r.head_sha.slice(0, 10) : ''],
+    [w.status === 'REJECTED' ? 'Ditolak oleh' : 'Disetujui oleh', w.approved_by ? `${w.approved_by} · ${fmtTime(w.approved_at)}` : ''],
+    ['Merge', w.merge ? `${w.merge.status}${w.merge.target ? ' → ' + w.merge.target : ''}${w.merge.sha ? ' @ ' + w.merge.sha.slice(0, 10) : ''}` : ''],
   ]);
+  if (w.merge && w.merge.detail) h += `<div class="wo-pre">${escHtml(w.merge.detail)}</div>`;
   h += `<div class="wo-lbl">Context</div><div class="wo-pre">${escHtml(w.context)}</div>`;
   h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml((w.goals || []).map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
+  if (r.patch) h += `<div class="wo-lbl">Patch${r.patch_truncated ? ' (dipotong 200 KB)' : ''}</div><div class="wo-pre wo-patch">${renderPatch(r.patch)}</div>`;
   if (r.diff_stat) h += `<div class="wo-lbl">Diff</div><div class="wo-pre">${escHtml(r.diff_stat)}</div>`;
   if (r.logs) h += `<div class="wo-lbl">Log / jawaban agent</div><div class="wo-pre">${escHtml(r.logs)}</div>`;
   if (w.screenshot_url) h += `<div class="wo-lbl">Screenshot</div><a href="${escHtml(w.screenshot_url)}" target="_blank" rel="noopener"><img class="wo-shot" src="${escHtml(w.screenshot_url)}" alt="screenshot"></a>`;
-  if (w.status === 'COMPLETED' || w.status === 'NEEDS_REVIEW') h += `<p style="color:var(--mut);font-size:12px">Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>. Merge dilakukan manual.</p>`;
+  if (REVIEWABLE.includes(w.status)) {
+    h += r.head_sha
+      ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve &amp; merge</button><button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
+         <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
+      : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
+  }
   $('woDetailBody').innerHTML = h;
   $('woDetailModal').classList.add('open');
+  bindActions(w);
 }
 $('woDetailClose').addEventListener('click', () => $('woDetailModal').classList.remove('open'));
 
@@ -123,8 +142,9 @@ $('woNewClose').addEventListener('click', () => $('woNewModal').classList.remove
 
 $('woNewSubmit').addEventListener('click', async () => {
   const btn = $('woNewSubmit');
+  if (!$('woProject').value) { $('woNewErr').textContent = 'Pilih project dulu'; return; }
   const body = {
-    project_key: $('woProject').value.trim(),
+    project_key: $('woProject').value,
     context: $('woContext').value.trim(),
     goals: lines($('woGoals').value),
     limits: { model: $('woModel').value, max_budget_usd: Number($('woBudgetUsd').value), timeout_sec: Number($('woTimeout').value) },
@@ -137,7 +157,7 @@ $('woNewSubmit').addEventListener('click', async () => {
   try {
     await api('POST', '/api/wo', body);
     $('woNewModal').classList.remove('open');
-    ['woProject', 'woContext', 'woGoals', 'woFiles', 'woUrl'].forEach(i => { $(i).value = ''; });
+    ['woContext', 'woGoals', 'woFiles', 'woUrl'].forEach(i => { $(i).value = ''; });
     await load();
   } catch (e) {
     $('woNewErr').textContent = e.message;
@@ -149,3 +169,67 @@ $('woNewSubmit').addEventListener('click', async () => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') ['woNewModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open'));
 });
+
+// Patch: tiap baris di-escape lalu diberi kelas warna (nilai berasal dari AI, jangan pernah tanpa escape).
+function renderPatch(patch) {
+  return String(patch).split('\n').map(l => {
+    const cls = l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('index ') ? 'pf'
+      : l.startsWith('@@') ? 'ph' : l.startsWith('+') ? 'pa' : l.startsWith('-') ? 'pd' : '';
+    return `<span class="${cls}">${escHtml(l)}</span>`;
+  }).join('\n');
+}
+
+// Approve butuh dua klik (konfirmasi); aksi ini membuat laptop merge dan push.
+function bindActions(w) {
+  const ap = $('woApprove'), rj = $('woReject');
+  if (!ap) return;
+  const act = async (kind, btn) => {
+    btn.disabled = true; $('woActErr').textContent = '';
+    try {
+      await api('POST', `/api/wo/${encodeURIComponent(w.id)}/${kind}`, {});
+      await load();
+      openDetail(w.id);
+    } catch (e) { $('woActErr').textContent = e.message; btn.disabled = false; }
+  };
+  let armed = null;
+  ap.addEventListener('click', () => {
+    if (!armed) {
+      ap.textContent = 'Yakin? Klik lagi untuk merge';
+      armed = setTimeout(() => { armed = null; ap.textContent = 'Approve & merge'; }, 6000);
+      return;
+    }
+    clearTimeout(armed); act('approve', ap);
+  });
+  rj.addEventListener('click', () => act('reject', rj));
+}
+
+// Dropdown project (form WO dan filter) diisi dari daftar worker + project yang sudah punya WO.
+// Hanya dibangun ulang jika isinya berubah, supaya pilihan user tidak ter-reset oleh auto-refresh 5 detik.
+function fillProjects() {
+  const count = {};
+  orders.forEach(w => { count[w.project_key] = (count[w.project_key] || 0) + 1; });
+  const keys = [...new Set([...projects.map(p => p.key), ...Object.keys(count)])].sort();
+  const sig = JSON.stringify([keys, count, projects]);
+  if (sig === projectSig) return;
+  projectSig = sig;
+
+  const pf = $('woProjectFilter'), keepF = pf.value;
+  pf.innerHTML = '<option value="">Semua project</option>' + keys.map(k => `<option value="${escHtml(k)}">${escHtml(k)} (${count[k] || 0})</option>`).join('');
+  pf.value = keys.includes(keepF) ? keepF : '';
+
+  const sel = $('woProject'), keep = sel.value;
+  if (!projects.length) {
+    sel.innerHTML = '<option value="">Belum ada project terdaftar — jalankan worker di laptop</option>';
+    sel.disabled = true; $('woNewSubmit').disabled = true;
+  } else {
+    sel.disabled = false; $('woNewSubmit').disabled = false;
+    sel.innerHTML = '<option value="">— pilih project —</option>' + projects.map(p => `<option value="${escHtml(p.key)}">${escHtml(p.key)}</option>`).join('');
+    sel.value = projects.some(p => p.key === keep) ? keep : '';
+  }
+  projectNote();
+}
+function projectNote() {
+  const p = projects.find(x => x.key === $('woProject').value);
+  $('woProjectNote').textContent = !p ? '' : p.target ? `Setelah Approve, hasilnya di-merge ke branch “${p.target}” di laptop.` : 'Project ini belum diaktifkan untuk merge: hasil hanya berupa branch wo/… di laptop.';
+}
+$('woProject').addEventListener('change', projectNote);

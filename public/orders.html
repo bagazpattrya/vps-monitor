@@ -85,11 +85,16 @@
       <div class="sec-head">
         <h3 class="sec-title">Work Orders <span class="badge" id="woBadge">—</span></h3>
         <div class="proc-controls">
+          <select id="woProjectFilter" class="input" title="Filter project"><option value="">Semua project</option></select>
           <select id="woFilter" class="input" title="Filter status">
             <option value="">Semua</option>
             <option value="active">Aktif (PENDING / IN_PROGRESS)</option>
             <option value="COMPLETED">COMPLETED</option>
             <option value="NEEDS_REVIEW">NEEDS_REVIEW</option>
+            <option value="APPROVED">APPROVED / MERGING</option>
+            <option value="MERGED">MERGED</option>
+            <option value="MERGE_FAILED">MERGE_FAILED</option>
+            <option value="REJECTED">REJECTED</option>
             <option value="FAILED">FAILED</option>
             <option value="OVER_BUDGET">OVER_BUDGET</option>
           </select>
@@ -125,8 +130,9 @@
     </div>
     <div class="modal-body" style="white-space:normal">
       <p style="margin-top:0;color:var(--mut);font-size:12px">Dikerjakan oleh worker di laptop pada branch git baru. Satu WO = satu tujuan sempit.</p>
-      <label class="wo-lbl">Project key <span class="wo-hint">(harus ada di projects.json laptop)</span></label>
-      <input id="woProject" class="input" style="width:100%" maxlength="64" placeholder="lapila" autocomplete="off" />
+      <label class="wo-lbl">Project <span class="wo-hint">(daftar dari worker laptop)</span></label>
+      <select id="woProject" class="input" style="width:100%"></select>
+      <div class="wo-hint" id="woProjectNote" style="margin-top:4px"></div>
       <label class="wo-lbl">Context</label>
       <textarea id="woContext" class="input" rows="3" style="width:100%" maxlength="4000" placeholder="Apa yang harus diperbaiki dan kenapa"></textarea>
       <label class="wo-lbl">Goals <span class="wo-hint">(satu per baris, maks 10)</span></label>

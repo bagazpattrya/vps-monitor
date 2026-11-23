@@ -33,6 +33,9 @@ async function boot(opts = {}) {
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${srv.address().port}`;
+  if (opts.projects !== false) { // worker mendaftarkan project-nya
+    await fetch(base + '/api/wo/projects', { method: 'POST', headers: { Authorization: 'Bearer wrk', 'Content-Type': 'application/json' }, body: JSON.stringify({ projects: [{ key: 'lapila', target: 'development' }, { key: 'demo', target: null }] }) });
+  }
   const call = (m, p, tok, body) => fetch(base + p, { method: m, headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   return { call, state, dataDir, tick: (ms) => { clock += ms; }, close: () => srv.close(), reopen: () => orch.create({ dataDir, workerToken: 'wrk', now: () => clock }) };
 }
@@ -125,5 +128,110 @@ test('budget harian habis -> 429', async () => {
   await t.call('GET', '/api/wo/next', 'wrk');
   await t.call('POST', `/api/wo/${wo.id}/complete`, 'wrk', { status: 'COMPLETED', result: { cost_usd: 0.2 } });
   assert.strictEqual((await t.call('POST', '/api/wo', null, good)).status, 429);
+  t.close();
+});
+
+// ---- approve / reject / merge ----
+const SHA = 'a'.repeat(40);
+async function finished(t, result = { branch: 'wo/x-0', head_sha: SHA, patch: '+a\n-b' }, status = 'COMPLETED') {
+  const { wo } = await (await t.call('POST', '/api/wo', null, good)).json();
+  await t.call('GET', '/api/wo/next', 'wrk');
+  await t.call('POST', `/api/wo/${wo.id}/complete`, 'wrk', { status, result });
+  return wo.id;
+}
+
+test('approve -> worker dapat job merge -> merge-result MERGED', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  const a = await (await t.call('POST', `/api/wo/${id}/approve`, null, { note: 'ok' })).json();
+  assert.strictEqual(a.wo.status, 'APPROVED');
+  assert.strictEqual(a.wo.approved_by, 'admin');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/approve`, null, {})).status, 409); // klik ganda
+
+  const next = await (await t.call('GET', '/api/wo/next', 'wrk')).json();
+  assert.strictEqual(next.kind, 'merge');
+  assert.strictEqual(next.wo.id, id);
+  assert.strictEqual(next.wo.status, 'MERGING');
+  assert.strictEqual(next.wo.result.head_sha, SHA);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/heartbeat`, 'wrk', {})).status, 200);
+
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'COMPLETED' })).status, 400);
+  const m = await (await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED', detail: 'ok', sha: 'b'.repeat(40), target: 'development' })).json();
+  assert.strictEqual(m.wo.status, 'MERGED');
+  assert.strictEqual(m.wo.merge.target, 'development');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED' })).status, 409);
+  t.close();
+});
+
+test('approve ditolak: tanpa head_sha/branch valid, status salah, atau bukan admin', async () => {
+  const t = await boot();
+  const noSha = await finished(t, { branch: 'wo/x-0' });
+  assert.strictEqual((await t.call('POST', `/api/wo/${noSha}/approve`, null, {})).status, 409);
+  const badBranch = await finished(t, { branch: 'main', head_sha: SHA }); // branch di luar wo/* dibuang
+  assert.strictEqual((await t.call('POST', `/api/wo/${badBranch}/approve`, null, {})).status, 409);
+  const failed = await finished(t, { branch: 'wo/x-0', head_sha: SHA }, 'FAILED');
+  assert.strictEqual((await t.call('POST', `/api/wo/${failed}/approve`, null, {})).status, 409);
+  const ok = await finished(t);
+  t.state.admin = false;
+  assert.strictEqual((await t.call('POST', `/api/wo/${ok}/approve`, null, {})).status, 403);
+  t.close();
+});
+
+test('reject lalu approve -> 409; patch besar dipotong', async () => {
+  const t = await boot();
+  const id = await finished(t, { branch: 'wo/x-0', head_sha: SHA, patch: 'x'.repeat(300 * 1024) });
+  const d = await (await t.call('GET', `/api/wo/${id}`)).json();
+  assert.strictEqual(d.wo.result.patch.length, 200 * 1024);
+  assert.strictEqual(d.wo.result.patch_truncated, true);
+  assert.strictEqual((await (await t.call('POST', `/api/wo/${id}/reject`, null, { note: 'jelek' })).json()).wo.status, 'REJECTED');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/approve`, null, {})).status, 409);
+  t.close();
+});
+
+test('merge job: lease habis -> APPROVED lagi, lalu MERGE_FAILED setelah 2 kali, boleh approve ulang', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  await t.call('POST', `/api/wo/${id}/approve`, null, {});
+  await t.call('GET', '/api/wo/next', 'wrk'); // worker ambil lalu mati
+  t.tick(11_000);
+  assert.strictEqual((await (await t.call('GET', '/api/wo/next', 'wrk')).json()).kind, 'merge');
+  t.tick(11_000);
+  await t.call('GET', '/api/wo/next', 'wrk');
+  const d = await (await t.call('GET', `/api/wo/${id}`)).json();
+  assert.strictEqual(d.wo.status, 'MERGE_FAILED');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/approve`, null, {})).status, 200);
+  t.close();
+});
+
+// ---- registry project ----
+test('WO ke project yang tidak terdaftar ditolak; daftar tampil di GET /api/wo', async () => {
+  const t = await boot();
+  const bad = await t.call('POST', '/api/wo', null, { ...good, project_key: 'lain' });
+  assert.strictEqual(bad.status, 400);
+  assert.match((await bad.json()).error, /lapila, demo/);
+  const list = await (await t.call('GET', '/api/wo')).json();
+  assert.deepStrictEqual(list.projects, [{ key: 'lapila', target: 'development' }, { key: 'demo', target: null }]);
+  assert.ok(list.projects_updated_at);
+  t.close();
+});
+
+test('tanpa project terdaftar -> 400; registrasi harus Bearer worker dan valid', async () => {
+  const t = await boot({ projects: false });
+  assert.strictEqual((await t.call('POST', '/api/wo', null, good)).status, 400);
+  assert.strictEqual((await t.call('POST', '/api/wo/projects', 'salah', { projects: [] })).status, 401);
+  for (const bad of [{}, { projects: [{ key: '../x' }] }, { projects: [{ key: 'a', target: '-rf' }] }, { projects: [{ key: 'a' }, { key: 'a' }] }]) {
+    assert.strictEqual((await t.call('POST', '/api/wo/projects', 'wrk', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.strictEqual((await t.call('POST', '/api/wo/projects', 'wrk', { projects: [{ key: 'lapila' }] })).status, 200);
+  assert.strictEqual((await t.call('POST', '/api/wo', null, good)).status, 201);
+  t.close();
+});
+
+test('registry selamat restart', async () => {
+  const t = await boot();
+  const again = orch.create({ dataDir: t.dataDir, workerToken: 'wrk' });
+  const o = { req: { method: 'GET', headers: {} }, url: new URL('http://x/api/wo'), session: { admin: true }, send: (res, c, b) => { o.out = JSON.parse(b); } , res: {} };
+  await again.handleAdmin(o);
+  assert.strictEqual(o.out.projects.length, 2);
   t.close();
 });

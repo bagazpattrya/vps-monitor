@@ -1355,3 +1355,12 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .wo-kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; font-size: 12.5px; margin-bottom: 10px; }
 .wo-kv dt { color: var(--mut); } .wo-kv dd { margin: 0; word-break: break-word; }
 .wo-shot { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+
+.wo-st.APPROVED, .wo-st.MERGING { color: var(--ac); border-color: rgba(59, 130, 246, 0.4); }
+.wo-st.MERGED { color: var(--ok); border-color: rgba(16, 185, 129, 0.6); background: rgba(16, 185, 129, 0.08); }
+.wo-st.MERGE_FAILED { color: var(--bad-tx); border-color: rgba(239, 68, 68, 0.4); }
+.wo-st.REJECTED { color: var(--mut); text-decoration: line-through; }
+.wo-patch { max-height: 320px; font-family: ui-monospace, monospace; font-size: 11.5px; }
+.wo-patch .pa { color: var(--ok); } .wo-patch .pd { color: var(--bad-tx); } .wo-patch .ph { color: var(--ac); } .wo-patch .pf { color: var(--mut); }
+.wo-actions { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px; }
+#woActErr { color: var(--bad); font-size: 12px; }
