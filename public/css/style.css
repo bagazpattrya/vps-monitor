@@ -1364,3 +1364,9 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .wo-patch .pa { color: var(--ok); } .wo-patch .pd { color: var(--bad-tx); } .wo-patch .ph { color: var(--ac); } .wo-patch .pf { color: var(--mut); }
 .wo-actions { display: flex; gap: 8px; align-items: center; margin: 12px 0 6px; }
 #woActErr { color: var(--bad); font-size: 12px; }
+
+.anno-ov { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.85); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px; }
+.anno-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.anno-dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; outline: 1px solid var(--border); cursor: pointer; padding: 0; }
+.anno-dot.on { border-color: var(--accent, #3b82f6); }
+.anno-ov canvas { max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; cursor: crosshair; touch-action: none; background: #222; }

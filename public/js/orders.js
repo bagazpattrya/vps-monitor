@@ -187,12 +187,63 @@ function renderThumbs() {
     w.className = 'thumb';
     const im = document.createElement('img');
     im.src = p.dataUrl;
+    im.style.cursor = 'pointer'; im.title = 'Klik untuk menggambar';
+    im.onclick = () => annotate(p.dataUrl, url => { pending[i].dataUrl = url; renderThumbs(); });
     const x = document.createElement('button');
     x.type = 'button'; x.textContent = '✕'; x.title = 'Hapus';
     x.onclick = () => { pending.splice(i, 1); renderThumbs(); };
     w.append(im, x);
     box.appendChild(w);
   });
+}
+// Editor coretan: gambar di atas gambar lampiran, hasil dikembalikan sebagai dataURL.
+function annotate(src, onSave) {
+  const COLORS = ['#ef4444', '#facc15', '#22c55e', '#3b82f6', '#ffffff', '#000000'];
+  const ov = document.createElement('div');
+  ov.className = 'anno-ov';
+  const bar = document.createElement('div');
+  bar.className = 'anno-bar';
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d');
+  let color = COLORS[0], strokes = [], cur = null, base = null;
+  const dots = COLORS.map(c => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'anno-dot'; b.style.background = c;
+    b.onclick = () => { color = c; dots.forEach(d => d.classList.toggle('on', d === b)); };
+    return b;
+  });
+  dots[0].classList.add('on');
+  const size = document.createElement('input');
+  size.type = 'range'; size.min = 1; size.max = 40; size.value = 6;
+  const mk = (t, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn-sm ' + (cls || ''); b.textContent = t; b.onclick = fn; return b; };
+  const close = () => ov.remove();
+  const sp = document.createElement('span'); sp.style.flex = '1';
+  bar.append(...dots, size,
+    mk('↶ Undo', '', () => { strokes.pop(); redraw(); }),
+    mk('Hapus coretan', '', () => { strokes = []; redraw(); }),
+    sp,
+    mk('Batal', '', close),
+    mk('✓ Simpan', 'ok', () => {
+      let u = cv.toDataURL('image/png');
+      if (u.length > MAX_BYTES * 1.3) u = cv.toDataURL('image/jpeg', 0.9);
+      close(); onSave(u);
+    }));
+  function stroke(st) {
+    ctx.strokeStyle = ctx.fillStyle = st.c; ctx.lineWidth = st.w; ctx.lineCap = ctx.lineJoin = 'round';
+    ctx.beginPath();
+    st.p.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    if (st.p.length === 1) { ctx.arc(st.p[0][0], st.p[0][1], st.w / 2, 0, 7); ctx.fill(); } else ctx.stroke();
+  }
+  function redraw() { ctx.drawImage(base, 0, 0); strokes.forEach(stroke); }
+  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.width / r.width]; };
+  cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); cur = { c: color, w: size.value * cv.width / cv.getBoundingClientRect().width, p: [pos(e)] }; strokes.push(cur); redraw(); };
+  cv.onpointermove = e => { if (cur) { cur.p.push(pos(e)); redraw(); } };
+  cv.onpointerup = cv.onpointercancel = () => { cur = null; };
+  ov.append(bar, cv);
+  document.body.appendChild(ov);
+  base = new Image();
+  base.onload = () => { cv.width = base.naturalWidth; cv.height = base.naturalHeight; redraw(); };
+  base.src = src;
 }
 function addFiles(files) {
   const err = m => { $('woNewErr').textContent = m; };
