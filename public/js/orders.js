@@ -431,37 +431,91 @@ function dbPicker() {
 }
 $('woProject').addEventListener('change', () => { projectNote(); dbPicker(); });
 
-// Deploy WO MERGED: git pull di repo VPS (endpoint dashboard Deploy yang sama) lalu tautan ke website.
-// Link (repo + url) per project diatur sekali lewat form kecil, disimpan di server.
-function deployBox(w) {
+// Deploy WO MERGED. Satu project bisa terhubung ke banyak folder VPS (satu repo GitHub di-clone ke banyak folder).
+// Folder yang di-pull dipilih manual tiap kali (default kosong): deploy ke produksi harus disengaja.
+// Link (folder + URL) per project disimpan di server lewat /api/wo/links.
+let gitList = [];
+const remoteLabel = r => String(r || '(tanpa remote)').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/\s]+@/i, '$1').replace(/^git@/, '').replace(/^https?:\/\//, '').replace(/\.git$/, '');
+const linkRepos = w => ((links[w.project_key] || {}).repos || []);
+
+async function deployBox(w) {
   const box = $('woDeploy');
-  const l = links[w.project_key] || {};
-  const site = l.url ? ` <a class="btn-sm" href="${escHtml(l.url)}" target="_blank" rel="noopener">Buka website ↗</a>` : '';
-  box.innerHTML = `<div class="wo-actions">${l.repo ? `<button class="btn-sm ok" id="woDeployBtn">Deploy (git pull) → ${escHtml(l.repo)}</button>` : ''}${site}<button class="btn-sm" id="woLinkBtn">${l.repo || l.url ? 'Ubah link' : 'Atur link repo & website'}</button></div><div id="woDeployOut"></div>`;
-  const dep = $('woDeployBtn');
-  if (dep) dep.onclick = async () => {
-    dep.disabled = true; dep.textContent = 'Deploying…';
-    try {
-      const r = await api('POST', '/api/git/pull', { relPath: l.repo });
-      $('woDeployOut').innerHTML = `<div class="wo-pre">${escHtml(r.output || 'Selesai')}</div>`;
-      dep.textContent = '✓ Deployed';
-    } catch (e) { $('woDeployOut').innerHTML = `<div class="wo-pre" style="color:var(--bad)">${escHtml(e.message)}</div>`; dep.textContent = 'Deploy ulang'; }
-    dep.disabled = false;
+  try { gitList = (await api('GET', '/api/git/projects')).projects || []; } catch (e) { /* info commit tidak wajib */ }
+  const info = Object.fromEntries(gitList.map(g => [g.relPath, g]));
+  const rs = linkRepos(w);
+  if (!rs.length) {
+    box.innerHTML = '<div class="wo-actions"><button class="btn-sm" id="woLinkBtn">Atur folder VPS &amp; website</button></div><div id="woDeployOut"></div>';
+    $('woLinkBtn').onclick = () => linkForm(w);
+    return;
+  }
+  box.innerHTML = `<div class="wo-actions"><button class="btn-sm ok" id="woDeployBtn" disabled>Deploy terpilih (0)</button><button class="btn-sm" id="woPickAll">Pilih semua</button><button class="btn-sm" id="woPickNone">Kosongkan</button><button class="btn-sm" id="woLinkBtn">Atur folder</button></div>
+    <div class="wo-deploy-list">${rs.map((r, i) => {
+      const g = info[r.repo];
+      return `<div class="wo-deploy-row" data-i="${i}"><label><input type="checkbox" class="dep-chk" data-i="${i}"> <code>${escHtml(r.repo)}</code></label>
+        <span class="dep-meta">${g ? `${escHtml(g.branch || '')} @ ${escHtml(g.hash || '')}${g.dirty ? ' <strong style="color:var(--warn-tx)" title="Ada perubahan lokal yang belum di-commit">⚠ perubahan lokal</strong>' : ''}` : '<span style="color:var(--bad)">folder tidak ditemukan</span>'}</span>
+        ${r.url ? `<a href="${escHtml(r.url)}" target="_blank" rel="noopener">Buka website ↗</a>` : ''}<span class="dep-res"></span></div>`;
+    }).join('')}</div><div id="woDeployOut"></div>`;
+  const chks = () => [...box.querySelectorAll('.dep-chk')];
+  const sync = () => { const n = chks().filter(c => c.checked).length; $('woDeployBtn').disabled = !n; $('woDeployBtn').textContent = `Deploy terpilih (${n})`; };
+  box.addEventListener('change', e => { if (e.target.classList.contains('dep-chk')) sync(); });
+  $('woPickAll').onclick = () => { chks().forEach(c => { c.checked = true; }); sync(); };
+  $('woPickNone').onclick = () => { chks().forEach(c => { c.checked = false; }); sync(); };
+  $('woLinkBtn').onclick = () => linkForm(w);
+  $('woDeployBtn').onclick = async () => {
+    const picked = chks().filter(c => c.checked).map(c => Number(c.dataset.i));
+    const dirty = picked.filter(i => (info[rs[i].repo] || {}).dirty).map(i => rs[i].repo);
+    if (dirty.length && !confirm('Folder ini punya perubahan lokal yang belum di-commit:\n' + dirty.join('\n') + '\n\nTetap deploy?')) return;
+    $('woDeployBtn').disabled = true;
+    let ok = 0;
+    for (const i of picked) { // berurutan: satu gagal tidak menghentikan yang lain
+      const res = box.querySelector(`.wo-deploy-row[data-i="${i}"] .dep-res`);
+      res.textContent = '⏳ pulling…';
+      try {
+        const r = await api('POST', '/api/git/pull', { relPath: rs[i].repo });
+        res.innerHTML = '<span style="color:var(--ok)">✓ ok</span>'; ok++;
+        res.title = r.output || '';
+        $('woDeployOut').innerHTML += `<div class="wo-lbl">${escHtml(rs[i].repo)}</div><div class="wo-pre">${escHtml(r.output || 'Selesai')}</div>`;
+      } catch (e) {
+        res.innerHTML = '<span style="color:var(--bad)">✕ gagal</span>';
+        $('woDeployOut').innerHTML += `<div class="wo-lbl">${escHtml(rs[i].repo)}</div><div class="wo-pre" style="color:var(--bad)">${escHtml(e.message)}</div>`;
+      }
+    }
+    $('woDeployBtn').textContent = `Selesai: ${ok}/${picked.length} berhasil`;
+    $('woDeployBtn').disabled = false;
   };
-  $('woLinkBtn').onclick = () => linkForm(w, l);
 }
-async function linkForm(w, l) {
-  let repos = [];
-  try { repos = ((await api('GET', '/api/git/projects')).projects || []).map(p => p.relPath).sort(); } catch (e) { /* tetap boleh isi manual */ }
-  if (l.repo && !repos.includes(l.repo)) repos.unshift(l.repo);
-  $('woDeployOut').innerHTML = `<div class="wo-actions" style="flex-wrap:wrap">
-    <select id="lkRepo" class="input"><option value="">— repo di VPS —</option>${repos.map(r => `<option value="${escHtml(r)}"${r === l.repo ? ' selected' : ''}>${escHtml(r)}</option>`).join('')}</select>
-    <input id="lkUrl" class="input" placeholder="https://website.com" value="${escHtml(l.url || '')}" style="min-width:220px">
-    <button class="btn-sm ok" id="lkSave">Simpan</button><span id="lkErr" style="color:var(--bad)"></span></div>`;
+
+// Form pilih folder VPS (dikelompokkan per remote) + URL website tiap folder.
+async function linkForm(w) {
+  let list = gitList;
+  try { list = gitList = (await api('GET', '/api/git/projects')).projects || []; } catch (e) { /* pakai cache */ }
+  const cur = Object.fromEntries(linkRepos(w).map(r => [r.repo, r.url || '']));
+  const groups = new Map();
+  list.forEach(g => { const k = remoteLabel(g.remote); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(g); });
+  // Link lama yang foldernya sudah tidak ada tetap tampil supaya tidak hilang diam-diam.
+  Object.keys(cur).filter(r => !list.some(g => g.relPath === r)).forEach(r => { if (!groups.has('(folder tidak ditemukan)')) groups.set('(folder tidak ditemukan)', []); groups.get('(folder tidak ditemukan)').push({ relPath: r }); });
+  const sorted = [...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  $('woDeployOut').innerHTML = `<div class="wo-lbl">Folder VPS untuk project ${escHtml(w.project_key)}</div>
+    <input id="lkFilter" class="input" placeholder="Cari folder / remote…" style="width:100%;margin-bottom:6px">
+    <div id="lkList" style="max-height:260px;overflow:auto">${sorted.map(([k, gs]) => `<div class="lk-grp" data-k="${escHtml(k.toLowerCase())}"><label><input type="checkbox" class="lk-all"> <strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${gs.length} folder</span></label>
+      ${gs.map(g => `<div class="lk-row" data-f="${escHtml(g.relPath.toLowerCase())}" style="display:flex;gap:6px;align-items:center;margin:3px 0 3px 22px"><label style="min-width:180px"><input type="checkbox" class="lk-chk" data-r="${escHtml(g.relPath)}"${g.relPath in cur ? ' checked' : ''}> <code>${escHtml(g.relPath)}</code></label><input class="input lk-url" placeholder="https://website (opsional)" value="${escHtml(cur[g.relPath] || '')}" style="flex:1"></div>`).join('')}</div>`).join('')}</div>
+    <div class="wo-actions"><button class="btn-sm ok" id="lkSave">Simpan</button><button class="btn-sm" id="lkCancel">Batal</button><span id="lkErr" style="color:var(--bad)"></span></div>`;
+  const L = $('lkList');
+  $('lkFilter').oninput = e => {
+    const q = e.target.value.trim().toLowerCase();
+    L.querySelectorAll('.lk-grp').forEach(g => {
+      const gm = g.dataset.k.includes(q); let any = false;
+      g.querySelectorAll('.lk-row').forEach(r => { const m = !q || gm || r.dataset.f.includes(q); r.style.display = m ? 'flex' : 'none'; any = any || m; });
+      g.style.display = any ? '' : 'none';
+    });
+  };
+  L.addEventListener('change', e => {
+    if (e.target.classList.contains('lk-all')) e.target.closest('.lk-grp').querySelectorAll('.lk-row').forEach(r => { if (r.style.display !== 'none') r.querySelector('.lk-chk').checked = e.target.checked; });
+  });
+  $('lkCancel').onclick = () => deployBox(w);
   $('lkSave').onclick = async () => {
-    try {
-      const r = await api('POST', '/api/wo/links', { project_key: w.project_key, repo: $('lkRepo').value, url: $('lkUrl').value });
-      links = r.links || {}; deployBox(w);
-    } catch (e) { $('lkErr').textContent = e.message; }
+    const repos = [...L.querySelectorAll('.lk-row')].filter(r => r.querySelector('.lk-chk').checked).map(r => ({ repo: r.querySelector('.lk-chk').dataset.r, url: r.querySelector('.lk-url').value.trim() }));
+    try { links = (await api('POST', '/api/wo/links', { project_key: w.project_key, repos })).links || {}; deployBox(w); }
+    catch (e) { $('lkErr').textContent = e.message; }
   };
 }

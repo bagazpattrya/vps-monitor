@@ -1373,3 +1373,6 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .anno-dot.on { border-color: var(--accent, #3b82f6); }
 .anno-ov canvas { max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; cursor: crosshair; touch-action: none; background: #222; }
 .wo-grp td { background: var(--bg-2, rgba(127,127,127,.08)); padding-top: 8px; padding-bottom: 8px; cursor: default; }
+.wo-deploy-list { margin: 6px 0; }
+.wo-deploy-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.wo-deploy-row .dep-meta { color: var(--mut); font-size: 12px; }

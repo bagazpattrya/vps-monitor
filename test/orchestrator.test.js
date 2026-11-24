@@ -309,21 +309,32 @@ test('db_source: default dari registry, pilihan valid, tolak di luar daftar', as
   t.close();
 });
 
-test('links: simpan, hapus, tolak url/repo buruk, viewer 403', async () => {
+test('links: simpan daftar repo, dedupe, hapus, tolak url/repo buruk, viewer 403', async () => {
   const t = await boot();
-  const L = { project_key: 'lapila', repo: 'apps/lapila', url: 'https://lapila.test' };
+  const L = { project_key: 'lapila', repos: [{ repo: 'hr-kti', url: 'https://kti.test' }, { repo: 'hr-oso', url: '' }, { repo: 'hr-kti', url: 'https://dup.test' }] };
   assert.strictEqual((await t.call('POST', '/api/wo/links', null, L)).status, 200);
-  assert.deepStrictEqual((await (await t.call('GET', '/api/wo/links')).json()).links.lapila, { repo: 'apps/lapila', url: 'https://lapila.test' });
-  assert.strictEqual((await (await t.call('GET', '/api/wo')).json()).links.lapila.repo, 'apps/lapila');
-  for (const bad of [{ ...L, url: 'javascript:alert(1)' }, { ...L, repo: '../etc' }, { ...L, repo: '/abs' }, { ...L, project_key: '../x' }, { ...L, project_key: 'tidakada' }]) {
+  const got = (await (await t.call('GET', '/api/wo/links')).json()).links.lapila;
+  assert.deepStrictEqual(got.repos, [{ repo: 'hr-kti', url: 'https://kti.test' }, { repo: 'hr-oso', url: '' }]);
+  assert.strictEqual((await (await t.call('GET', '/api/wo')).json()).links.lapila.repos.length, 2);
+  const R = (r) => ({ project_key: 'lapila', repos: [r] });
+  for (const bad of [R({ repo: 'a', url: 'javascript:alert(1)' }), R({ repo: '../etc' }), R({ repo: '/abs' }), R({ repo: '' }), { ...L, project_key: '../x' }, { ...L, project_key: 'tidakada' }, { project_key: 'lapila', repos: 'x' }, { project_key: 'lapila', repos: Array(51).fill({ repo: 'a' }) }]) {
     assert.strictEqual((await t.call('POST', '/api/wo/links', null, bad)).status, 400, JSON.stringify(bad));
   }
-  assert.strictEqual((await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repo: '', url: '' })).status, 200);
+  assert.strictEqual((await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [] })).status, 200);
   assert.strictEqual((await (await t.call('GET', '/api/wo/links')).json()).links.lapila, undefined);
   t.state.admin = false;
   assert.strictEqual((await t.call('POST', '/api/wo/links', null, L)).status, 403);
   assert.strictEqual((await t.call('POST', '/api/wo/delete', null, { ids: [] })).status, 403);
   t.close();
+});
+
+test('links: file lama {repo,url} dibaca sebagai daftar', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-'));
+  fs.writeFileSync(path.join(dataDir, 'wo-links.json'), JSON.stringify({ lapila: { repo: 'apps/x', url: 'https://x.test' } }));
+  const o = orch.create({ dataDir, workerToken: 'wrk' });
+  let out;
+  await o.handleAdmin({ req: { method: 'GET', headers: {} }, url: new URL('http://x/api/wo/links'), session: { user: 'a', admin: true }, send: (r, c, b) => { out = JSON.parse(b); }, readBody });
+  assert.deepStrictEqual(out.links.lapila.repos, [{ repo: 'apps/x', url: 'https://x.test' }]);
 });
 
 test('delete: hanya MERGED/REJECTED/FAILED/OVER_BUDGET; sisanya skipped', async () => {

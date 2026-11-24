@@ -17,6 +17,7 @@ const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED']; // boleh di-approve / reject
 const DONE = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW', 'REJECTED', 'MERGED', 'MERGE_FAILED']; // boleh dipangkas
 const DELETABLE = ['MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // selesai dan tidak menunggu keputusan; boleh dihapus admin
+const MAX_LINK_REPOS = 50;
 const MAX_PATCH = 200 * 1024;
 const MODELS = ['haiku', 'sonnet', 'opus'];
 const MAX_ATTEMPTS = 2;
@@ -70,10 +71,11 @@ function create(opts = {}) {
   let registry = { list: [], updated_at: null };
   try { registry = JSON.parse(fs.readFileSync(projFile, 'utf8')); } catch { /* belum ada */ }
 
-  // Peta project_key -> { repo (relPath di VPS), url } untuk tombol Deploy / Buka website di UI.
+  // Peta project_key -> { repos: [{ repo (relPath di VPS), url }] }; admin memilih repo mana yang di-deploy saat itu untuk tombol Deploy / Buka website di UI.
   const linksFile = path.join(dataDir, 'wo-links.json');
   let links = {};
   try { links = JSON.parse(fs.readFileSync(linksFile, 'utf8')); } catch { /* belum ada */ }
+  for (const k of Object.keys(links)) if (!Array.isArray(links[k].repos)) links[k] = { repos: links[k].repo ? [{ repo: links[k].repo, url: links[k].url || '' }] : [] }; // bentuk lama {repo,url}
 
   // Tulis atomik. Node satu thread + tulis sinkron = tidak ada balapan antar request.
   const save = () => { const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(wos), { mode: 0o660 }); fs.renameSync(tmp, file); };
@@ -313,15 +315,20 @@ function create(opts = {}) {
     if (p === '/api/wo/links' && req.method === 'GET') return send(ctx, 200, { links }), true;
     if (p === '/api/wo/links' && req.method === 'POST') {
       let b;
-      try { b = JSON.parse(await ctx.readBody(req, 4096)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      try { b = JSON.parse(await ctx.readBody(req, 32 * 1024)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
       const key = b && b.project_key;
       if (typeof key !== 'string' || !/^[\w.-]{1,64}$/.test(key) || !(registry.list.some((x) => x.key === key) || wos.some((w) => w.project_key === key))) return send(ctx, 400, { error: 'project tidak dikenal' }), true;
-      const repo = typeof b.repo === 'string' ? b.repo.trim() : '', url = typeof b.url === 'string' ? b.url.trim() : '';
-      if (repo && (repo.length > 300 || repo.includes('..') || repo.startsWith('/') || repo.includes('\0'))) return send(ctx, 400, { error: 'repo tidak valid' }), true;
-      if (url && (url.length > 300 || !/^https?:\/\/[^\s]+$/i.test(url))) return send(ctx, 400, { error: 'url harus http(s)://' }), true;
-      if (repo || url) links[key] = { repo, url }; else delete links[key];
+      if (!Array.isArray(b.repos) || b.repos.length > MAX_LINK_REPOS) return send(ctx, 400, { error: `repos harus daftar maks ${MAX_LINK_REPOS}` }), true;
+      const repos = [];
+      for (const x of b.repos) {
+        const repo = x && typeof x.repo === 'string' ? x.repo.trim() : '', url = x && typeof x.url === 'string' ? x.url.trim() : '';
+        if (!repo || repo.length > 300 || repo.includes('..') || repo.startsWith('/') || repo.includes('\0')) return send(ctx, 400, { error: 'repo tidak valid' }), true;
+        if (url && (url.length > 300 || !/^https?:\/\/[^\s]+$/i.test(url))) return send(ctx, 400, { error: 'url harus http(s)://' }), true;
+        if (!repos.some((r) => r.repo === repo)) repos.push({ repo, url });
+      }
+      if (repos.length) links[key] = { repos }; else delete links[key];
       fs.writeFileSync(linksFile, JSON.stringify(links), { mode: 0o660 });
-      audit(session.user, 'wo.link', key, `${repo} ${url}`.trim());
+      audit(session.user, 'wo.link', key, repos.map((r) => r.repo).join(',').slice(0, 300));
       return send(ctx, 200, { links }), true;
     }
     if (p === '/api/wo/delete' && req.method === 'POST') {
