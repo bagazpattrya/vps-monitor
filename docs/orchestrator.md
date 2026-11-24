@@ -11,7 +11,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 ## Endpoint
 | Siapa | Endpoint | Auth |
 |---|---|---|
-| Admin | `POST /api/wo`, `GET /api/wo`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject` | session login admin/superadmin |
+| Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete`, `POST /api/wo/:id/merge-result` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
 `POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
@@ -49,3 +49,7 @@ Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve & merge** (dua klik) 
 
 ## Sumber DB per WO
 Worker mendaftarkan `db_sources` + `db_default` per project (dari `db_sync.sources` di `projects.json` laptop) lewat `POST /api/wo/projects`. `POST /api/wo` menerima `db_source` (harus ada di daftar project itu, jika kosong dipakai default); nilainya ikut di payload WO ke worker. Setiap DB harus ada di `ORCH_DUMP_DBS` (isi di `.env`, bukan `ecosystem.config.js` karena nilai ecosystem menimpa `.env`).
+
+## Link project, Deploy, Hapus
+- `POST /api/wo/links {project_key, repo, url}` menyimpan peta project -> repo VPS (relPath, sama seperti `/api/git/pull`) + URL website di `data/wo-links.json`. `repo` dan `url` kosong menghapus link. UI memakainya untuk tombol **Deploy** (git pull via `/api/git/pull`) dan **Buka website** pada WO `MERGED`.
+- `POST /api/wo/delete {ids}` (maks 200) hanya menghapus status `MERGED`, `REJECTED`, `FAILED`, `OVER_BUDGET`; sisanya dilaporkan di `skipped`. Screenshot dan lampiran ikut dihapus. Audit: `wo.delete`, `wo.link`.

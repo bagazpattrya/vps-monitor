@@ -308,3 +308,38 @@ test('db_source: default dari registry, pilihan valid, tolak di luar daftar', as
   assert.strictEqual((await (await mk({ project_key: 'demo' })).json()).wo.db_source, undefined);
   t.close();
 });
+
+test('links: simpan, hapus, tolak url/repo buruk, viewer 403', async () => {
+  const t = await boot();
+  const L = { project_key: 'lapila', repo: 'apps/lapila', url: 'https://lapila.test' };
+  assert.strictEqual((await t.call('POST', '/api/wo/links', null, L)).status, 200);
+  assert.deepStrictEqual((await (await t.call('GET', '/api/wo/links')).json()).links.lapila, { repo: 'apps/lapila', url: 'https://lapila.test' });
+  assert.strictEqual((await (await t.call('GET', '/api/wo')).json()).links.lapila.repo, 'apps/lapila');
+  for (const bad of [{ ...L, url: 'javascript:alert(1)' }, { ...L, repo: '../etc' }, { ...L, repo: '/abs' }, { ...L, project_key: '../x' }, { ...L, project_key: 'tidakada' }]) {
+    assert.strictEqual((await t.call('POST', '/api/wo/links', null, bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.strictEqual((await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repo: '', url: '' })).status, 200);
+  assert.strictEqual((await (await t.call('GET', '/api/wo/links')).json()).links.lapila, undefined);
+  t.state.admin = false;
+  assert.strictEqual((await t.call('POST', '/api/wo/links', null, L)).status, 403);
+  assert.strictEqual((await t.call('POST', '/api/wo/delete', null, { ids: [] })).status, 403);
+  t.close();
+});
+
+test('delete: hanya MERGED/REJECTED/FAILED/OVER_BUDGET; sisanya skipped', async () => {
+  const t = await boot();
+  const reviewable = await finished(t);
+  const merged = await finished(t);
+  await t.call('POST', `/api/wo/${merged}/approve`, null, {});
+  await t.call('GET', '/api/wo/next', 'wrk');
+  await t.call('POST', `/api/wo/${merged}/merge-result`, 'wrk', { status: 'MERGED' });
+  const pending = (await (await t.call('POST', '/api/wo', null, good)).json()).wo.id;
+  const r = await (await t.call('POST', '/api/wo/delete', null, { ids: [pending, reviewable, merged, 'WO-nope'] })).json();
+  assert.deepStrictEqual(r.deleted, [merged]);
+  assert.deepStrictEqual(r.skipped.map((s) => s.id).sort(), [pending, reviewable, 'WO-nope'].sort());
+  const ids = (await (await t.call('GET', '/api/wo')).json()).work_orders.map((w) => w.id);
+  assert.ok(!ids.includes(merged) && ids.includes(pending) && ids.includes(reviewable));
+  assert.strictEqual((await t.call('POST', '/api/wo/delete', null, { ids: 'x' })).status, 400);
+  assert.strictEqual((await t.call('POST', '/api/wo/delete', null, { ids: Array(201).fill('a') })).status, 400);
+  t.close();
+});

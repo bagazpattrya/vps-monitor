@@ -16,6 +16,7 @@ const FINAL = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW']; // status 
 const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED']; // boleh di-approve / reject
 const DONE = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW', 'REJECTED', 'MERGED', 'MERGE_FAILED']; // boleh dipangkas
+const DELETABLE = ['MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // selesai dan tidak menunggu keputusan; boleh dihapus admin
 const MAX_PATCH = 200 * 1024;
 const MODELS = ['haiku', 'sonnet', 'opus'];
 const MAX_ATTEMPTS = 2;
@@ -69,6 +70,11 @@ function create(opts = {}) {
   let registry = { list: [], updated_at: null };
   try { registry = JSON.parse(fs.readFileSync(projFile, 'utf8')); } catch { /* belum ada */ }
 
+  // Peta project_key -> { repo (relPath di VPS), url } untuk tombol Deploy / Buka website di UI.
+  const linksFile = path.join(dataDir, 'wo-links.json');
+  let links = {};
+  try { links = JSON.parse(fs.readFileSync(linksFile, 'utf8')); } catch { /* belum ada */ }
+
   // Tulis atomik. Node satu thread + tulis sinkron = tidak ada balapan antar request.
   const save = () => { const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(wos), { mode: 0o660 }); fs.renameSync(tmp, file); };
   const send = (ctx, code, obj) => ctx.send(ctx.res, code, JSON.stringify(obj));
@@ -109,13 +115,16 @@ function create(opts = {}) {
     return w ? { w, kind } : null;
   }
 
+  function rmFiles(w) {
+    if (w.screenshot) fs.rm(path.join(shotDir, w.screenshot), () => {});
+    fs.rm(path.join(imgDir, w.id), { recursive: true, force: true }, () => {});
+  }
+
   function prune() {
     while (wos.length > MAX_KEEP) {
       const i = wos.findIndex((w) => DONE.includes(w.status));
       if (i < 0) break;
-      const [w] = wos.splice(i, 1);
-      if (w.screenshot) fs.rm(path.join(shotDir, w.screenshot), () => {});
-      fs.rm(path.join(imgDir, w.id), { recursive: true, force: true }, () => {});
+      rmFiles(wos.splice(i, 1)[0]);
     }
     const cutoff = now() - KEEP_SHOT_MS;
     for (const w of wos) {
@@ -299,7 +308,35 @@ function create(opts = {}) {
     }
     if (p === '/api/wo' && req.method === 'GET') {
       const limit = clamp(url.searchParams.get('limit'), 1, 200, 50);
-      return send(ctx, 200, { cost_today_usd: spentToday(), daily_budget_usd: dailyBudget, projects: registry.list, projects_updated_at: registry.updated_at ? new Date(registry.updated_at).toISOString() : null, work_orders: wos.slice(-limit).reverse().map(view) }), true;
+      return send(ctx, 200, { cost_today_usd: spentToday(), daily_budget_usd: dailyBudget, links, projects: registry.list, projects_updated_at: registry.updated_at ? new Date(registry.updated_at).toISOString() : null, work_orders: wos.slice(-limit).reverse().map(view) }), true;
+    }
+    if (p === '/api/wo/links' && req.method === 'GET') return send(ctx, 200, { links }), true;
+    if (p === '/api/wo/links' && req.method === 'POST') {
+      let b;
+      try { b = JSON.parse(await ctx.readBody(req, 4096)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      const key = b && b.project_key;
+      if (typeof key !== 'string' || !/^[\w.-]{1,64}$/.test(key) || !(registry.list.some((x) => x.key === key) || wos.some((w) => w.project_key === key))) return send(ctx, 400, { error: 'project tidak dikenal' }), true;
+      const repo = typeof b.repo === 'string' ? b.repo.trim() : '', url = typeof b.url === 'string' ? b.url.trim() : '';
+      if (repo && (repo.length > 300 || repo.includes('..') || repo.startsWith('/') || repo.includes('\0'))) return send(ctx, 400, { error: 'repo tidak valid' }), true;
+      if (url && (url.length > 300 || !/^https?:\/\/[^\s]+$/i.test(url))) return send(ctx, 400, { error: 'url harus http(s)://' }), true;
+      if (repo || url) links[key] = { repo, url }; else delete links[key];
+      fs.writeFileSync(linksFile, JSON.stringify(links), { mode: 0o660 });
+      audit(session.user, 'wo.link', key, `${repo} ${url}`.trim());
+      return send(ctx, 200, { links }), true;
+    }
+    if (p === '/api/wo/delete' && req.method === 'POST') {
+      let b;
+      try { b = JSON.parse(await ctx.readBody(req, 64 * 1024)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      if (!b || !Array.isArray(b.ids) || b.ids.length > 200 || !b.ids.every((x) => typeof x === 'string')) return send(ctx, 400, { error: 'ids harus daftar maks 200' }), true;
+      const deleted = [], skipped = [];
+      for (const id of new Set(b.ids)) {
+        const i = wos.findIndex((x) => x.id === id);
+        if (i < 0) skipped.push({ id, reason: 'tidak ada' });
+        else if (!DELETABLE.includes(wos[i].status)) skipped.push({ id, reason: 'status ' + wos[i].status });
+        else { rmFiles(wos.splice(i, 1)[0]); deleted.push(id); }
+      }
+      if (deleted.length) { save(); audit(session.user, 'wo.delete', deleted.length + ' WO', deleted.join(',').slice(0, 300)); }
+      return send(ctx, 200, { deleted, skipped }), true;
     }
     const img = IMG_ROUTE.exec(p);
     if (img && req.method === 'GET') return serveImg(ctx, img), true;
