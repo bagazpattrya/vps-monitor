@@ -124,7 +124,7 @@ function create(opts = {}) {
     }
   }
 
-  const isWorkerRoute = (p, m) => (m === 'GET' && (p === '/api/wo/next' || p === '/api/wo/db-dump')) || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result)$/.test(p)));
+  const isWorkerRoute = (p, m) => (m === 'GET' && (p === '/api/wo/next' || p === '/api/wo/db-dump' || p === '/api/wo/db-list')) || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result)$/.test(p)));
 
   function workerAuthOk(req) {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -177,6 +177,8 @@ function create(opts = {}) {
     if (im) return serveImg(ctx, im), true;
 
     if (p === '/api/wo/db-dump') { dumpDb(ctx, url.searchParams.get('db') || ''); return true; }
+
+    if (p === '/api/wo/db-list') { send(ctx, 200, { dbs: dumpDbs }); return true; }
 
     if (p === '/api/wo/next') {
       const deadline = now() + clamp(url.searchParams.get('wait'), 0, 30, 0) * 1000;
