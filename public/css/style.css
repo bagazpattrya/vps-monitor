@@ -1376,3 +1376,9 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .wo-deploy-list { margin: 6px 0; }
 .wo-deploy-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .wo-deploy-row .dep-meta { color: var(--mut); font-size: 12px; }
+
+/* FAB "Work Order baru" di halaman /orders */
+.wo-fab { position: fixed; right: 24px; bottom: 24px; z-index: 900; width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer; background: #0ea5e9; color: #fff; font-size: 30px; line-height: 1; box-shadow: 0 6px 20px rgba(0,0,0,.35); transition: transform .15s, box-shadow .15s; }
+.wo-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0,0,0,.45); }
+@media (max-width: 640px) { .wo-fab { right: 16px; bottom: 16px; } }
+body:has(.modal-backdrop.open) .wo-fab { display: none; } /* sembunyi saat drawer/modal terbuka */
