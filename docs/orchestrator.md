@@ -38,6 +38,7 @@ Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve & merge** (dua klik) 
 - Worker hanya merge jika branch WO masih di `head_sha` yang direview, working tree bersih, dan `target` lokal bisa fast-forward ke `origin/<target>`.
 - Konflik: merge dibatalkan. Push ditolak: target lokal dikembalikan ke keadaan semula.
 - Setiap approve/reject/merge masuk Activity Log (`wo.approve`, `wo.reject`, `wo.merge`).
+- **Reject membersihkan branch.** WO `REJECTED` yang punya `result.branch` mendapat `cleanup: {state}` (`PENDING` -> `RUNNING` -> `DONE|SKIPPED|FAILED`). Worker yang memanggil `GET /api/wo/next?cleanup=1` menerima `kind: "cleanup"` (prioritas paling rendah) lalu menjalankan `git branch -D` dan melapor ke `POST /api/wo/:id/cleanup-result {status, detail}`. Worker tanpa `cleanup=1` tidak pernah menerimanya, jadi worker lama aman. Worker hanya menghapus `wo/*` yang masih di `head_sha` yang direview (ada commit tambahan = `SKIPPED`). WO yang menunggu cleanup tidak bisa dihapus lewat `POST /api/wo/delete`.
 - WO lama tanpa `head_sha` tidak bisa di-approve (merge manual di laptop).
 - Update worker dan server bersamaan. Worker lama yang tidak mengenal `kind: "merge"` akan salah menjalankan agent untuk job merge.
 

@@ -354,3 +354,55 @@ test('delete: hanya MERGED/REJECTED/FAILED/OVER_BUDGET; sisanya skipped', async 
   assert.strictEqual((await t.call('POST', '/api/wo/delete', null, { ids: Array(201).fill('a') })).status, 400);
   t.close();
 });
+
+// ---- cleanup branch setelah reject ----
+const nextC = async (t, q = '?cleanup=1') => (await t.call('GET', '/api/wo/next' + q, 'wrk')).json();
+
+test('reject -> job cleanup hanya untuk worker yang minta (?cleanup=1); lapor DONE', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  const rj = await (await t.call('POST', `/api/wo/${id}/reject`, null, {})).json();
+  assert.strictEqual(rj.wo.cleanup.state, 'PENDING');
+  assert.strictEqual((await nextC(t, '')).wo, null, 'worker lama tidak dapat job cleanup');
+  const c = await nextC(t);
+  assert.strictEqual(c.kind, 'cleanup');
+  assert.strictEqual(c.wo.id, id);
+  assert.strictEqual(c.wo.result.branch, 'wo/x-0');
+  assert.strictEqual((await nextC(t)).wo, null, 'sedang RUNNING: tidak dibagikan ulang');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/cleanup-result`, 'wrk', { status: 'MERGED' })).status, 400);
+  const d = await (await t.call('POST', `/api/wo/${id}/cleanup-result`, 'wrk', { status: 'DONE', detail: 'branch dihapus' })).json();
+  assert.strictEqual(d.wo.cleanup.state, 'DONE');
+  assert.strictEqual(d.wo.status, 'REJECTED');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/cleanup-result`, 'wrk', { status: 'DONE' })).status, 409);
+  t.close();
+});
+
+test('cleanup: approve atau reject tanpa branch tidak membuat job; viewer tidak bisa lapor', async () => {
+  const t = await boot();
+  const nob = await finished(t, { cost_usd: 0 }); // tanpa branch/head_sha
+  assert.strictEqual((await (await t.call('POST', `/api/wo/${nob}/reject`, null, {})).json()).wo.cleanup, null);
+  const ok = await finished(t);
+  await t.call('POST', `/api/wo/${ok}/approve`, null, {});
+  assert.strictEqual((await nextC(t)).kind, 'merge'); // approve: hanya job merge
+  assert.strictEqual((await nextC(t)).wo, null);
+  assert.strictEqual((await t.call('POST', `/api/wo/${ok}/cleanup-result`, null, { status: 'DONE' })).status, 401); // tanpa Bearer
+  t.close();
+});
+
+test('cleanup: lease habis -> PENDING lagi, 2 kali -> FAILED; WO menunggu cleanup tidak bisa dihapus', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  await t.call('POST', `/api/wo/${id}/reject`, null, {});
+  let r = await (await t.call('POST', '/api/wo/delete', null, { ids: [id] })).json();
+  assert.deepStrictEqual(r.deleted, []);
+  assert.match(r.skipped[0].reason, /cleanup/);
+  assert.strictEqual((await nextC(t)).kind, 'cleanup');
+  t.tick(11_000);
+  assert.strictEqual((await nextC(t)).kind, 'cleanup', 'lease habis -> dibagikan lagi');
+  t.tick(11_000);
+  assert.strictEqual((await nextC(t)).wo, null);
+  assert.strictEqual((await (await t.call('GET', `/api/wo/${id}`)).json()).wo.cleanup.state, 'FAILED');
+  r = await (await t.call('POST', '/api/wo/delete', null, { ids: [id] })).json();
+  assert.deepStrictEqual(r.deleted, [id]); // FAILED cleanup tidak menahan hapus
+  t.close();
+});

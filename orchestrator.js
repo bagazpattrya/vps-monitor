@@ -14,6 +14,8 @@ const chats = require('./chats');
 const COMPLEXITY = ['simple', 'complex'];
 const FINAL = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW']; // status yang boleh dilaporkan worker setelah menjalankan agent
 const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
+const CLEANUP_RESULTS = ['DONE', 'SKIPPED', 'FAILED']; // laporan worker setelah mencoba menghapus branch WO yang di-reject
+const BRANCH_RE = /^wo\/[\w.-]+$/;
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED']; // boleh di-approve / reject
 const DONE = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW', 'REJECTED', 'MERGED', 'MERGE_FAILED']; // boleh dipangkas
 const DELETABLE = ['MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // selesai dan tidak menunggu keputusan; boleh dihapus admin
@@ -88,14 +90,16 @@ function create(opts = {}) {
       created_at: new Date(w.created_at).toISOString(), completed_at: w.completed_at ? new Date(w.completed_at).toISOString() : null,
       approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
       review_note: w.review_note || null, merge: w.merge || null,
+      cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
     };
   }
 
   const dayStart = () => { const d = new Date(now()); d.setHours(0, 0, 0, 0); return d.getTime(); };
   const spentToday = () => wos.filter((w) => w.created_at >= dayStart()).reduce((a, w) => a + (w.cost_usd || 0), 0);
 
-  // Return { w, kind } dengan kind 'merge' (WO yang sudah di-approve) atau 'run' (WO baru), atau null.
-  function claim() {
+  // Return { w, kind } dengan kind 'merge' (WO yang sudah di-approve), 'run' (WO baru), atau 'cleanup' (hapus branch WO yang
+  // di-reject; hanya jika worker memintanya, supaya worker lama tidak salah menjalankan agent), atau null.
+  function claim(wantCleanup) {
     const t = now();
     let changed = false;
     for (const w of wos) { // lease habis: kembali ke antrean, atau gagal jika sudah terlalu sering
@@ -108,11 +112,20 @@ function create(opts = {}) {
         if (w.merge_attempts >= MAX_ATTEMPTS) { w.status = 'MERGE_FAILED'; w.merge = { status: 'MERGE_FAILED', detail: 'lease habis berulang kali (worker mati?)', at: t }; }
         else w.status = 'APPROVED';
       }
+      if (w.cleanup && w.cleanup.state === 'RUNNING' && w.cleanup.lease_until < t) {
+        changed = true; w.cleanup.attempts += 1; w.cleanup.lease_until = null;
+        if (w.cleanup.attempts >= MAX_ATTEMPTS) { w.cleanup.state = 'FAILED'; w.cleanup.detail = 'lease habis berulang kali (worker mati?)'; }
+        else w.cleanup.state = 'PENDING';
+      }
     }
     let w = wos.find((x) => x.status === 'APPROVED'); // merge dulu: cepat, dan menunggu keputusan manusia
     let kind = 'merge';
     if (!w) { w = wos.find((x) => x.status === 'PENDING'); kind = 'run'; } // wos berurutan waktu buat = FIFO
     if (w) { w.status = kind === 'merge' ? 'MERGING' : 'IN_PROGRESS'; w.lease_until = t + leaseMs; changed = true; }
+    else if (wantCleanup) { // paling akhir: pekerjaan nyata lebih penting dari beres-beres
+      const c = wos.find((x) => x.cleanup && x.cleanup.state === 'PENDING');
+      if (c) { c.cleanup.state = 'RUNNING'; c.cleanup.lease_until = t + leaseMs; w = c; kind = 'cleanup'; changed = true; }
+    }
     if (changed) save();
     return w ? { w, kind } : null;
   }
@@ -135,7 +148,7 @@ function create(opts = {}) {
     }
   }
 
-  const isWorkerRoute = (p, m) => (m === 'GET' && (p === '/api/wo/next' || p === '/api/wo/db-dump' || p === '/api/wo/db-list')) || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result)$/.test(p)));
+  const isWorkerRoute = (p, m) => (m === 'GET' && (p === '/api/wo/next' || p === '/api/wo/db-dump' || p === '/api/wo/db-list')) || (m === 'POST' && (p === '/api/wo/projects' || /^\/api\/wo\/[\w.-]+\/(heartbeat|complete|merge-result|cleanup-result)$/.test(p)));
 
   function workerAuthOk(req) {
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
@@ -196,7 +209,7 @@ function create(opts = {}) {
       let closed = false;
       req.on('close', () => { closed = true; });
       for (;;) {
-        const c = claim();
+        const c = claim(url.searchParams.get('cleanup') === '1');
         if (c) return send(ctx, 200, { wo: view(c.w), kind: c.kind }), true;
         if (closed || now() >= deadline) return send(ctx, 200, { wo: null }), true;
         await new Promise((r) => setTimeout(r, 1000));
@@ -233,6 +246,13 @@ function create(opts = {}) {
       w.status = body.status; w.lease_until = null;
       w.merge = { status: body.status, detail: String(body.detail || '').slice(0, 2000), sha: /^[0-9a-f]{7,40}$/.test(body.sha || '') ? body.sha : null, target: String(body.target || '').slice(0, 100), at: now() };
       save(); audit('worker', 'wo.merge', w.id, `${body.status} ${w.merge.target}`);
+      return send(ctx, 200, { wo: view(w) }), true;
+    }
+    if (action === 'cleanup-result') {
+      if (!CLEANUP_RESULTS.includes(body.status)) return send(ctx, 400, { error: 'status harus salah satu: ' + CLEANUP_RESULTS.join(',') }), true;
+      if (!w.cleanup || w.cleanup.state !== 'RUNNING') return send(ctx, 409, { error: 'tidak ada cleanup berjalan' }), true;
+      w.cleanup = { state: body.status, detail: String(body.detail || '').slice(0, 500), attempts: w.cleanup.attempts, at: now() };
+      save(); audit('worker', 'wo.cleanup', w.id, body.status);
       return send(ctx, 200, { wo: view(w) }), true;
     }
     if (!FINAL.includes(body.status)) return send(ctx, 400, { error: 'status harus salah satu: ' + FINAL.join(',') }), true;
@@ -340,6 +360,7 @@ function create(opts = {}) {
         const i = wos.findIndex((x) => x.id === id);
         if (i < 0) skipped.push({ id, reason: 'tidak ada' });
         else if (!DELETABLE.includes(wos[i].status)) skipped.push({ id, reason: 'status ' + wos[i].status });
+        else if (wos[i].cleanup && ['PENDING', 'RUNNING'].includes(wos[i].cleanup.state)) skipped.push({ id, reason: 'menunggu cleanup branch di worker' });
         else { rmFiles(wos.splice(i, 1)[0]); deleted.push(id); }
       }
       if (deleted.length) { save(); audit(session.user, 'wo.delete', deleted.length + ' WO', deleted.join(',').slice(0, 300)); }
@@ -360,6 +381,7 @@ function create(opts = {}) {
       let b = {};
       try { const raw = await ctx.readBody(req, 4096); b = raw ? JSON.parse(raw) : {}; } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
       if (!REVIEWABLE.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
+      const r0 = w.result || {};
       if (act[2] === 'approve') {
         const r = w.result || {};
         if (!r.head_sha || !r.branch) return send(ctx, 409, { error: 'WO ini tidak punya branch/head_sha (dibuat sebelum fitur merge), merge manual di laptop' }), true;
@@ -368,6 +390,7 @@ function create(opts = {}) {
         audit(session.user, 'wo.approve', w.id, r.branch);
       } else {
         w.status = 'REJECTED'; w.approved_by = session.user; w.approved_at = now();
+        if (BRANCH_RE.test(r0.branch || '')) w.cleanup = { state: 'PENDING', attempts: 0 }; // worker menghapus branch lokal WO ini
         audit(session.user, 'wo.reject', w.id, '');
       }
       w.review_note = String(b.note || '').slice(0, 500);

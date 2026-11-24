@@ -206,6 +206,7 @@ function openDetail(id) {
     ['Verifikasi', r.verify_passed === true ? 'lulus' : r.verify_passed === false ? 'gagal' : ''],
     ['Commit', r.head_sha ? r.head_sha.slice(0, 10) : ''],
     [w.status === 'REJECTED' ? 'Ditolak oleh' : 'Disetujui oleh', w.approved_by ? `${w.approved_by} · ${fmtTime(w.approved_at)}` : ''],
+    ['Branch lokal', w.cleanup ? ({ PENDING: 'menunggu worker menghapus', RUNNING: 'sedang dihapus worker…', DONE: 'dihapus', SKIPPED: 'dilewati', FAILED: 'gagal dihapus' }[w.cleanup.state] || w.cleanup.state) + (w.cleanup.detail ? ' — ' + w.cleanup.detail : '') : ''],
     ['Merge', w.merge ? `${w.merge.status}${w.merge.target ? ' → ' + w.merge.target : ''}${w.merge.sha ? ' @ ' + w.merge.sha.slice(0, 10) : ''}` : ''],
   ]);
   if (w.merge && w.merge.detail) h += `<div class="wo-pre">${escHtml(w.merge.detail)}</div>`;
