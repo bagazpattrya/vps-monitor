@@ -74,7 +74,7 @@ test('alur penuh: buat -> next -> heartbeat -> complete(png) -> detail, data sel
   const t = await boot();
   const { wo } = await (await t.call('POST', '/api/wo', null, { ...good, limits: { max_budget_usd: 99 } })).json();
   assert.strictEqual(wo.status, 'PENDING');
-  assert.strictEqual(wo.limits.max_budget_usd, 1); // di-clamp
+  assert.strictEqual(wo.limits.max_budget_usd, 3); // di-clamp
 
   const next = await (await t.call('GET', '/api/wo/next', 'wrk')).json();
   assert.strictEqual(next.wo.id, wo.id);

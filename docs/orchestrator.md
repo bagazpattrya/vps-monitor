@@ -14,7 +14,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 | Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete`, `POST /api/wo/:id/merge-result` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
-`POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
+`POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=3, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
 `complete` body: `{ status: COMPLETED|FAILED|OVER_BUDGET|NEEDS_REVIEW, result: {...}, screenshot_b64? }`.
 `result.complexity` (`simple`|`complex`, opsional) + `result.complexity_reason` (maks 300 char): flag dari agent worker. UI `/orders` punya filter kompleksitas supaya audit mulai dari yang complex. Nilai lain dibuang.
 

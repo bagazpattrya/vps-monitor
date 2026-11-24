@@ -214,11 +214,11 @@ function openDetail(id) {
   h += `<div class="wo-lbl">Context</div><div class="wo-pre">${escHtml(w.context)}</div>`;
   if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
-  if ((w.images || []).length) h += `<div class="wo-lbl">Lampiran</div><div class="chat-thumbs">${w.images.map(n => { const u = `/api/wo/${encodeURIComponent(w.id)}/img/${encodeURIComponent(n)}`; return `<a href="${escHtml(u)}" target="_blank" rel="noopener" class="thumb"><img src="${escHtml(u)}" alt="lampiran"></a>`; }).join('')}</div>`;
+  if ((w.images || []).length) h += `<div class="wo-lbl">Lampiran</div><div class="chat-thumbs">${w.images.map(n => { const u = `/api/wo/${encodeURIComponent(w.id)}/img/${encodeURIComponent(n)}`; return `<a href="${escHtml(u)}" class="thumb zoom"><img src="${escHtml(u)}" alt="lampiran"></a>`; }).join('')}</div>`;
   if (r.patch) h += `<div class="wo-lbl">Patch${r.patch_truncated ? ' (dipotong 200 KB)' : ''}</div><div class="wo-pre wo-patch">${renderPatch(r.patch)}</div>`;
   if (r.diff_stat) h += `<div class="wo-lbl">Diff</div><div class="wo-pre">${escHtml(r.diff_stat)}</div>`;
   if (r.logs) h += `<div class="wo-lbl">Log / jawaban agent</div><div class="wo-pre">${escHtml(r.logs)}</div>`;
-  if (w.screenshot_url) h += `<div class="wo-lbl">Screenshot</div><a href="${escHtml(w.screenshot_url)}" target="_blank" rel="noopener"><img class="wo-shot" src="${escHtml(w.screenshot_url)}" alt="screenshot"></a>`;
+  if (w.screenshot_url) h += `<div class="wo-lbl">Screenshot</div><a href="${escHtml(w.screenshot_url)}" class="zoom"><img class="wo-shot" src="${escHtml(w.screenshot_url)}" alt="screenshot"></a>`;
   if (REVIEWABLE.includes(w.status)) {
     h += r.head_sha
       ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve &amp; merge</button><button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
@@ -230,6 +230,15 @@ function openDetail(id) {
   $('woDetailModal').classList.add('open');
   bindActions(w);
 }
+// gambar lampiran/screenshot: popup, bukan pindah halaman
+$('woDetailBody').addEventListener('click', e => {
+  const a = e.target.closest('a.zoom');
+  if (!a) return;
+  e.preventDefault();
+  $('woImgBig').src = a.getAttribute('href');
+  $('woImgModal').classList.add('open');
+});
+$('woImgModal').addEventListener('click', () => $('woImgModal').classList.remove('open'));
 $('woDetailClose').addEventListener('click', () => $('woDetailModal').classList.remove('open'));
 
 // ---- buat WO baru ----
@@ -342,13 +351,11 @@ $('woNewSubmit').addEventListener('click', async () => {
   if (files.length) body.files_hint = files;
   if ($('woDbBox').style.display !== 'none' && $('woDb').value) body.db_source = $('woDb').value;
   if (pending.length) body.images = pending.map(p => p.dataUrl);
-  const url = $('woUrl').value.trim();
-  if (url) body.verification = { target_url: url };
   btn.disabled = true; $('woNewErr').textContent = '';
   try {
     await api('POST', '/api/wo', body);
     $('woNewModal').classList.remove('open');
-    ['woContext', 'woGoals', 'woFiles', 'woUrl'].forEach(i => { $(i).value = ''; });
+    ['woContext', 'woGoals', 'woFiles'].forEach(i => { $(i).value = ''; });
     pending = []; renderThumbs();
     await load();
   } catch (e) {
@@ -359,7 +366,7 @@ $('woNewSubmit').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') ['woNewModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open'));
+  if (e.key === 'Escape') ['woImgModal', 'woNewModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open'));
 });
 
 // Patch: tiap baris di-escape lalu diberi kelas warna (nilai berasal dari AI, jangan pernah tanpa escape).

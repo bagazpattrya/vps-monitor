@@ -311,7 +311,7 @@ function create(opts = {}) {
         created_at: t, completed_at: null,
         payload: {
           context: b.context, goals: b.goals || [], files_hint: b.files_hint || [], verification: b.verification || {},
-          limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 1, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
+          limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 3, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
         },
       };
       if (dbSource) w.payload.db_source = dbSource;
