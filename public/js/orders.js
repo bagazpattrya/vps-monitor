@@ -209,6 +209,7 @@ function openDetail(id) {
     ['Merge', w.merge ? `${w.merge.status}${w.merge.target ? ' → ' + w.merge.target : ''}${w.merge.sha ? ' @ ' + w.merge.sha.slice(0, 10) : ''}` : ''],
   ]);
   if (w.merge && w.merge.detail) h += `<div class="wo-pre">${escHtml(w.merge.detail)}</div>`;
+  if (w.status === 'MERGED') h += '<div class="wo-lbl">Deploy</div><div id="woDeploy"></div>';
   h += `<div class="wo-lbl">Context</div><div class="wo-pre">${escHtml(w.context)}</div>`;
   if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
@@ -223,7 +224,6 @@ function openDetail(id) {
          <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
       : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
   }
-  if (w.status === 'MERGED') h += '<div class="wo-lbl">Deploy</div><div id="woDeploy"></div>';
   $('woDetailBody').innerHTML = h;
   if (w.status === 'MERGED') deployBox(w);
   $('woDetailModal').classList.add('open');
