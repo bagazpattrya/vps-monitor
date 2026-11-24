@@ -5,6 +5,10 @@ let projects = [];
 let projectSig = '';
 const ACTIVE = ['PENDING', 'IN_PROGRESS', 'APPROVED', 'MERGING'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED'];
+const DELETABLE = ['MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // sama dengan server
+let links = {};
+const selected = new Set();
+let shown = []; // WO yang tampil sekarang (setelah filter)
 let refreshTimer = null;
 
 async function api(method, url, body) {
@@ -92,11 +96,12 @@ async function load() {
     const d = await api('GET', '/api/wo?limit=200');
     orders = d.work_orders || [];
     projects = d.projects || [];
+    links = d.links || {};
     fillProjects();
     $('woBudget').textContent = `Biaya hari ini: ${fmtUsd(d.cost_today_usd)} dari batas harian $${d.daily_budget_usd}. Angka biaya dari total_cost_usd yang dilaporkan worker (notional jika memakai login subscription).`;
     render();
   } catch (e) {
-    $('woList').innerHTML = `<tr><td colspan="6" style="color:var(--bad)">${escHtml(e.message)}</td></tr>`;
+    $('woList').innerHTML = `<tr><td colspan="7" style="color:var(--bad)">${escHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -108,21 +113,41 @@ function render() {
   const rows = orders.filter(w => (!pf || w.project_key === pf) && (!cf || cx(w) === cf) && (!f || (f === 'active' ? ACTIVE.includes(w.status) : f === 'APPROVED' ? ['APPROVED', 'MERGING'].includes(w.status) : w.status === f)));
   const active = orders.filter(w => ACTIVE.includes(w.status)).length;
   $('woBadge').textContent = `${orders.length} total · ${active} aktif`;
+  shown = rows;
+  [...selected].forEach(id => { const w = orders.find(x => x.id === id); if (!w || !DELETABLE.includes(w.status)) selected.delete(id); });
+  syncSel();
   if (!rows.length) {
-    $('woList').innerHTML = `<tr><td colspan="6" style="color:var(--mut)">${orders.length ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada Work Order. Klik “+ Work Order”.'}</td></tr>`;
+    $('woList').innerHTML = `<tr><td colspan="7" style="color:var(--mut)">${orders.length ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada Work Order. Klik “+ Work Order”.'}</td></tr>`;
     return;
   }
-  $('woList').innerHTML = rows.map(w => `<tr data-id="${escHtml(w.id)}">
+  const row = w => `<tr data-id="${escHtml(w.id)}">
+    <td>${DELETABLE.includes(w.status) ? `<input type="checkbox" class="wo-chk" data-id="${escHtml(w.id)}"${selected.has(w.id) ? ' checked' : ''}>` : ''}</td>
     <td><code>${escHtml(w.id)}</code></td>
     <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>${cx(w) !== 'none' ? ` <span class="wo-cx ${cx(w)}">${cx(w)}</span>` : ''}</td>
     <td>${escHtml(w.project_key)}</td>
     <td>${escHtml(short(w.context, 110))}</td>
     <td>${fmtUsd(w.cost_usd)}</td>
     <td>${escHtml(fmtTime(w.created_at))}</td>
-  </tr>`).join('');
+  </tr>`;
+  const g = $('woGroup').value;
+  if (!g) { $('woList').innerHTML = rows.map(row).join(''); return; }
+  const key = w => (g === 'project' ? w.project_key : w.status);
+  const groups = new Map();
+  rows.forEach(w => { if (!groups.has(key(w))) groups.set(key(w), []); groups.get(key(w)).push(w); });
+  $('woList').innerHTML = [...groups].sort((a, b) => a[0].localeCompare(b[0])).map(([k, list]) =>
+    `<tr class="wo-grp"><td colspan="7"><strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${list.length}</span></td></tr>` + list.map(row).join('')).join('');
+}
+
+function syncSel() {
+  $('woDelSel').style.display = selected.size ? '' : 'none';
+  $('woDelSel').textContent = `Hapus terpilih (${selected.size})`;
+  const del = shown.filter(w => DELETABLE.includes(w.status));
+  $('woCheckAll').checked = del.length > 0 && del.every(w => selected.has(w.id));
 }
 
 $('woList').addEventListener('click', e => {
+  const chk = e.target.closest('.wo-chk');
+  if (chk) { chk.checked ? selected.add(chk.dataset.id) : selected.delete(chk.dataset.id); syncSel(); return; }
   const tr = e.target.closest('tr[data-id]');
   if (tr) openDetail(tr.dataset.id);
 });
@@ -130,6 +155,31 @@ $('woFilter').addEventListener('change', render);
 $('woProjectFilter').addEventListener('change', render);
 $('woComplexFilter').addEventListener('change', render);
 $('woRefresh').addEventListener('click', load);
+try { $('woGroup').value = localStorage.getItem('woGroup') || ''; } catch { /* storage diblokir */ }
+$('woGroup').addEventListener('change', () => { try { localStorage.setItem('woGroup', $('woGroup').value); } catch { /* abaikan */ } render(); });
+$('woSelDone').addEventListener('click', () => { shown.filter(w => DELETABLE.includes(w.status)).forEach(w => selected.add(w.id)); render(); });
+$('woCheckAll').addEventListener('change', e => {
+  shown.filter(w => DELETABLE.includes(w.status)).forEach(w => (e.target.checked ? selected.add(w.id) : selected.delete(w.id)));
+  render();
+});
+// Hapus butuh dua klik; hanya id yang dipilih (dan tampil) yang dikirim.
+let delArmed = null;
+$('woDelSel').addEventListener('click', async () => {
+  const btn = $('woDelSel');
+  if (!delArmed) {
+    btn.textContent = `Yakin hapus ${selected.size}? Klik lagi`;
+    delArmed = setTimeout(() => { delArmed = null; syncSel(); }, 6000);
+    return;
+  }
+  clearTimeout(delArmed); delArmed = null;
+  btn.disabled = true;
+  try {
+    const r = await api('POST', '/api/wo/delete', { ids: [...selected] });
+    r.deleted.forEach(id => selected.delete(id));
+    if (r.skipped.length) alert('Dilewati:\n' + r.skipped.map(x => `${x.id}: ${x.reason}`).join('\n'));
+    await load();
+  } catch (e) { alert('Hapus gagal: ' + e.message); } finally { btn.disabled = false; syncSel(); }
+});
 
 function kv(rows) {
   return '<dl class="wo-kv">' + rows.filter(r => r[1] !== null && r[1] !== undefined && r[1] !== '').map(r => `<dt>${escHtml(r[0])}</dt><dd>${r[2] ? r[1] : escHtml(r[1])}</dd>`).join('') + '</dl>';
@@ -173,7 +223,9 @@ function openDetail(id) {
          <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
       : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
   }
+  if (w.status === 'MERGED') h += '<div class="wo-lbl">Deploy</div><div id="woDeploy"></div>';
   $('woDetailBody').innerHTML = h;
+  if (w.status === 'MERGED') deployBox(w);
   $('woDetailModal').classList.add('open');
   bindActions(w);
 }
@@ -378,3 +430,38 @@ function dbPicker() {
   if (src.length) $('woDb').value = p.db_default || src[0];
 }
 $('woProject').addEventListener('change', () => { projectNote(); dbPicker(); });
+
+// Deploy WO MERGED: git pull di repo VPS (endpoint dashboard Deploy yang sama) lalu tautan ke website.
+// Link (repo + url) per project diatur sekali lewat form kecil, disimpan di server.
+function deployBox(w) {
+  const box = $('woDeploy');
+  const l = links[w.project_key] || {};
+  const site = l.url ? ` <a class="btn-sm" href="${escHtml(l.url)}" target="_blank" rel="noopener">Buka website ↗</a>` : '';
+  box.innerHTML = `<div class="wo-actions">${l.repo ? `<button class="btn-sm ok" id="woDeployBtn">Deploy (git pull) → ${escHtml(l.repo)}</button>` : ''}${site}<button class="btn-sm" id="woLinkBtn">${l.repo || l.url ? 'Ubah link' : 'Atur link repo & website'}</button></div><div id="woDeployOut"></div>`;
+  const dep = $('woDeployBtn');
+  if (dep) dep.onclick = async () => {
+    dep.disabled = true; dep.textContent = 'Deploying…';
+    try {
+      const r = await api('POST', '/api/git/pull', { relPath: l.repo });
+      $('woDeployOut').innerHTML = `<div class="wo-pre">${escHtml(r.output || 'Selesai')}</div>`;
+      dep.textContent = '✓ Deployed';
+    } catch (e) { $('woDeployOut').innerHTML = `<div class="wo-pre" style="color:var(--bad)">${escHtml(e.message)}</div>`; dep.textContent = 'Deploy ulang'; }
+    dep.disabled = false;
+  };
+  $('woLinkBtn').onclick = () => linkForm(w, l);
+}
+async function linkForm(w, l) {
+  let repos = [];
+  try { repos = ((await api('GET', '/api/git/projects')).projects || []).map(p => p.relPath).sort(); } catch (e) { /* tetap boleh isi manual */ }
+  if (l.repo && !repos.includes(l.repo)) repos.unshift(l.repo);
+  $('woDeployOut').innerHTML = `<div class="wo-actions" style="flex-wrap:wrap">
+    <select id="lkRepo" class="input"><option value="">— repo di VPS —</option>${repos.map(r => `<option value="${escHtml(r)}"${r === l.repo ? ' selected' : ''}>${escHtml(r)}</option>`).join('')}</select>
+    <input id="lkUrl" class="input" placeholder="https://website.com" value="${escHtml(l.url || '')}" style="min-width:220px">
+    <button class="btn-sm ok" id="lkSave">Simpan</button><span id="lkErr" style="color:var(--bad)"></span></div>`;
+  $('lkSave').onclick = async () => {
+    try {
+      const r = await api('POST', '/api/wo/links', { project_key: w.project_key, repo: $('lkRepo').value, url: $('lkUrl').value });
+      links = r.links || {}; deployBox(w);
+    } catch (e) { $('lkErr').textContent = e.message; }
+  };
+}

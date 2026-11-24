@@ -1372,3 +1372,4 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .anno-dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; outline: 1px solid var(--border); cursor: pointer; padding: 0; }
 .anno-dot.on { border-color: var(--accent, #3b82f6); }
 .anno-ov canvas { max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; cursor: crosshair; touch-action: none; background: #222; }
+.wo-grp td { background: var(--bg-2, rgba(127,127,127,.08)); padding-top: 8px; padding-bottom: 8px; cursor: default; }
