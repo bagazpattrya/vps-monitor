@@ -195,7 +195,7 @@ function openDetail(id) {
     ['Status', `<span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>`, true],
     ['Project', w.project_key],
     ['Kompleksitas', r.complexity ? `${r.complexity}${r.complexity_reason ? ' — ' + r.complexity_reason : ''}` : ''],
-    ['Dibuat', fmtTime(w.created_at)],
+    ['Dibuat', fmtTime(w.created_at) + (w.created_by ? ' · ' + w.created_by : '')],
     ['Selesai', w.completed_at ? fmtTime(w.completed_at) : ''],
     ['Percobaan', w.attempts],
     ['Model / batas', `${(w.limits || {}).model} · $${(w.limits || {}).max_budget_usd} · ${(w.limits || {}).timeout_sec}s`],
@@ -448,9 +448,8 @@ const linkRepos = w => ((links[w.project_key] || {}).repos || []);
 
 async function deployBox(w) {
   const box = $('woDeploy');
-  try { gitList = (await api('GET', '/api/git/projects')).projects || []; } catch (e) { /* info commit tidak wajib */ }
-  const info = Object.fromEntries(gitList.map(g => [g.relPath, g]));
   const rs = linkRepos(w);
+  let info = {};
   if (!rs.length) {
     box.innerHTML = '<div class="wo-actions"><button class="btn-sm" id="woLinkBtn">Atur folder VPS &amp; website</button></div><div id="woDeployOut"></div>';
     $('woLinkBtn').onclick = () => linkForm(w);
@@ -458,11 +457,19 @@ async function deployBox(w) {
   }
   box.innerHTML = `<div class="wo-actions"><button class="btn-sm ok" id="woDeployBtn" disabled>Deploy terpilih (0)</button><button class="btn-sm" id="woPickAll">Pilih semua</button><button class="btn-sm" id="woPickNone">Kosongkan</button><button class="btn-sm" id="woLinkBtn">Atur folder</button></div>
     <div class="wo-deploy-list">${rs.map((r, i) => {
-      const g = info[r.repo];
       return `<div class="wo-deploy-row" data-i="${i}"><label><input type="checkbox" class="dep-chk" data-i="${i}"> <code>${escHtml(r.repo)}</code></label>
-        <span class="dep-meta">${g ? `${escHtml(g.branch || '')} @ ${escHtml(g.hash || '')}${g.dirty ? ' <strong style="color:var(--warn-tx)" title="Ada perubahan lokal yang belum di-commit">⚠ perubahan lokal</strong>' : ''}` : '<span style="color:var(--bad)">folder tidak ditemukan</span>'}</span>
+        <span class="dep-meta">memuat info git…</span>
         ${r.url ? `<a href="${escHtml(r.url)}" target="_blank" rel="noopener">Buka website ↗</a>` : ''}<span class="dep-res"></span></div>`;
     }).join('')}</div><div id="woDeployOut"></div>`;
+  // info git (lambat: status semua repo) dimuat belakangan supaya daftar langsung tampil
+  const infoReady = api('GET', '/api/git/projects').then(d => {
+    info = Object.fromEntries((d.projects || []).map(g => [g.relPath, g]));
+  }).catch(() => { /* info commit tidak wajib */ }).then(() => {
+    rs.forEach((r, i) => {
+      const g = info[r.repo], el = box.querySelector(`.wo-deploy-row[data-i="${i}"] .dep-meta`);
+      if (el) el.innerHTML = g ? `${escHtml(g.branch || '')} @ ${escHtml(g.hash || '')}${g.dirty ? ' <strong style="color:var(--warn-tx)" title="Ada perubahan lokal yang belum di-commit">⚠ perubahan lokal</strong>' : ''}` : '<span style="color:var(--bad)">folder tidak ditemukan</span>';
+    });
+  });
   const chks = () => [...box.querySelectorAll('.dep-chk')];
   const sync = () => { const n = chks().filter(c => c.checked).length; $('woDeployBtn').disabled = !n; $('woDeployBtn').textContent = `Deploy terpilih (${n})`; };
   box.addEventListener('change', e => { if (e.target.classList.contains('dep-chk')) sync(); });
@@ -471,6 +478,7 @@ async function deployBox(w) {
   $('woLinkBtn').onclick = () => linkForm(w);
   $('woDeployBtn').onclick = async () => {
     const picked = chks().filter(c => c.checked).map(c => Number(c.dataset.i));
+    await infoReady; // cek perubahan lokal butuh info git
     const dirty = picked.filter(i => (info[rs[i].repo] || {}).dirty).map(i => rs[i].repo);
     if (dirty.length && !confirm('Folder ini punya perubahan lokal yang belum di-commit:\n' + dirty.join('\n') + '\n\nTetap deploy?')) return;
     $('woDeployBtn').disabled = true;

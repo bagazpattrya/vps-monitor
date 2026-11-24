@@ -88,7 +88,7 @@ function create(opts = {}) {
       id: w.id, status: w.status, project_key: w.project_key, ...w.payload, attempts: w.attempts, result: w.result,
       screenshot_url: w.screenshot ? `/api/wo/shot/${w.screenshot}` : null, cost_usd: w.cost_usd,
       created_at: new Date(w.created_at).toISOString(), completed_at: w.completed_at ? new Date(w.completed_at).toISOString() : null,
-      approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
+      created_by: w.created_by || null, approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
       review_note: w.review_note || null, merge: w.merge || null,
       cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
     };
@@ -308,7 +308,7 @@ function create(opts = {}) {
       const w = {
         id: `WO-${new Date(t).toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex')}`,
         status: 'PENDING', project_key: b.project_key, attempts: 0, lease_until: null, result: null, screenshot: null, cost_usd: 0,
-        created_at: t, completed_at: null,
+        created_at: t, completed_at: null, created_by: session.user,
         payload: {
           context: b.context, goals: b.goals || [], files_hint: b.files_hint || [], verification: b.verification || {},
           limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 3, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
