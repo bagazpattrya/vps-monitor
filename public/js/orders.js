@@ -334,7 +334,15 @@ woModal.addEventListener('drop', e => { e.preventDefault(); addFiles(e.dataTrans
 
 const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
 
-$('woNew').addEventListener('click', () => { $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); });
+const openNew = () => { $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); };
+$('woNew').addEventListener('click', openNew);
+// Tab (tanpa fokus di elemen apa pun, tidak ada panel terbuka) = buka drawer WO baru
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (document.activeElement && document.activeElement !== document.body) return;
+  if (document.querySelector('.modal-backdrop.open, .sidebar.open')) return;
+  e.preventDefault(); openNew();
+});
 $('woNewClose').addEventListener('click', () => $('woNewModal').classList.remove('open'));
 
 $('woNewSubmit').addEventListener('click', async () => {
