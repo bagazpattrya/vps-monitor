@@ -106,6 +106,22 @@ test('screenshot bukan PNG tidak disimpan; status ngawur ditolak', async () => {
   t.close();
 });
 
+test('flag complexity: simple|complex disimpan, nilai lain dibuang', async () => {
+  const t = await boot();
+  const done = async (result) => {
+    const { wo } = await (await t.call('POST', '/api/wo', null, good)).json();
+    await t.call('GET', '/api/wo/next', 'wrk');
+    return (await (await t.call('POST', `/api/wo/${wo.id}/complete`, 'wrk', { status: 'COMPLETED', result })).json()).wo.result;
+  };
+  const r1 = await done({ complexity: 'complex', complexity_reason: 'ubah skema DB' });
+  assert.strictEqual(r1.complexity, 'complex');
+  assert.strictEqual(r1.complexity_reason, 'ubah skema DB');
+  const r2 = await done({ complexity: 'huge', complexity_reason: 5 });
+  assert.strictEqual(r2.complexity, undefined);
+  assert.strictEqual(r2.complexity_reason, undefined);
+  t.close();
+});
+
 test('path traversal pada screenshot ditolak', async () => {
   const t = await boot();
   assert.strictEqual((await t.call('GET', '/api/wo/shot/..%2Fwork-orders.json')).status, 404);

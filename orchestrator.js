@@ -11,6 +11,7 @@ const zlib = require('zlib');
 const { spawn } = require('child_process');
 const chats = require('./chats');
 
+const COMPLEXITY = ['simple', 'complex'];
 const FINAL = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW']; // status yang boleh dilaporkan worker setelah menjalankan agent
 const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED']; // boleh di-approve / reject
@@ -227,6 +228,9 @@ function create(opts = {}) {
     if (typeof result.patch === 'string' && result.patch.length > MAX_PATCH) { result.patch = result.patch.slice(0, MAX_PATCH); result.patch_truncated = true; }
     if (!/^[0-9a-f]{7,40}$/.test(result.head_sha || '')) delete result.head_sha;   // dipakai untuk memastikan yang di-merge = yang direview
     if (!/^wo\/[\w.-]+$/.test(result.branch || '')) delete result.branch;
+    // Flag dari agent: dipakai untuk memprioritaskan audit (complex dulu). Nilai selain simple|complex dibuang.
+    if (!COMPLEXITY.includes(result.complexity)) delete result.complexity;
+    if (typeof result.complexity_reason === 'string') result.complexity_reason = result.complexity_reason.slice(0, 300); else delete result.complexity_reason;
 
     let shot = null;
     if (typeof body.screenshot_b64 === 'string' && body.screenshot_b64) {

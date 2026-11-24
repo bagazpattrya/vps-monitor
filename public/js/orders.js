@@ -103,7 +103,9 @@ async function load() {
 function render() {
   const f = $('woFilter').value;
   const pf = $('woProjectFilter').value;
-  const rows = orders.filter(w => (!pf || w.project_key === pf) && (!f || (f === 'active' ? ACTIVE.includes(w.status) : f === 'APPROVED' ? ['APPROVED', 'MERGING'].includes(w.status) : w.status === f)));
+  const cf = $('woComplexFilter').value;
+  const cx = w => (w.result && w.result.complexity) || 'none';
+  const rows = orders.filter(w => (!pf || w.project_key === pf) && (!cf || cx(w) === cf) && (!f || (f === 'active' ? ACTIVE.includes(w.status) : f === 'APPROVED' ? ['APPROVED', 'MERGING'].includes(w.status) : w.status === f)));
   const active = orders.filter(w => ACTIVE.includes(w.status)).length;
   $('woBadge').textContent = `${orders.length} total · ${active} aktif`;
   if (!rows.length) {
@@ -112,7 +114,7 @@ function render() {
   }
   $('woList').innerHTML = rows.map(w => `<tr data-id="${escHtml(w.id)}">
     <td><code>${escHtml(w.id)}</code></td>
-    <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span></td>
+    <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>${cx(w) !== 'none' ? ` <span class="wo-cx ${cx(w)}">${cx(w)}</span>` : ''}</td>
     <td>${escHtml(w.project_key)}</td>
     <td>${escHtml(short(w.context, 110))}</td>
     <td>${fmtUsd(w.cost_usd)}</td>
@@ -126,6 +128,7 @@ $('woList').addEventListener('click', e => {
 });
 $('woFilter').addEventListener('change', render);
 $('woProjectFilter').addEventListener('change', render);
+$('woComplexFilter').addEventListener('change', render);
 $('woRefresh').addEventListener('click', load);
 
 function kv(rows) {
@@ -141,6 +144,7 @@ function openDetail(id) {
   let h = kv([
     ['Status', `<span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>`, true],
     ['Project', w.project_key],
+    ['Kompleksitas', r.complexity ? `${r.complexity}${r.complexity_reason ? ' — ' + r.complexity_reason : ''}` : ''],
     ['Dibuat', fmtTime(w.created_at)],
     ['Selesai', w.completed_at ? fmtTime(w.completed_at) : ''],
     ['Percobaan', w.attempts],

@@ -16,6 +16,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 
 `POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=1, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
 `complete` body: `{ status: COMPLETED|FAILED|OVER_BUDGET|NEEDS_REVIEW, result: {...}, screenshot_b64? }`.
+`result.complexity` (`simple`|`complex`, opsional) + `result.complexity_reason` (maks 300 char): flag dari agent worker. UI `/orders` punya filter kompleksitas supaya audit mulai dari yang complex. Nilai lain dibuang.
 
 Membuat WO dari CLI (belum ada UI): login dulu untuk dapat cookie.
 ```
