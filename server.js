@@ -1496,6 +1496,12 @@ function isHidden(session, value) {
   return kws.some((k) => keywordRegex(k).test(s));
 }
 
+// Override kategori per repo (relPath -> teks). Tanpa override, kategori = 'dev' bila isDevProjectName, selain itu kosong.
+const GIT_CATEGORY_FILE = path.join(DATA_DIR, 'git-categories.json');
+function loadGitCategories() {
+  try { const d = JSON.parse(fs.readFileSync(GIT_CATEGORY_FILE, 'utf8')); return d && typeof d === 'object' ? d : {}; } catch { return {}; }
+}
+
 function getGitProjects(force = false) {
   const now = Date.now();
   if (!force && gitCache.time && (now - gitCache.time < 30_000)) return gitCache.projects;
@@ -4665,9 +4671,24 @@ const server = http.createServer(async (req, res) => {
     if (r.ok) audit(session.user, 'project.delete', r.project.name, 'grouping only; repos/databases/sites untouched');
     return send(res, r.ok ? 200 : r.status, JSON.stringify(r.ok ? { ok: true } : { error: r.error }));
   }
+  if (p === '/api/git/category' && req.method === 'POST') {
+    if (!session.admin) return send(res, 403, JSON.stringify({ error: 'Admin required' }));
+    let body;
+    try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
+    const rel = body && body.relPath;
+    const cat = typeof (body && body.category) === 'string' ? body.category.trim().replace(/\s+/g, ' ') : '';
+    if (!getGitProjects().some((x) => x.relPath === rel)) return send(res, 404, JSON.stringify({ error: 'Repo not found' }));
+    if (cat.length > 20) return send(res, 400, JSON.stringify({ error: 'Kategori maksimal 20 karakter' }));
+    const map = loadGitCategories();
+    if (cat) map[rel] = cat; else delete map[rel]; // kosong = kembali ke deteksi otomatis
+    fs.writeFileSync(GIT_CATEGORY_FILE, JSON.stringify(map), { mode: 0o600 });
+    audit(session.user, 'git.category', rel, cat || 'auto');
+    return send(res, 200, JSON.stringify({ ok: true }));
+  }
   if (p === '/api/git/projects') {
     const projects = getGitProjects().filter((x) => !isHidden(session, [x.name, x.relPath]));
-    const safe = projects.map(({ path: _p, ...rest }) => rest); // hide absolute path
+    const cats = loadGitCategories();
+    const safe = projects.map(({ path: _p, ...rest }) => ({ ...rest, category: cats[rest.relPath] || (rest.isDev ? 'dev' : ''), categoryAuto: !cats[rest.relPath] })); // hide absolute path
     return send(res, 200, JSON.stringify({ time: Date.now(), scanRoot: SCAN_ROOT, projects: safe }));
   }
   if (p === '/api/git/db/sources' && req.method === 'GET') {

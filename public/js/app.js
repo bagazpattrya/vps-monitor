@@ -1488,7 +1488,7 @@ function renderGitProjects() {
                 <div class="git-tags">
                   ${projTypePill(r)}
                   <span class="pill ok">${r.branch}</span>
-                  ${r.isDev ? '<span class="pill">DEV</span>' : ''}
+                  ${r.category ? `<span class="pill">${escHtml(r.category.toUpperCase())}</span>` : ''}
                   ${r.dirty ? '<span class="pill down">modified</span>' : ''}
                 </div>
                 <div class="git-meta"><code>${r.hash}</code> · ${r.time} · ${r.message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
@@ -1504,6 +1504,7 @@ function renderGitProjects() {
                   <button class="act-composer" data-rel="${r.relPath}">Composer Update</button>
                   <button class="act-rename" data-mode="dir" data-rel="${r.relPath}">Rename Folder…</button>
                   <button class="act-rename" data-mode="db" data-rel="${r.relPath}">Rename Database…</button>
+                  <button class="act-cat" data-rel="${r.relPath}" data-cat="${escHtml(r.categoryAuto ? '' : r.category)}">Ubah Kategori…</button>
                   <button class="act-term" data-rel="${r.relPath}">Terminal…</button>
                 </div>
               </div>
@@ -3192,6 +3193,15 @@ async function doComposerUpdate(rel) {
 $('gitList').addEventListener('click', async (e) => {
   const dbsyncBtn = e.target.closest('.act-dbsync');
   if (dbsyncBtn) { closePullMenus(); openDbSyncModal(dbsyncBtn.dataset.rel); return; }
+  const catBtn = e.target.closest('.act-cat');
+  if (catBtn) {
+    closePullMenus();
+    const v = prompt('Kategori (mis. dev, staging, production). Kosongkan untuk deteksi otomatis:', catBtn.dataset.cat);
+    if (v === null) return;
+    j('/api/git/category', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ relPath: catBtn.dataset.rel, category: v }) })
+      .then(() => gitProjects()).catch(err => alert(err.message || 'Gagal'));
+    return;
+  }
   const renBtn = e.target.closest('.act-rename');
   if (renBtn) { closePullMenus(); openRenameModal(renBtn.dataset.rel, renBtn.dataset.mode); return; }
   const termBtn = e.target.closest('.act-term');
