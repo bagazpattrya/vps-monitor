@@ -101,7 +101,7 @@ async function load() {
     $('woBudget').textContent = `Biaya hari ini: ${fmtUsd(d.cost_today_usd)} dari batas harian $${d.daily_budget_usd}. Angka biaya dari total_cost_usd yang dilaporkan worker (notional jika memakai login subscription).`;
     render();
   } catch (e) {
-    $('woList').innerHTML = `<tr><td colspan="7" style="color:var(--bad)">${escHtml(e.message)}</td></tr>`;
+    $('woList').innerHTML = `<tr><td colspan="8" style="color:var(--bad)">${escHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -117,7 +117,7 @@ function render() {
   [...selected].forEach(id => { const w = orders.find(x => x.id === id); if (!w || !DELETABLE.includes(w.status)) selected.delete(id); });
   syncSel();
   if (!rows.length) {
-    $('woList').innerHTML = `<tr><td colspan="7" style="color:var(--mut)">${orders.length ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada Work Order. Klik “+ Work Order”.'}</td></tr>`;
+    $('woList').innerHTML = `<tr><td colspan="8" style="color:var(--mut)">${orders.length ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada Work Order. Klik “+ Work Order”.'}</td></tr>`;
     return;
   }
   const row = w => `<tr data-id="${escHtml(w.id)}">
@@ -125,9 +125,10 @@ function render() {
     <td><code>${escHtml(w.id)}</code></td>
     <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>${cx(w) !== 'none' ? ` <span class="wo-cx ${cx(w)}">${cx(w)}</span>` : ''}</td>
     <td>${escHtml(w.project_key)}</td>
-    <td>${escHtml(short(w.context, 110))}</td>
+    <td class="wo-ctx" title="${escHtml(w.context)}">${escHtml(w.context)}</td>
     <td>${fmtUsd(w.cost_usd)}</td>
     <td>${escHtml(fmtTime(w.created_at))}</td>
+    <td class="wo-acts">${rowActions(w)}</td>
   </tr>`;
   const g = $('woGroup').value;
   if (!g) { $('woList').innerHTML = rows.map(row).join(''); return; }
@@ -135,7 +136,7 @@ function render() {
   const groups = new Map();
   rows.forEach(w => { if (!groups.has(key(w))) groups.set(key(w), []); groups.get(key(w)).push(w); });
   $('woList').innerHTML = [...groups].sort((a, b) => a[0].localeCompare(b[0])).map(([k, list]) =>
-    `<tr class="wo-grp"><td colspan="7"><strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${list.length}</span></td></tr>` + list.map(row).join('')).join('');
+    `<tr class="wo-grp"><td colspan="8"><strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${list.length}</span></td></tr>` + list.map(row).join('')).join('');
 }
 
 function syncSel() {
@@ -145,7 +146,47 @@ function syncSel() {
   $('woCheckAll').checked = del.length > 0 && del.every(w => selected.has(w.id));
 }
 
+// Tombol aksi per baris. Step 1 (REVIEWABLE): Approve/Reject. Step 2 (MERGED): Pull dev / Pull semua folder terhubung.
+// Folder "dev" = flag isDev dari /api/git/projects (isDevProjectName di server.js), dicek saat klik.
+function rowActions(w) {
+  const a = (act, cls, txt, tip) => `<button class="btn-sm ${cls} wo-act" data-act="${act}" data-id="${escHtml(w.id)}" title="${escHtml(tip)}">${txt}</button>`;
+  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Approve & merge ke branch target') + a('reject', 'danger', 'Reject', 'Tolak WO');
+  if (w.status === 'MERGED') {
+    const rs = linkRepos(w);
+    if (!rs.length) return '';
+    return a('pull-dev', 'ok', 'Pull dev', 'git pull hanya folder bertanda DEV') + a('pull-all', '', 'Pull semua', 'git pull: ' + rs.map(r => r.repo).join(', '));
+  }
+  return '';
+}
+async function rowAct(btn) {
+  const w = orders.find(x => x.id === btn.dataset.id), act = btn.dataset.act;
+  if (!w) return;
+  if (act === 'approve' && !confirm(`Approve ${w.id}? Laptop akan merge dan push ke branch target.`)) return;
+  if (act === 'reject' && !confirm(`Reject ${w.id}?`)) return;
+  btn.disabled = true;
+  try {
+    if (act === 'approve' || act === 'reject') await api('POST', `/api/wo/${encodeURIComponent(w.id)}/${act}`, {});
+    else {
+      let rs = linkRepos(w);
+      const info = Object.fromEntries(((await api('GET', '/api/git/projects')).projects || []).map(g => [g.relPath, g]));
+      if (act === 'pull-dev') rs = rs.filter(r => (info[r.repo] || {}).isDev);
+      if (!rs.length) { alert('Tidak ada folder DEV di link project ini.'); btn.disabled = false; return; }
+      const dirty = rs.filter(r => (info[r.repo] || {}).dirty).map(r => r.repo);
+      if (dirty.length && !confirm('Folder ini punya perubahan lokal:\n' + dirty.join('\n') + '\n\nTetap pull?')) { btn.disabled = false; return; }
+      const res = [];
+      for (const r of rs) { // satu gagal tidak menghentikan yang lain
+        try { await api('POST', '/api/git/pull', { relPath: r.repo }); res.push('✓ ' + r.repo); } catch (e) { res.push('✕ ' + r.repo + ': ' + e.message); }
+      }
+      alert(res.join('\n'));
+    }
+    await load();
+  } catch (e) { alert(e.message); }
+  btn.disabled = false;
+}
+
 $('woList').addEventListener('click', e => {
+  const ab = e.target.closest('.wo-act');
+  if (ab) { rowAct(ab); return; }
   const chk = e.target.closest('.wo-chk');
   if (chk) { chk.checked ? selected.add(chk.dataset.id) : selected.delete(chk.dataset.id); syncSel(); return; }
   const tr = e.target.closest('tr[data-id]');

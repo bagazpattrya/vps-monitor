@@ -1382,3 +1382,6 @@ h3.md-h { font-size: 17px; } h4.md-h { font-size: 15.5px; } h5.md-h { font-size:
 .wo-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0,0,0,.45); }
 @media (max-width: 640px) { .wo-fab { right: 16px; bottom: 16px; } }
 body:has(.modal-backdrop.open) .wo-fab { display: none; } /* sembunyi saat drawer/modal terbuka */
+.wo-ctx { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wo-acts { white-space: nowrap; }
+.wo-acts .btn-sm { margin-right: 4px; }
