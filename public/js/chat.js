@@ -84,7 +84,15 @@ let busy = false;
 let pending = []; // [{ dataUrl }]
 let stick = true; // follow new output only while the user is at the bottom
 
-const imgUrl = (id, name) => `/api/chats/${id}/img/${name}`;
+let viewShared = false; // chat bug report (user API) yang sedang dibuka: read-only
+const chatBase = () => '/api/chats/' + (viewShared ? 'shared/' : '');
+const imgUrl = (id, name) => `${chatBase()}${id}/img/${name}`;
+function setReadOnly(on) {
+  viewShared = on;
+  input.disabled = on;
+  $('send').disabled = on;
+  input.placeholder = on ? 'Read-only: chat dari bug report (work.microspace.id)' : 'Ask about the code or the server…';
+}
 const nearBottom = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
 const scrollDown = (force) => { if (force || stick) msgs.scrollTop = msgs.scrollHeight; };
 msgs.addEventListener('scroll', () => { stick = nearBottom(); $('toBottom').hidden = stick; });
@@ -233,10 +241,11 @@ function renderChat(chat) {
   scrollDown(true);
 }
 
-async function openChat(id) {
-  const chat = await j('/api/chats/' + id);
+async function openChat(id, shared = false) {
+  const chat = await j('/api/chats/' + (shared ? 'shared/' : '') + id);
+  setReadOnly(shared);
   currentId = id;
-  localStorage.setItem('chatCurrent', id);
+  if (!shared) localStorage.setItem('chatCurrent', id);
   if ([...modelSel.options].some((o) => o.value === chat.model)) modelSel.value = chat.model;
   renderChat(chat);
   markActive();
@@ -291,6 +300,24 @@ async function loadList() {
     rowEl.append(title, ren, del);
     box.appendChild(rowEl);
   }
+  const shared = await j('/api/chats/shared').catch(() => []);
+  if (shared.length) {
+    const lab = document.createElement('div');
+    lab.className = 'chat-group'; lab.textContent = 'Bug report (read-only)';
+    box.appendChild(lab);
+  }
+  for (const c of shared) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'chat-item';
+    rowEl.dataset.id = c.id;
+    const title = document.createElement('span');
+    title.className = 'chat-item-title';
+    title.textContent = (c.project ? '[' + c.project + '] ' : '') + c.title;
+    title.title = new Date(c.updatedAt).toLocaleString();
+    title.onclick = () => { if (!busy) openChat(c.id, true); };
+    rowEl.append(title);
+    box.appendChild(rowEl);
+  }
   markActive();
   return list;
 }
@@ -298,6 +325,7 @@ async function loadList() {
 function newChat() {
   if (busy) return;
   currentId = '';
+  setReadOnly(false);
   localStorage.removeItem('chatCurrent');
   pending = []; renderThumbs();
   renderChat(null);

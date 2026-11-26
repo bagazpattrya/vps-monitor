@@ -376,7 +376,7 @@ async function handleChat({ req, res, session, body, projects, log }) {
       mcpConfig = JSON.stringify({ mcpServers: { vpsmon: { command: process.env.CHAT_NODE || process.execPath, args: [path.join(__dirname, 'chat-mcp.js')], env: { VPSMON_APPROVAL_URL: 'http://127.0.0.1:' + port + '/approve', VPSMON_APPROVAL_TOKEN: token } } } });
     }
     const args = buildClaudeArgs({ sessionId, model, addDirs, mcpConfig, shell, tinker: withTinker });
-    if (!chat) chat = chats.createChat(session.user, { message, model });
+    if (!chat) chat = chats.createChat(session.user, { message, model, project: session.api && typeof body.project_key === 'string' ? body.project_key : undefined });
     const names = chats.saveImages(session.user, chat.id, imgs);
     chats.updateChat(session.user, chat.id, (c) => { c.model = model; c.messages.push({ role: 'user', text: message, images: names, t: Date.now() }); });
     if (names.length) prompt += '\n\nAttached images (read them with the Read tool):\n' + names.map((n) => '_uploads/' + n).join('\n');

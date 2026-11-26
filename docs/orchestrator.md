@@ -89,3 +89,5 @@ AI chat: body `{ message, project_key?, chatId?, model?, images? }`. `project_ke
 curl -N -H "Authorization: Bearer $EXT_API_TOKEN" -H 'Content-Type: application/json' \
   -d '{"project_key":"lapila","message":"Kenapa endpoint /checkout bisa error 500?"}' https://server.microspace.id/api/chat
 ```
+
+Riwayat chat API (user `EXT_API_USER`) bisa **dibaca** semua admin dan superadmin di `/chat`, bagian "Bug report (read-only)" (`GET /api/chats/shared[/id]`). Tidak bisa dilanjutkan, di-rename, atau dihapus dari UI. Chat yang `project_key`/judulnya cocok dengan `hiddenKeywords` admin tidak ditampilkan ke admin itu. Viewer tidak bisa melihatnya.

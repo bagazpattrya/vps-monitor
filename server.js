@@ -4198,7 +4198,7 @@ const server = http.createServer(async (req, res) => {
   if (p.startsWith('/api/chats')) {
     let body;
     if (req.method === 'PATCH') { try { body = JSON.parse(await readBody(req, 4096)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); } }
-    if (chats.handleChatsApi({ req, res, session, pathname: p, body })) return;
+    if (chats.handleChatsApi({ req, res, session, pathname: p, body, sharedUser: process.env.EXT_API_TOKEN ? (process.env.EXT_API_USER || 'bugreport') : '', visible: (c) => !isHidden(session, [c.project, c.title]) })) return;
     return send(res, 404, JSON.stringify({ error: 'Not found' }));
   }
   if (p === '/api/chat/models' && req.method === 'GET') return send(res, 200, JSON.stringify({ ...chat.chatModels(), shell: chat.shellAvailable(session), tinker: chat.tinkerAvailable(session) }));

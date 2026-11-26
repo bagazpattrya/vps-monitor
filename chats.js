@@ -33,7 +33,7 @@ function listChats(user) {
   const rows = [];
   for (const f of files) {
     const c = getChat(user, f.slice(0, -5));
-    if (c) rows.push({ id: c.id, title: c.title, model: c.model, updatedAt: c.updatedAt });
+    if (c) rows.push({ id: c.id, title: c.title, model: c.model, updatedAt: c.updatedAt, project: c.project || null });
   }
   return rows.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -45,13 +45,14 @@ function deleteChat(user, id) {
   return true;
 }
 
-function createChat(user, { message, model }, max = MAX_CHATS) {
+function createChat(user, { message, model, project }, max = MAX_CHATS) {
   const now = Date.now();
   const chat = {
     id: crypto.randomBytes(12).toString('hex'),
     title: String(message || '').trim().slice(0, 60) || 'New chat',
     model, claudeSessionId: '', createdAt: now, updatedAt: now, messages: [],
   };
+  if (project) chat.project = project; // project_key dari API eksternal; dipakai filter hiddenKeywords di daftar bersama
   writeAtomic(chatFile(user, chat.id), chat);
   const all = listChats(user);
   for (const old of all.slice(max)) deleteChat(user, old.id);
@@ -116,16 +117,21 @@ function saveImages(user, id, imgs) {
 const IMG_NAME_RE = /^[a-f0-9]{16}\.(png|jpg|webp|gif)$/;
 const IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
 
-function handleChatsApi({ req, res, session, pathname, body }) {
-  const m = /^\/api\/chats(?:\/([^/]+)(?:\/img\/([^/]+))?)?$/.exec(pathname);
+// sharedUser: user API eksternal (EXT_API_USER); chat-nya bisa DIBACA semua admin lewat /api/chats/shared[/id[/img/x]].
+// visible(chat): false = sembunyikan dari admin ini (hiddenKeywords).
+function handleChatsApi({ req, res, session, pathname, body, sharedUser, visible = () => true }) {
+  const sh = /^\/api\/chats\/shared(?:\/([^/]+)(?:\/img\/([^/]+))?)?$/.exec(pathname);
+  const m = sh || /^\/api\/chats(?:\/([^/]+)(?:\/img\/([^/]+))?)?$/.exec(pathname);
   if (!m) return false;
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); return true; };
   if (!session || !session.admin) return json(403, { error: 'Admin required' });
-  const user = session.user;
+  if (sh && (!sharedUser || req.method !== 'GET')) return sh[1] ? json(405, { error: 'Read-only' }) : json(200, []);
+  const user = sh ? sharedUser : session.user;
   const [, id, img] = m;
+  if (sh && !id) return json(200, listChats(user).filter(visible));
   if (!id) return req.method === 'GET' ? json(200, listChats(user)) : json(405, { error: 'Method not allowed' });
   const chat = getChat(user, id); // null for bad ids and for other users' chats
-  if (!chat) return json(404, { error: 'Chat not found' });
+  if (!chat || (sh && !visible(chat))) return json(404, { error: 'Chat not found' });
   if (img !== undefined) {
     if (req.method !== 'GET' || !IMG_NAME_RE.test(img)) return json(404, { error: 'Not found' });
     let buf;

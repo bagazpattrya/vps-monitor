@@ -109,6 +109,31 @@ function call(user, method, pathname, body, admin = true) {
   return out;
 }
 
+test('api shared: semua admin bisa BACA chat user API (bugreport), tidak bisa ubah; hiddenKeywords difilter', () => {
+  const c = chats.createChat('bugbot', { message: 'kenapa error', model: 'haiku', project: 'demo' });
+  const h = chats.createChat('bugbot', { message: 'rahasia', model: 'haiku', project: 'hidden-proj' });
+  const [name] = chats.saveImages('bugbot', c.id, [{ buf: PNG, ext: 'png' }]);
+  const sh = (method, pathname, opts = {}) => {
+    const out = { status: 0, body: Buffer.alloc(0) };
+    const res = { writeHead(st) { out.status = st; }, end(b) { if (b) out.body = Buffer.from(b); } };
+    chats.handleChatsApi({ req: { method }, res, session: { user: 'adm', admin: opts.admin !== false }, pathname, sharedUser: 'sharedUser' in opts ? opts.sharedUser : 'bugbot', visible: (x) => x.project !== 'hidden-proj' });
+    out.json = () => JSON.parse(out.body.toString());
+    return out;
+  };
+  assert.deepStrictEqual(sh('GET', '/api/chats/shared').json().map((x) => [x.id, x.project]), [[c.id, 'demo']]);
+  const got = sh('GET', '/api/chats/shared/' + c.id);
+  assert.strictEqual(got.status, 200);
+  assert.ok(!('claudeSessionId' in got.json()));
+  assert.strictEqual(sh('GET', `/api/chats/shared/${c.id}/img/${name}`).status, 200);
+  assert.strictEqual(sh('GET', '/api/chats/shared/' + h.id).status, 404); // hidden
+  assert.strictEqual(sh('DELETE', '/api/chats/shared/' + c.id).status, 405);
+  assert.strictEqual(sh('PATCH', '/api/chats/shared/' + c.id).status, 405);
+  assert.ok(chats.getChat('bugbot', c.id));
+  assert.strictEqual(sh('GET', '/api/chats/shared', { admin: false }).status, 403);
+  assert.deepStrictEqual(sh('GET', '/api/chats/shared', { sharedUser: '' }).json(), []); // API mati
+  assert.strictEqual(call('adm', 'GET', '/api/chats/' + c.id).status, 404); // jalur biasa tetap milik sendiri
+});
+
 test('api: owner can list, read (without session id), rename and delete', () => {
   const c = chats.createChat('apiu', { message: 'hello', model: 'sonnet' });
   chats.updateChat('apiu', c.id, (x) => { x.claudeSessionId = 'SECRET-SESSION'; });
