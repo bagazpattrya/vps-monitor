@@ -5,6 +5,10 @@ let projects = [];
 let projectSig = '';
 const ACTIVE = ['PENDING', 'IN_PROGRESS', 'APPROVED', 'MERGING'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED'];
+const REVISABLE = [...REVIEWABLE, 'REJECTED', 'FAILED', 'OVER_BUDGET']; // sama dengan server
+// Revisi = worker lanjut di branch WO yang sama; butuh branch yang masih ada (server tetap memeriksa ulang).
+const canRevise = w => REVISABLE.includes(w.status) && !!(((w.result || {}).branch && (w.result || {}).head_sha) || w.revision)
+  && !(w.cleanup && ['RUNNING', 'DONE'].includes(w.cleanup.state));
 const DELETABLE = ['NEEDS_REVIEW', 'MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // sama dengan server
 const PRIORITIES = ['highest', 'high', 'medium', 'low', 'lowest']; // sama dengan server
 const QUEUED = ['PENDING', 'APPROVED']; // prioritas boleh diubah
@@ -154,7 +158,9 @@ const SCOPE_TXT = { dev: 'dev', all: 'dev + produksi' };
 function rowActions(w) {
   const a = (act, cls, txt, tip) => `<button class="btn-sm ${cls} wo-act" data-act="${act}" data-id="${escHtml(w.id)}" title="${escHtml(tip)}">${txt}</button>`;
   const st = (txt, tip, color) => `<span class="wo-prog" style="font-size:12px;color:var(${color || '--mut'})" title="${escHtml(tip || '')}">${escHtml(txt)}</span>`;
-  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') + a('reject', 'danger', 'Reject', 'Tolak WO');
+  const rv = canRevise(w) ? a('revise', '', 'Revisi', 'Kirim balik ke worker dengan catatan, dikerjakan di branch yang sama') : '';
+  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') + rv + a('reject', 'danger', 'Reject', 'Tolak WO');
+  if (rv) return rv;
   const scope = SCOPE_TXT[w.pull_scope] || 'dev';
   if (w.status === 'APPROVED') return st('⏳ menunggu worker merge', 'pull: ' + scope);
   if (w.status === 'MERGING') return st('⏳ merging…', 'pull: ' + scope);
@@ -172,6 +178,7 @@ async function rowAct(btn) {
   const w = orders.find(x => x.id === btn.dataset.id), act = btn.dataset.act;
   if (!w) return;
   if (act === 'approve') return approveDialog(w, load);
+  if (act === 'revise') { btn.disabled = true; try { await reviseWo(w); } catch (e) { alert(e.message); } btn.disabled = false; return; }
   if (!confirm(`Reject ${w.id}?`)) return;
   btn.disabled = true;
   try {
@@ -262,16 +269,19 @@ function openDetail(id) {
   if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
   if ((w.images || []).length) h += `<div class="wo-lbl">Lampiran</div><div class="chat-thumbs">${w.images.map(n => { const u = `/api/wo/${encodeURIComponent(w.id)}/img/${encodeURIComponent(n)}`; return `<a href="${escHtml(u)}" class="thumb zoom"><img src="${escHtml(u)}" alt="lampiran"></a>`; }).join('')}</div>`;
+  if ((w.revisions || []).length) h += `<div class="wo-lbl">Riwayat revisi</div><div class="wo-pre">${escHtml(w.revisions.map((x, i) => `#${i + 1} · ${x.by || ''} · ${fmtTime(x.at)} (dari ${x.from_status})\n${x.note}`).join('\n\n'))}</div>`;
   if (r.patch) h += `<div class="wo-lbl">Patch${r.patch_truncated ? ' (dipotong 200 KB)' : ''}</div><div class="wo-pre wo-patch">${renderPatch(r.patch)}</div>`;
   if (r.diff_stat) h += `<div class="wo-lbl">Diff</div><div class="wo-pre">${escHtml(r.diff_stat)}</div>`;
   if (r.logs) h += `<div class="wo-lbl">Log / jawaban agent</div><div class="wo-pre">${escHtml(r.logs)}</div>`;
   if (w.screenshot_url) h += `<div class="wo-lbl">Screenshot</div><a href="${escHtml(w.screenshot_url)}" class="zoom"><img class="wo-shot" src="${escHtml(w.screenshot_url)}" alt="screenshot"></a>`;
   if (REVIEWABLE.includes(w.status)) {
     h += r.head_sha
-      ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve</button><button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
+      ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve</button>${canRevise(w) ? '<button class="btn-sm" id="woRevise">Revisi</button>' : ''}<button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
          <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. Setelah MERGED, VPS otomatis <code>git pull</code> folder yang ter-link: pilih <em>dev saja</em> atau <em>semua</em> (termasuk produksi) saat Approve. Folder dengan perubahan lokal dilewati. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
       : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
   }
+  else if (canRevise(w)) h += `<div class="wo-actions"><button class="btn-sm" id="woRevise">Revisi</button><span id="woActErr"></span></div>
+    <p style="color:var(--mut);font-size:12px">Revisi mengirim WO kembali ke worker dengan catatanmu. Worker melanjutkan branch <code>${escHtml(r.branch || (w.revision || {}).branch || '')}</code> (commit baru di atasnya), lalu hasilnya direview ulang.</p>`;
   $('woDetailBody').innerHTML = h;
   if (w.status === 'MERGED') deployBox(w);
   $('woDetailModal').classList.add('open');
@@ -463,7 +473,22 @@ $('woApproveGo').addEventListener('click', async () => {
   } catch (e) { $('woApproveErr').textContent = e.message; $('woApproveGo').disabled = false; }
 });
 
+// Minta alasan revisi lalu kirim. Return false jika dibatalkan.
+async function reviseWo(w) {
+  const note = prompt(`Revisi ${w.id}: apa yang harus diperbaiki worker?`, '');
+  if (note === null || !note.trim()) return false;
+  await api('POST', `/api/wo/${encodeURIComponent(w.id)}/revise`, { note: note.trim() });
+  await load();
+  return true;
+}
+
 function bindActions(w) {
+  const rv = $('woRevise');
+  if (rv) rv.addEventListener('click', async () => {
+    rv.disabled = true; $('woActErr').textContent = '';
+    try { if (await reviseWo(w)) openDetail(w.id); } catch (e) { $('woActErr').textContent = e.message; }
+    rv.disabled = false;
+  });
   const rj = $('woReject');
   if (!rj) return;
   $('woApprove').addEventListener('click', () => approveDialog(w, async () => { await load(); openDetail(w.id); }));

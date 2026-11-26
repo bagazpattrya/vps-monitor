@@ -452,3 +452,59 @@ test('priority: default highest, worker ambil prioritas tertinggi dulu (seri FIF
   assert.strictEqual((await t.call('POST', `/api/wo/${low.id}/priority`, null, { priority: 'low' })).status, 403);
   t.close();
 });
+
+// ---- revisi di branch yang sama ----
+test('revisi: reject -> revise -> worker dapat branch lama + catatan -> complete -> approve', async () => {
+  const t = await boot();
+  const id = await finished(t, { branch: 'wo/x-0', head_sha: SHA, base_sha: 'c'.repeat(40), patch: '+a', cost_usd: 0.2 });
+  await t.call('POST', `/api/wo/${id}/reject`, null, {});
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, {})).status, 400, 'note wajib');
+  const rv = await (await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'tombol kurang besar' })).json();
+  assert.strictEqual(rv.wo.status, 'PENDING');
+  assert.strictEqual(rv.wo.cleanup, null, 'cleanup PENDING dibatalkan: branch dipakai lagi');
+  assert.deepStrictEqual(rv.wo.revision, { n: 1, branch: 'wo/x-0', head_sha: SHA, base_sha: 'c'.repeat(40) });
+  assert.strictEqual(rv.wo.revisions[0].note, 'tombol kurang besar');
+  assert.strictEqual(rv.wo.revisions[0].from_status, 'REJECTED');
+
+  const next = await (await t.call('GET', '/api/wo/next?cleanup=1', 'wrk')).json();
+  assert.strictEqual(next.kind, 'run');
+  assert.strictEqual(next.wo.revision.branch, 'wo/x-0');
+  const SHA2 = 'd'.repeat(40);
+  const c = await (await t.call('POST', `/api/wo/${id}/complete`, 'wrk', { status: 'COMPLETED', result: { branch: 'wo/x-0', head_sha: SHA2, base_sha: 'c'.repeat(40), cost_usd: 0.3 } })).json();
+  assert.strictEqual(c.wo.status, 'COMPLETED');
+  assert.ok(Math.abs(c.wo.cost_usd - 0.5) < 1e-9, 'biaya revisi ditambahkan');
+  assert.strictEqual((await (await t.call('POST', `/api/wo/${id}/approve`, null, {})).json()).wo.status, 'APPROVED');
+  const m = await (await t.call('GET', '/api/wo/next', 'wrk')).json();
+  assert.strictEqual(m.kind, 'merge');
+  assert.strictEqual(m.wo.result.head_sha, SHA2, 'merge memakai commit hasil revisi');
+  t.close();
+});
+
+test('revisi: revisi gagal tetap bisa direvisi lagi dari branch revisi; ditolak jika branch sudah dihapus / status salah', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'a' })).status, 200, 'langsung dari COMPLETED');
+  await t.call('GET', '/api/wo/next', 'wrk');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'b' })).status, 409, 'IN_PROGRESS');
+  await t.call('POST', `/api/wo/${id}/complete`, 'wrk', { status: 'FAILED', result: { logs: 'x' } });
+  const rv = await (await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'c' })).json();
+  assert.strictEqual(rv.wo.revision.head_sha, SHA);
+  assert.strictEqual(rv.wo.revisions.length, 2);
+
+  const nob = await finished(t, { logs: 'tanpa branch' }, 'FAILED');
+  assert.strictEqual((await t.call('POST', `/api/wo/${nob}/revise`, null, { note: 'x' })).status, 409, 'tanpa branch');
+  t.state.admin = false;
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x' })).status, 403);
+  t.close();
+});
+
+test('revisi: branch yang sudah dihapus worker tidak bisa direvisi', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  await t.call('POST', `/api/wo/${id}/reject`, null, {});
+  assert.strictEqual((await (await t.call('GET', '/api/wo/next?cleanup=1', 'wrk')).json()).kind, 'cleanup');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x' })).status, 409, 'cleanup RUNNING');
+  await t.call('POST', `/api/wo/${id}/cleanup-result`, 'wrk', { status: 'DONE' });
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x' })).status, 409, 'cleanup DONE');
+  t.close();
+});

@@ -17,6 +17,8 @@ const MERGE_RESULTS = ['MERGED', 'MERGE_FAILED'];
 const CLEANUP_RESULTS = ['DONE', 'SKIPPED', 'FAILED']; // laporan worker setelah mencoba menghapus branch WO yang di-reject
 const BRANCH_RE = /^wo\/[\w.-]+$/;
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED']; // boleh di-approve / reject
+const REVISABLE = [...REVIEWABLE, 'REJECTED', 'FAILED', 'OVER_BUDGET']; // boleh dikirim balik ke worker untuk revisi di branch yang sama
+const MAX_REVISIONS = 20;
 const DONE = ['COMPLETED', 'FAILED', 'OVER_BUDGET', 'NEEDS_REVIEW', 'REJECTED', 'MERGED', 'MERGE_FAILED']; // boleh dipangkas
 const DELETABLE = ['NEEDS_REVIEW', 'MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // selesai dan tidak menunggu keputusan; boleh dihapus admin
 const MAX_LINK_REPOS = 50;
@@ -95,6 +97,7 @@ function create(opts = {}) {
       created_by: w.created_by || null, approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
       review_note: w.review_note || null, merge: w.merge || null, autopull: w.autopull || null, pull_scope: w.pull_scope || null,
       cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
+      revision: w.revision || null, revisions: w.revisions || [],
     };
   }
 
@@ -281,6 +284,7 @@ function create(opts = {}) {
     const result = body.result && typeof body.result === 'object' ? body.result : {};
     if (typeof result.patch === 'string' && result.patch.length > MAX_PATCH) { result.patch = result.patch.slice(0, MAX_PATCH); result.patch_truncated = true; }
     if (!/^[0-9a-f]{7,40}$/.test(result.head_sha || '')) delete result.head_sha;   // dipakai untuk memastikan yang di-merge = yang direview
+    if (!/^[0-9a-f]{7,40}$/.test(result.base_sha || '')) delete result.base_sha; // awal branch WO: dipakai revisi untuk patch penuh
     if (!/^wo\/[\w.-]+$/.test(result.branch || '')) delete result.branch;
     // Flag dari agent: dipakai untuk memprioritaskan audit (complex dulu). Nilai selain simple|complex dibuang.
     if (!COMPLEXITY.includes(result.complexity)) delete result.complexity;
@@ -296,7 +300,7 @@ function create(opts = {}) {
     }
     result.status = body.status;
     w.status = body.status; w.result = result; w.screenshot = shot; w.lease_until = null; w.completed_at = now();
-    w.cost_usd = Number.isFinite(result.cost_usd) ? result.cost_usd : 0;
+    w.cost_usd = (w.cost_usd || 0) + (Number.isFinite(result.cost_usd) ? result.cost_usd : 0); // revisi menambah biaya, bukan menimpa
     prune(); save();
     return send(ctx, 200, { wo: view(w) }), true;
   }
@@ -409,12 +413,13 @@ function create(opts = {}) {
       audit(session.user, 'wo.priority', w.id, `${old} -> ${w.priority}`);
       return send(ctx, 200, { wo: view(w) }), true;
     }
-    const act = /^\/api\/wo\/([\w.-]+)\/(approve|reject)$/.exec(p);
+    const act = /^\/api\/wo\/([\w.-]+)\/(approve|reject|revise)$/.exec(p);
     if (act && req.method === 'POST') {
       const w = wos.find((x) => x.id === act[1]);
       if (!w) return send(ctx, 404, { error: 'WO tidak ditemukan' }), true;
       let b = {};
-      try { const raw = await ctx.readBody(req, 4096); b = raw ? JSON.parse(raw) : {}; } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      try { const raw = await ctx.readBody(req, 8192); b = raw ? JSON.parse(raw) : {}; } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      if (act[2] === 'revise') return revise(ctx, w, b), true;
       if (!REVIEWABLE.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
       const r0 = w.result || {};
       if (act[2] === 'approve') {
@@ -440,6 +445,30 @@ function create(opts = {}) {
       return w ? send(ctx, 200, { wo: view(w) }) : send(ctx, 404, { error: 'WO tidak ditemukan' }), true;
     }
     return false;
+  }
+
+  // Kirim WO kembali ke antrean: worker melanjutkan branch yang sama (commit baru di atas head_sha yang direview)
+  // dengan catatan reviewer di prompt, lalu hasilnya direview ulang (approve -> merge seperti biasa).
+  function revise(ctx, w, b) {
+    const session = ctx.session;
+    const note = typeof b.note === 'string' ? b.note.trim() : '';
+    if (!note || note.length > 2000) return send(ctx, 400, { error: 'note (alasan revisi) wajib, maks 2000 karakter' });
+    if (!REVISABLE.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status });
+    const r = w.result || {};
+    const src = BRANCH_RE.test(r.branch || '') && r.head_sha ? r : w.revision; // revisi yang gagal tidak membawa head_sha: pakai branch revisi sebelumnya
+    if (!src) return send(ctx, 409, { error: 'WO ini tidak punya branch/commit untuk direvisi, buat WO baru' });
+    if (w.cleanup && ['RUNNING', 'DONE'].includes(w.cleanup.state)) return send(ctx, 409, { error: 'branch WO sudah/sedang dihapus worker, buat WO baru' });
+    if ((w.revisions || []).length >= MAX_REVISIONS) return send(ctx, 409, { error: `batas ${MAX_REVISIONS} revisi tercapai, buat WO baru` });
+    const spent = spentToday();
+    if (spent >= dailyBudget) return send(ctx, 429, { error: `budget harian habis ($${spent.toFixed(2)}/$${dailyBudget})` });
+    w.revisions = [...(w.revisions || []), { note, by: session.user, at: new Date(now()).toISOString(), from_status: w.status, head_sha: src.head_sha }];
+    w.revision = { n: w.revisions.length, branch: src.branch, head_sha: src.head_sha, base_sha: src.base_sha || null };
+    w.status = 'PENDING'; w.attempts = 0; w.lease_until = null;
+    w.cleanup = null; w.merge = null; w.merge_attempts = 0; w.autopull = null; w.approved_by = null; w.approved_at = null;
+    w.review_note = note.slice(0, 500);
+    save();
+    audit(session.user, 'wo.revise', w.id, `#${w.revision.n} ${src.branch}`);
+    return send(ctx, 200, { wo: view(w) });
   }
 
   prune();

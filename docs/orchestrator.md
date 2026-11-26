@@ -11,7 +11,7 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 ## Endpoint
 | Siapa | Endpoint | Auth |
 |---|---|---|
-| Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject`, `POST /api/wo/:id/priority` | session login admin/superadmin |
+| Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject`, `POST /api/wo/:id/revise`, `POST /api/wo/:id/priority` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete`, `POST /api/wo/:id/merge-result` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
 `POST /api/wo` body: `{ project_key, context, priority?, goals?[], files_hint?[], limits?{max_budget_usd<=3, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
@@ -43,6 +43,7 @@ Setelah `MERGED`, VPS otomatis `git pull` folder yang ter-link ke project (`/api
 - Setiap approve/reject/merge masuk Activity Log (`wo.approve`, `wo.reject`, `wo.merge`).
 - **Reject membersihkan branch.** WO `REJECTED` yang punya `result.branch` mendapat `cleanup: {state}` (`PENDING` -> `RUNNING` -> `DONE|SKIPPED|FAILED`). Worker yang memanggil `GET /api/wo/next?cleanup=1` menerima `kind: "cleanup"` (prioritas paling rendah) lalu menjalankan `git branch -D` dan melapor ke `POST /api/wo/:id/cleanup-result {status, detail}`. Worker tanpa `cleanup=1` tidak pernah menerimanya, jadi worker lama aman. Worker hanya menghapus `wo/*` yang masih di `head_sha` yang direview (ada commit tambahan = `SKIPPED`). WO yang menunggu cleanup tidak bisa dihapus lewat `POST /api/wo/delete`.
 - WO lama tanpa `head_sha` tidak bisa di-approve (merge manual di laptop).
+- **Revisi di branch yang sama.** `POST /api/wo/:id/revise {note}` (note wajib, maks 2000) untuk status `COMPLETED`, `NEEDS_REVIEW`, `MERGE_FAILED`, `REJECTED`, `FAILED`, `OVER_BUDGET` yang punya branch + `head_sha` (atau revisi sebelumnya). WO kembali `PENDING` dengan `revision: {n, branch, head_sha, base_sha}` dan catatan masuk `revisions[]` (maks 20). Cleanup branch yang masih `PENDING` dibatalkan; jika cleanup `RUNNING`/`DONE` = 409 (branch sudah dihapus, buat WO baru). Worker melihat `wo.revision`: `git switch` ke branch itu (hanya jika masih di `head_sha` yang direview), menjalankan agent dengan semua catatan revisi di prompt, commit baru di atasnya, lalu `complete` seperti biasa. Patch yang dikirim tetap seluruh WO (`base_sha..HEAD`). `cost_usd` dijumlahkan. Hasilnya direview ulang: Approve -> merge, atau revisi lagi. Audit: `wo.revise`. Worker lama tidak mengenal `revision` (akan gagal karena branch sudah ada): update worker dulu.
 - Update worker dan server bersamaan. Worker lama yang tidak mengenal `kind: "merge"` akan salah menjalankan agent untuk job merge.
 
 ## Sync DB untuk worker
