@@ -142,7 +142,7 @@ function render() {
   const groups = new Map();
   rows.forEach(w => { if (!groups.has(key(w))) groups.set(key(w), []); groups.get(key(w)).push(w); });
   $('woList').innerHTML = [...groups].sort((a, b) => a[0].localeCompare(b[0])).map(([k, list]) =>
-    `<tr class="wo-grp"><td colspan="8"><strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${list.length}</span></td></tr>` + list.map(row).join('')).join('');
+    `<tr class="wo-grp"><td colspan="8"><strong>${escHtml(k)}</strong> <span style="color:var(--mut)">· ${list.length}</span>${g === 'project' ? ` <button class="btn-sm" data-plink="${escHtml(k)}" style="margin-left:8px">Folder VPS</button>` : ''}</td></tr>` + list.map(row).join('')).join('');
 }
 
 function syncSel() {
@@ -191,6 +191,8 @@ async function rowAct(btn) {
 $('woList').addEventListener('click', e => {
   const ab = e.target.closest('.wo-act');
   if (ab) { rowAct(ab); return; }
+  const pl = e.target.closest('[data-plink]');
+  if (pl) { projLink(pl.dataset.plink); return; }
   const chk = e.target.closest('.wo-chk');
   if (chk) { chk.checked ? selected.add(chk.dataset.id) : selected.delete(chk.dataset.id); syncSel(); return; }
   const tr = e.target.closest('tr[data-id]');
@@ -199,14 +201,15 @@ $('woList').addEventListener('click', e => {
 $('woFilter').addEventListener('change', render);
 $('woProjectFilter').addEventListener('change', () => { $('woProjLink').style.display = $('woProjectFilter').value ? '' : 'none'; render(); });
 // Atur folder per project tanpa harus menunggu ada WO MERGED.
-$('woProjLink').addEventListener('click', () => {
-  const w = { project_key: $('woProjectFilter').value };
+function projLink(key) {
+  const w = { project_key: key };
   if (!w.project_key) return;
   $('woDetailTitle').textContent = 'Folder VPS · ' + w.project_key;
   $('woDetailBody').innerHTML = '<div id="woDeploy"><div id="woDeployOut"></div></div>';
   $('woDetailModal').classList.add('open');
   linkForm(w);
-});
+}
+$('woProjLink').addEventListener('click', () => projLink($('woProjectFilter').value));
 $('woComplexFilter').addEventListener('change', render);
 $('woRefresh').addEventListener('click', load);
 try { $('woGroup').value = localStorage.getItem('woGroup') || ''; } catch { /* storage diblokir */ }
