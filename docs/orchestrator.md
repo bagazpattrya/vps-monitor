@@ -11,10 +11,10 @@ Data: `data/work-orders.json` (500 WO terakhir), screenshot di `data/wo-shots/` 
 ## Endpoint
 | Siapa | Endpoint | Auth |
 |---|---|---|
-| Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject` | session login admin/superadmin |
+| Admin | `POST /api/wo`, `GET /api/wo`, `GET/POST /api/wo/links`, `POST /api/wo/delete`, `GET /api/wo/:id`, `GET /api/wo/shot/:file`, `POST /api/wo/:id/approve`, `POST /api/wo/:id/reject`, `POST /api/wo/:id/priority` | session login admin/superadmin |
 | Worker | `GET /api/wo/next?wait=25`, `POST /api/wo/:id/heartbeat`, `POST /api/wo/:id/complete`, `POST /api/wo/:id/merge-result` | `Authorization: Bearer ORCH_WORKER_TOKEN` |
 
-`POST /api/wo` body: `{ project_key, context, goals?[], files_hint?[], limits?{max_budget_usd<=3, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
+`POST /api/wo` body: `{ project_key, context, priority?, goals?[], files_hint?[], limits?{max_budget_usd<=3, timeout_sec<=1800, model}, verification?{target_url, viewport} }`.
 `complete` body: `{ status: COMPLETED|FAILED|OVER_BUDGET|NEEDS_REVIEW, result: {...}, screenshot_b64? }`.
 `result.complexity` (`simple`|`complex`, opsional) + `result.complexity_reason` (maks 300 char): flag dari agent worker. UI `/orders` punya filter kompleksitas supaya audit mulai dari yang complex. Nilai lain dibuang.
 
@@ -25,6 +25,7 @@ curl -b jar -H 'Content-Type: application/json' -d '{"project_key":"lapila","con
 ```
 
 ## Perilaku
+- **Prioritas**: `priority` = `highest` | `high` | `medium` | `low` | `lowest`, default `highest` (WO lama tanpa field dianggap `medium`). Worker mengambil `PENDING` (dan job merge `APPROVED`) dengan prioritas tertinggi dulu; prioritas sama = FIFO. Ubah lewat `POST /api/wo/:id/priority {priority}` (atau dropdown di detail WO) selama status masih `PENDING`/`APPROVED`; selain itu 409. Audit: `wo.priority`.
 - Lease 120 detik; worker kirim heartbeat tiap 30 detik. Lease habis: WO kembali `PENDING`, setelah 2 kali `FAILED`.
 - WO baru ditolak (429) jika total `cost_usd` hari ini >= `ORCH_DAILY_BUDGET_USD`.
 - Budget per WO di-clamp maksimum $1.

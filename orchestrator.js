@@ -22,6 +22,8 @@ const DELETABLE = ['NEEDS_REVIEW', 'MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET'
 const MAX_LINK_REPOS = 50;
 const MAX_PATCH = 200 * 1024;
 const MODELS = ['haiku', 'sonnet', 'opus'];
+const PRIORITIES = ['highest', 'high', 'medium', 'low', 'lowest']; // urutan = urutan ambil worker
+const QUEUED = ['PENDING', 'APPROVED']; // belum diambil worker: prioritas masih boleh diubah
 const MAX_ATTEMPTS = 2;
 const MAX_KEEP = 500;
 const KEEP_SHOT_MS = 30 * 86400000;
@@ -45,6 +47,7 @@ function validate(b) {
   if (b.files_hint !== undefined && !strList(b.files_hint, 20, 200)) return 'files_hint tidak valid';
   const l = b.limits || {};
   if (l.model !== undefined && !MODELS.includes(l.model)) return 'model harus salah satu: ' + MODELS.join(',');
+  if (b.priority !== undefined && !PRIORITIES.includes(b.priority)) return 'priority harus salah satu: ' + PRIORITIES.join(',');
   const v = b.verification;
   if (v !== undefined && (typeof v !== 'object' || v === null || (v.target_url !== undefined && !str(v.target_url, 300)))) return 'verification tidak valid';
   return null;
@@ -86,7 +89,7 @@ function create(opts = {}) {
 
   function view(w) {
     return {
-      id: w.id, status: w.status, project_key: w.project_key, ...w.payload, attempts: w.attempts, result: w.result,
+      id: w.id, status: w.status, priority: w.priority || 'medium', project_key: w.project_key, ...w.payload, attempts: w.attempts, result: w.result,
       screenshot_url: w.screenshot ? `/api/wo/shot/${w.screenshot}` : null, cost_usd: w.cost_usd,
       created_at: new Date(w.created_at).toISOString(), completed_at: w.completed_at ? new Date(w.completed_at).toISOString() : null,
       created_by: w.created_by || null, approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
@@ -119,9 +122,9 @@ function create(opts = {}) {
         else w.cleanup.state = 'PENDING';
       }
     }
-    let w = wos.find((x) => x.status === 'APPROVED'); // merge dulu: cepat, dan menunggu keputusan manusia
+    let w = top('APPROVED'); // merge dulu: cepat, dan menunggu keputusan manusia
     let kind = 'merge';
-    if (!w) { w = wos.find((x) => x.status === 'PENDING'); kind = 'run'; } // wos berurutan waktu buat = FIFO
+    if (!w) { w = top('PENDING'); kind = 'run'; }
     if (w) { w.status = kind === 'merge' ? 'MERGING' : 'IN_PROGRESS'; w.lease_until = t + leaseMs; changed = true; }
     else if (wantCleanup) { // paling akhir: pekerjaan nyata lebih penting dari beres-beres
       const c = wos.find((x) => x.cleanup && x.cleanup.state === 'PENDING');
@@ -129,6 +132,15 @@ function create(opts = {}) {
     }
     if (changed) save();
     return w ? { w, kind } : null;
+  }
+
+  // WO berstatus `status` dengan prioritas tertinggi; seri = yang dibuat paling dulu (wos berurutan waktu buat).
+  // WO lama tanpa priority dianggap medium.
+  const rank = (w) => PRIORITIES.indexOf(w.priority || 'medium');
+  function top(status) {
+    let best = null;
+    for (const x of wos) if (x.status === status && (!best || rank(x) < rank(best))) best = x;
+    return best;
   }
 
   function rmFiles(w) {
@@ -317,7 +329,7 @@ function create(opts = {}) {
       const w = {
         // id dipakai di URL, nama folder & branch: user disanitasi ke [\w-]
         id: `WO-${String(session.user || '').replace(/[^\w-]/g, '').slice(0, 20) || 'user'}-${crypto.randomBytes(3).toString('hex')}`,
-        status: 'PENDING', project_key: b.project_key, attempts: 0, lease_until: null, result: null, screenshot: null, cost_usd: 0,
+        status: 'PENDING', priority: b.priority || 'highest', project_key: b.project_key, attempts: 0, lease_until: null, result: null, screenshot: null, cost_usd: 0,
         created_at: t, completed_at: null, created_by: session.user,
         payload: {
           context: b.context, goals: b.goals || [], files_hint: b.files_hint || [], verification: b.verification || {},
@@ -384,6 +396,19 @@ function create(opts = {}) {
       try { ctx.send(ctx.res, 200, fs.readFileSync(path.join(shotDir, shot[1])), 'image/png'); } catch { send(ctx, 404, { error: 'Not found' }); }
       return true;
     }
+    const pr = /^\/api\/wo\/([\w.-]+)\/priority$/.exec(p);
+    if (pr && req.method === 'POST') {
+      const w = wos.find((x) => x.id === pr[1]);
+      if (!w) return send(ctx, 404, { error: 'WO tidak ditemukan' }), true;
+      let b;
+      try { b = JSON.parse(await ctx.readBody(req, 4096)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      if (!b || !PRIORITIES.includes(b.priority)) return send(ctx, 400, { error: 'priority harus salah satu: ' + PRIORITIES.join(',') }), true;
+      if (!QUEUED.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status + ': prioritas hanya bisa diubah selama antre' }), true;
+      const old = w.priority || 'medium';
+      w.priority = b.priority; save();
+      audit(session.user, 'wo.priority', w.id, `${old} -> ${w.priority}`);
+      return send(ctx, 200, { wo: view(w) }), true;
+    }
     const act = /^\/api\/wo\/([\w.-]+)\/(approve|reject)$/.exec(p);
     if (act && req.method === 'POST') {
       const w = wos.find((x) => x.id === act[1]);
@@ -421,4 +446,4 @@ function create(opts = {}) {
   return { handleWorker, handleAdmin, isWorkerRoute, validate };
 }
 
-module.exports = { create, validate };
+module.exports = { create, validate, PRIORITIES };

@@ -6,6 +6,8 @@ let projectSig = '';
 const ACTIVE = ['PENDING', 'IN_PROGRESS', 'APPROVED', 'MERGING'];
 const REVIEWABLE = ['COMPLETED', 'NEEDS_REVIEW', 'MERGE_FAILED'];
 const DELETABLE = ['NEEDS_REVIEW', 'MERGED', 'REJECTED', 'FAILED', 'OVER_BUDGET']; // sama dengan server
+const PRIORITIES = ['highest', 'high', 'medium', 'low', 'lowest']; // sama dengan server
+const QUEUED = ['PENDING', 'APPROVED']; // prioritas boleh diubah
 let links = {};
 const selected = new Set();
 let shown = []; // WO yang tampil sekarang (setelah filter)
@@ -123,7 +125,7 @@ function render() {
   const row = w => `<tr data-id="${escHtml(w.id)}">
     <td>${DELETABLE.includes(w.status) ? `<input type="checkbox" class="wo-chk" data-id="${escHtml(w.id)}"${selected.has(w.id) ? ' checked' : ''}>` : ''}</td>
     <td><code>${escHtml(w.id)}</code></td>
-    <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>${cx(w) !== 'none' ? ` <span class="wo-cx ${cx(w)}">${cx(w)}</span>` : ''}</td>
+    <td><span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>${ACTIVE.includes(w.status) ? ` <span class="wo-pr ${escHtml(w.priority)}" title="Prioritas antrean">${escHtml(w.priority)}</span>` : ''}${cx(w) !== 'none' ? ` <span class="wo-cx ${cx(w)}">${cx(w)}</span>` : ''}</td>
     <td>${escHtml(w.project_key)}</td>
     <td class="wo-ctx" title="${escHtml(w.context)}">${escHtml(w.context)}</td>
     <td>${fmtUsd(w.cost_usd)}</td>
@@ -230,6 +232,9 @@ function openDetail(id) {
   let h = kv([
     ['Status', `<span class="wo-st ${escHtml(w.status)}">${escHtml(w.status)}</span>`, true],
     ['Project', w.project_key],
+    ['Prioritas', QUEUED.includes(w.status)
+      ? `<select id="woPrioEdit" class="input">${PRIORITIES.map(p => `<option value="${p}"${p === w.priority ? ' selected' : ''}>${p}</option>`).join('')}</select> <span id="woPrioErr" style="color:var(--bad)"></span>`
+      : escHtml(w.priority), true],
     ['Kompleksitas', r.complexity ? `${r.complexity}${r.complexity_reason ? ' — ' + r.complexity_reason : ''}` : ''],
     ['Dibuat', fmtTime(w.created_at) + (w.created_by ? ' · ' + w.created_by : '')],
     ['Selesai', w.completed_at ? fmtTime(w.completed_at) : ''],
@@ -271,6 +276,12 @@ function openDetail(id) {
   if (w.status === 'MERGED') deployBox(w);
   $('woDetailModal').classList.add('open');
   bindActions(w);
+  const pe = $('woPrioEdit');
+  if (pe) pe.addEventListener('change', async () => {
+    pe.disabled = true; $('woPrioErr').textContent = '';
+    try { await api('POST', `/api/wo/${encodeURIComponent(w.id)}/priority`, { priority: pe.value }); await load(); openDetail(w.id); }
+    catch (e) { $('woPrioErr').textContent = e.message; pe.disabled = false; }
+  });
 }
 // gambar lampiran/screenshot: popup, bukan pindah halaman
 $('woDetailBody').addEventListener('click', e => {
@@ -393,6 +404,7 @@ $('woNewSubmit').addEventListener('click', async () => {
   const body = {
     project_key: $('woProject').value,
     context: $('woContext').value.trim(),
+    priority: $('woPriority').value,
     limits: { model: $('woModel').value, max_budget_usd: Number($('woBudgetUsd').value), timeout_sec: Number($('woTimeout').value) },
   };
   const goals = lines($('woGoals').value);

@@ -231,7 +231,7 @@ test('WO ke project yang tidak terdaftar ditolak; daftar tampil di GET /api/wo',
   assert.strictEqual(bad.status, 400);
   assert.match((await bad.json()).error, /lapila, demo/);
   const list = await (await t.call('GET', '/api/wo')).json();
-  assert.deepStrictEqual(list.projects, [{ key: 'lapila', target: 'development' }, { key: 'demo', target: null }]);
+  assert.deepStrictEqual(list.projects, [{ key: 'lapila', target: 'development', db_sources: [], db_default: null }, { key: 'demo', target: null, db_sources: [], db_default: null }]);
   assert.ok(list.projects_updated_at);
   t.close();
 });
@@ -423,5 +423,32 @@ test('MERGED memicu onMerged dengan folder ter-link, hasil tersimpan di autopull
   const w = d.work_orders.find((x) => x.id === id);
   assert.strictEqual(w.autopull.state, 'DONE');
   assert.strictEqual(w.autopull.results[0].ok, true);
+  t.close();
+});
+
+test('priority: default highest, worker ambil prioritas tertinggi dulu (seri FIFO), bisa diubah selama antre', async () => {
+  const t = await boot();
+  assert.ok(orch.validate({ ...good, priority: 'urgent' }));
+  assert.strictEqual((await t.call('POST', '/api/wo', null, { ...good, priority: 'urgent' })).status, 400);
+  const mk = async (priority) => (await (await t.call('POST', '/api/wo', null, priority ? { ...good, priority } : good)).json()).wo;
+  const low = await mk('low');
+  const med1 = await mk('medium');
+  const med2 = await mk('medium');
+  const def = await mk();
+  assert.strictEqual(def.priority, 'highest');
+
+  // naikkan low -> high: sekarang di depan medium, di belakang highest
+  assert.strictEqual((await t.call('POST', `/api/wo/${low.id}/priority`, null, { priority: 'nope' })).status, 400);
+  const up = await (await t.call('POST', `/api/wo/${low.id}/priority`, null, { priority: 'high' })).json();
+  assert.strictEqual(up.wo.priority, 'high');
+
+  const order = [];
+  for (let i = 0; i < 4; i++) order.push((await (await t.call('GET', '/api/wo/next', 'wrk')).json()).wo.id);
+  assert.deepStrictEqual(order, [def.id, low.id, med1.id, med2.id]);
+
+  // sudah diambil worker: tidak bisa diubah; viewer: 403
+  assert.strictEqual((await t.call('POST', `/api/wo/${def.id}/priority`, null, { priority: 'low' })).status, 409);
+  t.state.admin = false;
+  assert.strictEqual((await t.call('POST', `/api/wo/${low.id}/priority`, null, { priority: 'low' })).status, 403);
   t.close();
 });
