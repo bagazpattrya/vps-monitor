@@ -197,7 +197,16 @@ $('woList').addEventListener('click', e => {
   if (tr) openDetail(tr.dataset.id);
 });
 $('woFilter').addEventListener('change', render);
-$('woProjectFilter').addEventListener('change', render);
+$('woProjectFilter').addEventListener('change', () => { $('woProjLink').style.display = $('woProjectFilter').value ? '' : 'none'; render(); });
+// Atur folder per project tanpa harus menunggu ada WO MERGED.
+$('woProjLink').addEventListener('click', () => {
+  const w = { project_key: $('woProjectFilter').value };
+  if (!w.project_key) return;
+  $('woDetailTitle').textContent = 'Folder VPS · ' + w.project_key;
+  $('woDetailBody').innerHTML = '<div id="woDeploy"><div id="woDeployOut"></div></div>';
+  $('woDetailModal').classList.add('open');
+  linkForm(w);
+});
 $('woComplexFilter').addEventListener('change', render);
 $('woRefresh').addEventListener('click', load);
 try { $('woGroup').value = localStorage.getItem('woGroup') || ''; } catch { /* storage diblokir */ }
@@ -561,6 +570,7 @@ function fillProjects() {
   const pf = $('woProjectFilter'), keepF = pf.value;
   pf.innerHTML = '<option value="">Semua project</option>' + keys.map(k => `<option value="${escHtml(k)}">${escHtml(k)} (${count[k] || 0})</option>`).join('');
   pf.value = keys.includes(keepF) ? keepF : '';
+  $('woProjLink').style.display = pf.value ? '' : 'none';
 
   const sel = $('woProject'), keep = sel.value;
   if (!projects.length) {
