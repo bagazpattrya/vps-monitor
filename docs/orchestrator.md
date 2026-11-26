@@ -58,3 +58,34 @@ Worker mendaftarkan `db_sources` + `db_default` per project (dari `db_sync.sourc
 ## Link project, Deploy, Hapus
 - `POST /api/wo/links {project_key, repos:[{repo, url}]}` (maks 50) menyimpan folder VPS (relPath, sama seperti `/api/git/pull`) + URL website per folder di `data/wo-links.json`; satu repo GitHub yang di-clone ke banyak folder cukup didaftarkan semuanya. `repos` kosong menghapus link. Di detail WO `MERGED`, admin mencentang folder mana yang di-deploy (default kosong), lalu **Deploy terpilih** menjalankan `/api/git/pull` berurutan per folder; satu gagal tidak menghentikan yang lain, folder dengan perubahan lokal diberi peringatan dan konfirmasi.
 - `POST /api/wo/delete {ids}` (maks 200) hanya menghapus status `MERGED`, `REJECTED`, `FAILED`, `OVER_BUDGET`; sisanya dilaporkan di `skipped`. Screenshot dan lampiran ikut dihapus. Audit: `wo.delete`, `wo.link`.
+
+## API eksternal (sistem bug report)
+Sistem lain bisa membuat WO dan bertanya ke AI chat tanpa login, pakai `Authorization: Bearer EXT_API_TOKEN` (`.env`, kosong = mati). Token ini hanya berlaku untuk 4 route di bawah; route lain tetap 401. Request tercatat atas nama `EXT_API_USER` (default `bugreport`).
+
+| Endpoint | Fungsi |
+|---|---|
+| `GET /api/wo/projects` | Daftar project: `{projects:[{key, db_sources, db_default, repos}]}`. `key` = `project_key` untuk WO dan chat; `repos` = folder VPS ter-link. |
+| `POST /api/wo` | Buat WO dari laporan bug. Body sama dengan WO biasa + `external_ref` (opsional, maks 100 char, id tiket bug). |
+| `GET /api/wo/WO-...` | Cek status + hasil WO (`status`, `result`, `merge`, `external_ref`). |
+| `POST /api/chat` | AI chat tanya-jawab. Selalu read-only: shell dan tinker dimatikan untuk token ini. |
+
+Pemetaan laporan bug ke WO:
+- `project_key`: key project dari worker (salah = 400 dengan daftar pilihan).
+- `context` (wajib, maks 4000): judul + deskripsi + langkah reproduksi + expected/actual.
+- `images`: screenshot bug, maks 4 x 5 MB (base64 / data URL).
+- `priority`: severity bug -> `highest|high|medium|low|lowest`.
+- `goals`: kriteria selesai, mis. `["form submit tidak error 500"]`.
+- `verification.target_url`: URL halaman bug.
+- `external_ref`: id bug untuk dilacak balik.
+
+```
+curl -H "Authorization: Bearer $EXT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"project_key":"lapila","context":"Bug: ...","priority":"high","external_ref":"BUG-123"}' https://server.microspace.id/api/wo
+curl -H "Authorization: Bearer $EXT_API_TOKEN" https://server.microspace.id/api/wo/WO-bugreport-abc123
+```
+
+AI chat: body `{ message, project_key?, chatId?, model?, images? }`. `project_key` membatasi Claude ke folder yang di-link ke project itu (`/api/wo/links`); tanpa folder ter-link = 400. Tanpa `project_key` = semua project yang terlihat. Balasan berupa stream SSE (`data: {...}`): `{chatId}` lalu `{text}` / `{tool}` berkali-kali, diakhiri `{done:true}` (atau `{error}`). Kirim `chatId` yang sama untuk melanjutkan percakapan. Claude hanya bisa membaca project (tanpa yang cocok `EXT_API_HIDDEN`), tidak bisa mengubah file. Limit per jam sama dengan user chat lain.
+```
+curl -N -H "Authorization: Bearer $EXT_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"project_key":"lapila","message":"Kenapa endpoint /checkout bisa error 500?"}' https://server.microspace.id/api/chat
+```

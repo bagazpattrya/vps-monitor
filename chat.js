@@ -39,9 +39,12 @@ function chatModels() {
 // MCP approve tool (permission mode `default`, not `dontAsk`). tinker: the MCP tool that runs Laravel tinker
 // after the user approves it. mcpConfig is the --mcp-config JSON for chat-mcp.js (needed for either).
 function buildClaudeArgs({ sessionId, model, addDirs = [], mcpConfig = '', shell = false, tinker = false } = {}) {
+  // Read/Grep/Glob sengaja TIDAK di allowedTools: izin itu berlaku di path mana pun. Tanpanya Claude Code hanya membaca
+  // cwd + --add-dir (folder yang boleh dilihat user); path lain ditolak (dontAsk) atau minta approval (shell).
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', shell ? 'default' : 'dontAsk',
-    '--allowedTools', 'Read,Grep,Glob' + (tinker ? ',mcp__vpsmon__tinker' : ''), '--disallowedTools', shell ? DENY_SHELL : DENY,
-    '--setting-sources', 'user', '--append-system-prompt', (shell ? SHELL_PROMPT : SYSTEM_PROMPT) + (tinker ? TINKER_NOTE : '')];
+    ...(tinker ? ['--allowedTools', 'mcp__vpsmon__tinker'] : []), '--disallowedTools', shell ? DENY_SHELL : DENY,
+    '--setting-sources', 'user', '--append-system-prompt', (shell ? SHELL_PROMPT : SYSTEM_PROMPT) + (tinker ? TINKER_NOTE : '')
+      + (addDirs.length ? ' Folders you may read (always pass one of them as the path to Grep/Glob): ' + addDirs.join(', ') + '. Paths outside them are denied.' : '')];
   if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
   if (shell) args.push('--permission-prompt-tool', 'mcp__vpsmon__approve');
   if (model !== undefined) {
@@ -200,12 +203,12 @@ const bwrapPath = () => {
 
 // Admins (and superadmins), opt-in, and only when Claude runs as the unprivileged user inside bwrap.
 function shellAvailable(session) {
-  return process.env.CHAT_SHELL === '1' && !!(session && session.admin) && isRoot() && !!bwrapPath();
+  return process.env.CHAT_SHELL === '1' && !!(session && session.admin && !session.api) && isRoot() && !!bwrapPath(); // api: tidak ada manusia yang approve
 }
 
 // Admins (and superadmins) and opt-in. The monitor itself runs tinker as CHAT_TINKER_USER, which needs root.
 function tinkerAvailable(session) {
-  return process.env.CHAT_TINKER === '1' && !!(session && session.admin) && isRoot();
+  return process.env.CHAT_TINKER === '1' && !!(session && session.admin && !session.api) && isRoot();
 }
 
 // Non-superadmins must not see what hiddenKeywords hides: inside bwrap, empty tmpfs mounts cover the project

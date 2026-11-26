@@ -4126,6 +4126,21 @@ const orch = orchestrator.create({
   onMerged: autoPull,
 });
 
+// API eksternal (mis. sistem bug report): Bearer EXT_API_TOKEN. Hanya boleh buat WO, lihat satu WO, dan AI chat
+// tanya-jawab (read-only, tanpa shell/tinker). Route lain tetap butuh login. Lihat docs/orchestrator.md.
+const extRoute = (p, m) => (m === 'POST' && (p === '/api/wo' || p === '/api/chat')) || (m === 'GET' && (p === '/api/wo/projects' || /^\/api\/wo\/WO-[\w.-]+$/.test(p)));
+function extSession(req, p) {
+  const tok = process.env.EXT_API_TOKEN || '';
+  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+  if (!tok || !m || !extRoute(p, req.method)) return null;
+  const a = Buffer.from(m[1]), b = Buffer.from(tok);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return {
+    user: process.env.EXT_API_USER || 'bugreport', source: 'api', api: true, role: 'admin', admin: true, superadmin: false,
+    hiddenKeywords: (process.env.EXT_API_HIDDEN || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean),
+  };
+}
+
 const server = http.createServer(async (req, res) => {
 
 
@@ -4160,7 +4175,7 @@ const server = http.createServer(async (req, res) => {
   // Worker laptop: Bearer token sendiri, bukan cookie session.
   if (await orch.handleWorker({ req, res, url, readBody, send })) return;
 
-  const session = auth.getSession(req);
+  const session = auth.getSession(req) || extSession(req, p);
   if (!session) {
     if (p.startsWith('/api/')) return send(res, 401, JSON.stringify({ error: 'Unauthorized' }));
     res.writeHead(302, { Location: '/login' });
@@ -4199,8 +4214,16 @@ const server = http.createServer(async (req, res) => {
     // 4 gambar x 5 MB sebagai base64 + teks; route lain tetap pakai batas kecil.
     try { body = JSON.parse(await readBody(req, 28 * 1024 * 1024)); } catch { return send(res, 400, JSON.stringify({ error: 'Bad request' })); }
     let projects = [];
+    let chatSession = session;
     try { projects = fs.readdirSync(SCAN_ROOT).filter((n) => !isHidden(session, n)); } catch {}
-    return chat.handleChat({ req, res, session, body, projects, log: logActivity });
+    if (body && body.project_key !== undefined && body.project_key !== '') {
+      // Batasi chat ke folder yang di-link ke project WO ini (project_key WO != nama folder VPS).
+      const dirs = typeof body.project_key === 'string' ? orch.repoDirs(body.project_key).map((r) => String(r).split('/')[0]) : [];
+      projects = projects.filter((n) => dirs.includes(n));
+      if (!projects.length) return send(res, 400, JSON.stringify({ error: 'project_key tidak dikenal atau belum punya folder ter-link (POST /api/wo/links)' }));
+      if (session.superadmin) chatSession = { ...session, superadmin: false }; // superadmin biasanya dapat seluruh SCAN_DIR
+    }
+    return chat.handleChat({ req, res, session: chatSession, body, projects, log: logActivity });
   }
   if (p === '/api/me') {
     const { hiddenKeywords: _hk, ...me } = session; // keyword tidak perlu sampai ke browser

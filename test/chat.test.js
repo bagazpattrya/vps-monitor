@@ -14,7 +14,7 @@ const UUID = '123e4567-e89b-12d3-a456-426614174000';
 test('buildClaudeArgs includes allow list and deny list', () => {
   const a = buildClaudeArgs({});
   assert.ok(a.includes('-p'));
-  assert.strictEqual(a[a.indexOf('--allowedTools') + 1], 'Read,Grep,Glob');
+  assert.ok(!a.includes('--allowedTools')); // Read tanpa scope = bisa baca di luar --add-dir
   const deny = a[a.indexOf('--disallowedTools') + 1];
   for (const t of ['Bash', 'Edit', 'Write', 'WebFetch', 'Read(**/.env*)']) assert.ok(deny.includes(t), t);
   assert.strictEqual(a[a.indexOf('--setting-sources') + 1], 'user');
@@ -189,7 +189,7 @@ test('handleChat streams text, session id, done; env and argv are safe', async (
   assert.strictEqual(r.status, 200);
   const t = JSON.parse(r.events.find((e) => e.text).text);
   assert.strictEqual(t.msg, 'ok');
-  assert.ok(t.argv.includes('--allowedTools'));
+  assert.ok(!t.argv.includes('--allowedTools'));
   for (const k of t.env) assert.ok(['PATH', 'HOME', 'CLAUDE_CODE_OAUTH_TOKEN'].includes(k), k);
   assert.ok(r.events.some((e) => e.sessionId === 'S'));
   assert.ok(r.events.some((e) => e.done));
@@ -445,6 +445,7 @@ test('shellAvailable matches the same rule (used for the header badge)', async (
     assert.strictEqual(chat.shellAvailable({ admin: true, superadmin: false }), true); // admins too
     assert.strictEqual(chat.shellAvailable({ admin: false }), false); // viewers never
     assert.strictEqual(chat.shellAvailable(null), false);
+    assert.strictEqual(chat.shellAvailable({ admin: true, api: true }), false); // API eksternal: tidak ada yang approve
   });
   assert.strictEqual(chat.shellAvailable({ admin: true, superadmin: true }), false);
 });

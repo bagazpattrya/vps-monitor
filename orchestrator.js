@@ -49,6 +49,7 @@ function validate(b) {
   if (b.files_hint !== undefined && !strList(b.files_hint, 20, 200)) return 'files_hint tidak valid';
   const l = b.limits || {};
   if (l.model !== undefined && !MODELS.includes(l.model)) return 'model harus salah satu: ' + MODELS.join(',');
+  if (b.external_ref !== undefined && !str(b.external_ref, 100)) return 'external_ref opsional: string maks 100 karakter';
   if (b.priority !== undefined && !PRIORITIES.includes(b.priority)) return 'priority harus salah satu: ' + PRIORITIES.join(',');
   const v = b.verification;
   if (v !== undefined && (typeof v !== 'object' || v === null || (v.target_url !== undefined && !str(v.target_url, 300)))) return 'verification tidak valid';
@@ -341,6 +342,7 @@ function create(opts = {}) {
         },
       };
       if (dbSource) w.payload.db_source = dbSource;
+      if (b.external_ref) w.payload.external_ref = b.external_ref; // id tiket dari sistem luar (mis. bug report)
       if (imgs.length) w.payload.images = saveImgs(w.id, imgs);
       wos.push(w); prune(); save();
       audit(session.user, 'wo.create', w.id, b.project_key);
@@ -350,6 +352,7 @@ function create(opts = {}) {
       const limit = clamp(url.searchParams.get('limit'), 1, 200, 50);
       return send(ctx, 200, { cost_today_usd: spentToday(), daily_budget_usd: dailyBudget, links, projects: registry.list, projects_updated_at: registry.updated_at ? new Date(registry.updated_at).toISOString() : null, work_orders: wos.slice(-limit).reverse().map(view) }), true;
     }
+    if (p === '/api/wo/projects' && req.method === 'GET') return send(ctx, 200, { projects: registry.list.map((x) => ({ key: x.key, db_sources: x.db_sources || [], db_default: x.db_default || null, repos: ((links[x.key] || {}).repos || []).map((r) => r.repo) })) }), true;
     if (p === '/api/wo/links' && req.method === 'GET') return send(ctx, 200, { links }), true;
     if (p === '/api/wo/links' && req.method === 'POST') {
       let b;
@@ -485,7 +488,9 @@ function create(opts = {}) {
   }
 
   prune();
-  return { handleWorker, handleAdmin, isWorkerRoute, validate };
+  // Folder VPS (relPath) yang di-link ke project WO; dipakai AI chat untuk membatasi scope ke satu project.
+  const repoDirs = (key) => ((links[key] || {}).repos || []).map((r) => r.repo);
+  return { handleWorker, handleAdmin, isWorkerRoute, validate, repoDirs };
 }
 
 module.exports = { create, validate, PRIORITIES };

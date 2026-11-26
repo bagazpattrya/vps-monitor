@@ -37,7 +37,7 @@ async function boot(opts = {}) {
     await fetch(base + '/api/wo/projects', { method: 'POST', headers: { Authorization: 'Bearer wrk', 'Content-Type': 'application/json' }, body: JSON.stringify({ projects: [{ key: 'lapila', target: 'development' }, { key: 'demo', target: null }] }) });
   }
   const call = (m, p, tok, body) => fetch(base + p, { method: m, headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  return { call, state, dataDir, tick: (ms) => { clock += ms; }, close: () => srv.close(), reopen: () => orch.create({ dataDir, workerToken: 'wrk', now: () => clock }) };
+  return { o, call, state, dataDir, tick: (ms) => { clock += ms; }, close: () => srv.close(), reopen: () => orch.create({ dataDir, workerToken: 'wrk', now: () => clock }) };
 }
 const good = { project_key: 'lapila', context: 'ctx', goals: ['a'] };
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString('base64');
@@ -429,6 +429,8 @@ test('MERGED memicu onMerged dengan folder ter-link, hasil tersimpan di autopull
 test('priority: default highest, worker ambil prioritas tertinggi dulu (seri FIFO), bisa diubah selama antre', async () => {
   const t = await boot();
   assert.ok(orch.validate({ ...good, priority: 'urgent' }));
+  assert.strictEqual(orch.validate({ ...good, external_ref: "BUG-123" }), null);
+  assert.ok(orch.validate({ ...good, external_ref: "x".repeat(101) }));
   assert.strictEqual((await t.call('POST', '/api/wo', null, { ...good, priority: 'urgent' })).status, 400);
   const mk = async (priority) => (await (await t.call('POST', '/api/wo', null, priority ? { ...good, priority } : good)).json()).wo;
   const low = await mk('low');
@@ -522,5 +524,15 @@ test('revisi: bawa gambar, goals, files_hint, prioritas, limit; gambar bisa diun
   assert.strictEqual(rv.wo.priority, 'low');
   assert.deepStrictEqual([rv.wo.limits.model, rv.wo.limits.max_budget_usd], ['opus', 3]);
   assert.strictEqual((await t.call('GET', `/api/wo/${id}/img/${r.images[0]}`, 'wrk')).status, 200);
+  t.close();
+});
+
+test('GET /api/wo/projects + repoDirs: daftar project untuk API eksternal dan folder ter-link untuk chat', async () => {
+  const t = await boot();
+  assert.strictEqual((await t.call('POST', '/api/wo/links', null, { project_key: 'demo', repos: [{ repo: 'demo-dev', url: '' }] })).status, 200);
+  const r = await (await t.call('GET', '/api/wo/projects')).json();
+  assert.deepStrictEqual(r.projects.map((x) => [x.key, x.repos]), [['lapila', []], ['demo', ['demo-dev']]]);
+  assert.deepStrictEqual(t.o.repoDirs('demo'), ['demo-dev']);
+  assert.deepStrictEqual(t.o.repoDirs('nope'), []);
   t.close();
 });
