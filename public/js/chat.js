@@ -145,6 +145,9 @@ autoBox.addEventListener('change', () => {
   try { localStorage.setItem('chatAutoTinker', autoBox.checked ? '1' : '0'); } catch {}
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 });
+const autoShell = $('autoShell');
+try { autoShell.checked = localStorage.getItem('chatAutoShell') === '1'; } catch {}
+autoShell.addEventListener('change', () => { try { localStorage.setItem('chatAutoShell', autoShell.checked ? '1' : '0'); } catch {} });
 // Firefox/Safari need a user gesture to ask, so ask on the first click/keypress on the page.
 if ('Notification' in window && Notification.permission === 'default') {
   const ask = () => { Notification.requestPermission(); removeEventListener('click', ask); removeEventListener('keydown', ask); };
@@ -193,6 +196,7 @@ function showConfirm(parent, c, before) {
   parent.insertBefore(card, before || null);
   scrollDown(true);
   if (isTinker && autoBox.checked) answer(true, 'rollback');
+  else if (!isTinker && autoShell.checked) answer(true);
   else notifyConfirm(c);
 }
 
