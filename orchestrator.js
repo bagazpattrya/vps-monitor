@@ -306,7 +306,8 @@ function create(opts = {}) {
       if (spent >= dailyBudget) return send(ctx, 429, { error: `budget harian habis ($${spent.toFixed(2)}/$${dailyBudget})` }), true;
       const t = now();
       const w = {
-        id: `WO-${new Date(t).toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex')}`,
+        // id dipakai di URL, nama folder & branch: user disanitasi ke [\w-]
+        id: `WO-${String(session.user || '').replace(/[^\w-]/g, '').slice(0, 20) || 'user'}-${crypto.randomBytes(3).toString('hex')}`,
         status: 'PENDING', project_key: b.project_key, attempts: 0, lease_until: null, result: null, screenshot: null, cost_usd: 0,
         created_at: t, completed_at: null, created_by: session.user,
         payload: {
