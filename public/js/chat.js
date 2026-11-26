@@ -267,12 +267,20 @@ async function loadList() {
   const box = $('chats');
   box.textContent = '';
   const shared = await j('/api/chats/shared').catch(() => []);
+  let sharedOpen = true;
+  try { sharedOpen = localStorage.getItem('chatSharedOpen') !== '0'; } catch {}
   if (shared.length) {
-    const lab = document.createElement('div');
-    lab.className = 'chat-group'; lab.textContent = 'Bug report (read-only)';
+    const lab = document.createElement('button');
+    lab.type = 'button';
+    lab.className = 'chat-group';
+    lab.style.cssText = 'display:flex;width:100%;justify-content:space-between;background:none;border:0;cursor:pointer;font:inherit;text-align:left';
+    lab.setAttribute('aria-expanded', String(sharedOpen));
+    lab.textContent = `${sharedOpen ? '▾' : '▸'} Bug report (${shared.length})`;
+    lab.title = sharedOpen ? 'Sembunyikan chat bug report' : 'Tampilkan chat bug report';
+    lab.onclick = () => { try { localStorage.setItem('chatSharedOpen', sharedOpen ? '0' : '1'); } catch {} loadList(); };
     box.appendChild(lab);
   }
-  for (const c of shared) {
+  for (const c of sharedOpen ? shared : []) {
     const rowEl = document.createElement('div');
     rowEl.className = 'chat-item';
     rowEl.dataset.id = c.id;
