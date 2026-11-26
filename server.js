@@ -4087,6 +4087,35 @@ async function buildProjectsView(fresh = false, session = null) {
   };
 }
 
+// Restart proses ini sendiri lewat pm2 (dipakai setelah pull folder vps-monitor).
+function restartSelfSoon() {
+  setTimeout(() => {
+    const target = process.env.pm_id !== undefined ? process.env.pm_id : (process.env.PM2_APP_NAME || 'vps-monitor');
+    const child = spawn('pm2', ['restart', String(target)], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' });
+    child.on('error', () => {});
+    child.unref();
+  }, 500);
+}
+
+// Setelah WO MERGED: git pull otomatis folder yang ter-link. scope 'dev' = hanya folder DEV, 'all' = termasuk produksi
+// (dipilih admin saat Approve). Folder dengan perubahan lokal dilewati supaya pull tidak menimpa/bentrok diam-diam.
+async function autoPull(rels, scope) {
+  const list = getGitProjects(), out = [];
+  let restart = false;
+  for (const rel of rels) {
+    const full = path.normalize(path.join(SCAN_ROOT, String(rel)));
+    const g = list.find((x) => x.path === full);
+    if (!g) { out.push({ repo: rel, ok: false, detail: 'folder tidak ditemukan' }); continue; }
+    if (scope !== 'all' && !g.isDev) continue;
+    if (g.dirty) { out.push({ repo: rel, ok: false, detail: 'dilewati: ada perubahan lokal' }); continue; }
+    const r = await pullGitProject(full);
+    restart = restart || !!r.restart;
+    out.push({ repo: rel, ok: !!r.ok, detail: String(r.ok ? (r.output || 'ok') : (r.error || r.output || 'gagal')).slice(-1500) });
+  }
+  if (restart) restartSelfSoon();
+  return out;
+}
+
 // Antrean WO untuk worker laptop. Aktif untuk worker hanya jika ORCH_WORKER_TOKEN diisi (lihat docs/orchestrator.md).
 const orch = orchestrator.create({
   dataDir: DATA_DIR,
@@ -4094,6 +4123,7 @@ const orch = orchestrator.create({
   dumpDbs: (process.env.ORCH_DUMP_DBS || '').split(',').map((x) => x.trim()).filter(Boolean),
   dailyBudget: process.env.ORCH_DAILY_BUDGET_USD,
   audit: logActivity,
+  onMerged: autoPull,
 });
 
 const server = http.createServer(async (req, res) => {
@@ -4812,15 +4842,7 @@ const server = http.createServer(async (req, res) => {
     if (!r.ok) return send(res, 500, JSON.stringify(r));
     const { restart, ...payload } = r;
     send(res, 200, JSON.stringify(payload));
-    if (restart) {
-      // Restart setelah response terkirim; proses ini sendiri akan di-restart oleh pm2.
-      setTimeout(() => {
-        const target = process.env.pm_id !== undefined ? process.env.pm_id : (process.env.PM2_APP_NAME || 'vps-monitor');
-        const child = spawn('pm2', ['restart', String(target)], { detached: true, stdio: 'ignore', shell: process.platform === 'win32' });
-        child.on('error', () => {});
-        child.unref();
-      }, 500);
-    }
+    if (restart) restartSelfSoon(); // setelah response terkirim
     return;
   }
 

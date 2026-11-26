@@ -1,19 +1,5 @@
 node_modules/
-data/history.json
-data/users.json
-data/activity.jsonl
-data/process-spikes.json
-data/*.log
-data/removed-sites/
-data/removed-dbs/
+# Semua data runtime (input user, WO, chat, log). Tidak ada file di sini yang di-track.
+data/
 .opencode/
 .env
-data/chats/
-data/chat-usage.jsonl
-data/chat-limits.json
-data/projects.json
-data/work-orders.json
-data/work-orders.json.tmp
-data/wo-shots/
-data/wo-projects.json
-data/git-categories.json

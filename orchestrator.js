@@ -59,6 +59,7 @@ function create(opts = {}) {
   const dumpBin = opts.dumpBin || 'mysqldump';
   const now = opts.now || Date.now;
   const audit = opts.audit || (() => {});
+  const onMerged = opts.onMerged || null; // (repos, scope 'dev'|'all') => Promise<[{repo, ok, detail}]>: pull folder VPS ter-link setelah MERGED
   const file = path.join(dataDir, 'work-orders.json');
   const shotDir = path.join(dataDir, 'wo-shots');
   const imgDir = path.join(dataDir, 'wo-images');
@@ -89,7 +90,7 @@ function create(opts = {}) {
       screenshot_url: w.screenshot ? `/api/wo/shot/${w.screenshot}` : null, cost_usd: w.cost_usd,
       created_at: new Date(w.created_at).toISOString(), completed_at: w.completed_at ? new Date(w.completed_at).toISOString() : null,
       created_by: w.created_by || null, approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
-      review_note: w.review_note || null, merge: w.merge || null,
+      review_note: w.review_note || null, merge: w.merge || null, autopull: w.autopull || null, pull_scope: w.pull_scope || null,
       cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
     };
   }
@@ -245,7 +246,15 @@ function create(opts = {}) {
       if (w.status !== 'MERGING') return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
       w.status = body.status; w.lease_until = null;
       w.merge = { status: body.status, detail: String(body.detail || '').slice(0, 2000), sha: /^[0-9a-f]{7,40}$/.test(body.sha || '') ? body.sha : null, target: String(body.target || '').slice(0, 100), at: now() };
+      const repos = (links[w.project_key] || {}).repos || [];
+      if (body.status === 'MERGED' && onMerged && repos.length) w.autopull = { state: 'RUNNING', results: [], at: now() };
       save(); audit('worker', 'wo.merge', w.id, `${body.status} ${w.merge.target}`);
+      if (w.autopull && w.autopull.state === 'RUNNING') { // jalan di belakang: worker tidak menunggu git pull
+        Promise.resolve().then(() => onMerged(repos.map((r) => r.repo), w.pull_scope === 'all' ? 'all' : 'dev'))
+          .then((results) => { w.autopull = { state: 'DONE', results, at: now() }; })
+          .catch((e) => { w.autopull = { state: 'FAILED', results: [], detail: String((e && e.message) || e).slice(0, 500), at: now() }; })
+          .then(() => { save(); audit('system', 'wo.autopull', w.id, w.autopull.state); });
+      }
       return send(ctx, 200, { wo: view(w) }), true;
     }
     if (action === 'cleanup-result') {
@@ -386,9 +395,11 @@ function create(opts = {}) {
       if (act[2] === 'approve') {
         const r = w.result || {};
         if (!r.head_sha || !r.branch) return send(ctx, 409, { error: 'WO ini tidak punya branch/head_sha (dibuat sebelum fitur merge), merge manual di laptop' }), true;
-        w.status = 'APPROVED'; w.merge = null; w.merge_attempts = 0;
+        if (b.pull !== undefined && b.pull !== 'dev' && b.pull !== 'all') return send(ctx, 400, { error: "pull harus 'dev' atau 'all'" }), true;
+        w.status = 'APPROVED'; w.merge = null; w.merge_attempts = 0; w.autopull = null;
+        w.pull_scope = b.pull === 'all' ? 'all' : 'dev';
         w.approved_by = session.user; w.approved_at = now();
-        audit(session.user, 'wo.approve', w.id, r.branch);
+        audit(session.user, 'wo.approve', w.id, `${r.branch} pull=${w.pull_scope}`);
       } else {
         w.status = 'REJECTED'; w.approved_by = session.user; w.approved_at = now();
         if (BRANCH_RE.test(r0.branch || '')) w.cleanup = { state: 'PENDING', attempts: 0 }; // worker menghapus branch lokal WO ini

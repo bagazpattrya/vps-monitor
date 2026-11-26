@@ -146,39 +146,34 @@ function syncSel() {
   $('woCheckAll').checked = del.length > 0 && del.every(w => selected.has(w.id));
 }
 
-// Tombol aksi per baris. Step 1 (REVIEWABLE): Approve/Reject. Step 2 (MERGED): Pull dev / Pull semua folder terhubung.
-// Folder "dev" = flag isDev dari /api/git/projects (isDevProjectName di server.js), dicek saat klik.
+// Kolom aksi per baris. REVIEWABLE: Approve (pull dev / pull semua) + Reject. Setelah itu tampil status proses
+// (menunggu worker -> merging -> git pull -> hasil), di-refresh oleh auto-refresh 5 detik.
+const SCOPE_TXT = { dev: 'dev', all: 'dev + produksi' };
 function rowActions(w) {
   const a = (act, cls, txt, tip) => `<button class="btn-sm ${cls} wo-act" data-act="${act}" data-id="${escHtml(w.id)}" title="${escHtml(tip)}">${txt}</button>`;
-  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Approve & merge ke branch target') + a('reject', 'danger', 'Reject', 'Tolak WO');
-  if (w.status === 'MERGED') {
-    const rs = linkRepos(w);
-    if (!rs.length) return '';
-    return a('pull-dev', 'ok', 'Pull dev', 'git pull hanya folder bertanda DEV') + a('pull-all', '', 'Pull semua', 'git pull: ' + rs.map(r => r.repo).join(', '));
-  }
-  return '';
+  const st = (txt, tip, color) => `<span class="wo-prog" style="font-size:12px;color:var(${color || '--mut'})" title="${escHtml(tip || '')}">${escHtml(txt)}</span>`;
+  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') + a('reject', 'danger', 'Reject', 'Tolak WO');
+  const scope = SCOPE_TXT[w.pull_scope] || 'dev';
+  if (w.status === 'APPROVED') return st('⏳ menunggu worker merge', 'pull: ' + scope);
+  if (w.status === 'MERGING') return st('⏳ merging…', 'pull: ' + scope);
+  if (w.status !== 'MERGED') return '';
+  const ap = w.autopull;
+  if (!ap) return st('✓ merged', linkRepos(w).length ? '' : 'Belum ada folder VPS ter-link: tidak ada pull', '--ok');
+  if (ap.state === 'RUNNING') return st(`⏳ git pull (${scope})…`);
+  if (ap.state === 'FAILED') return st('✕ pull gagal', ap.detail, '--bad');
+  const res = ap.results || [], ok = res.filter(r => r.ok).length;
+  const tip = res.map(r => `${r.ok ? '✓' : '✕'} ${r.repo}${r.ok ? '' : ': ' + r.detail}`).join('\n');
+  if (!res.length) return st('✓ merged · tanpa folder ' + scope, '', '--ok');
+  return st(`${ok === res.length ? '✓' : '⚠'} pulled ${ok}/${res.length} (${scope})`, tip, ok === res.length ? '--ok' : '--warn-tx');
 }
 async function rowAct(btn) {
   const w = orders.find(x => x.id === btn.dataset.id), act = btn.dataset.act;
   if (!w) return;
-  if (act === 'approve' && !confirm(`Approve ${w.id}? Laptop akan merge dan push ke branch target.`)) return;
-  if (act === 'reject' && !confirm(`Reject ${w.id}?`)) return;
+  if (act === 'approve') return approveDialog(w, load);
+  if (!confirm(`Reject ${w.id}?`)) return;
   btn.disabled = true;
   try {
-    if (act === 'approve' || act === 'reject') await api('POST', `/api/wo/${encodeURIComponent(w.id)}/${act}`, {});
-    else {
-      let rs = linkRepos(w);
-      const info = Object.fromEntries(((await api('GET', '/api/git/projects')).projects || []).map(g => [g.relPath, g]));
-      if (act === 'pull-dev') rs = rs.filter(r => (info[r.repo] || {}).isDev);
-      if (!rs.length) { alert('Tidak ada folder DEV di link project ini.'); btn.disabled = false; return; }
-      const dirty = rs.filter(r => (info[r.repo] || {}).dirty).map(r => r.repo);
-      if (dirty.length && !confirm('Folder ini punya perubahan lokal:\n' + dirty.join('\n') + '\n\nTetap pull?')) { btn.disabled = false; return; }
-      const res = [];
-      for (const r of rs) { // satu gagal tidak menghentikan yang lain
-        try { await api('POST', '/api/git/pull', { relPath: r.repo }); res.push('✓ ' + r.repo); } catch (e) { res.push('✕ ' + r.repo + ': ' + e.message); }
-      }
-      alert(res.join('\n'));
-    }
+    await api('POST', `/api/wo/${encodeURIComponent(w.id)}/reject`, {});
     await load();
   } catch (e) { alert(e.message); }
   btn.disabled = false;
@@ -251,6 +246,12 @@ function openDetail(id) {
     ['Merge', w.merge ? `${w.merge.status}${w.merge.target ? ' → ' + w.merge.target : ''}${w.merge.sha ? ' @ ' + w.merge.sha.slice(0, 10) : ''}` : ''],
   ]);
   if (w.merge && w.merge.detail) h += `<div class="wo-pre">${escHtml(w.merge.detail)}</div>`;
+  if (w.autopull) {
+    const ap = w.autopull, res = ap.results || [];
+    h += `<div class="wo-lbl">Pull otomatis (${escHtml(SCOPE_TXT[w.pull_scope] || 'dev')})</div><div class="wo-pre">${escHtml(ap.state === 'RUNNING' ? '⏳ sedang pull…'
+      : ap.state === 'FAILED' ? '✕ ' + (ap.detail || 'gagal')
+      : res.length ? res.map(r => `${r.ok ? '✓' : '✕'} ${r.repo}: ${r.detail}`).join('\n\n') : 'Tidak ada folder yang cocok ter-link.')}</div>`;
+  }
   if (w.status === 'MERGED') h += '<div class="wo-lbl">Deploy</div><div id="woDeploy"></div>';
   h += `<div class="wo-lbl">Context</div><div class="wo-pre">${escHtml(w.context)}</div>`;
   if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
@@ -262,8 +263,8 @@ function openDetail(id) {
   if (w.screenshot_url) h += `<div class="wo-lbl">Screenshot</div><a href="${escHtml(w.screenshot_url)}" class="zoom"><img class="wo-shot" src="${escHtml(w.screenshot_url)}" alt="screenshot"></a>`;
   if (REVIEWABLE.includes(w.status)) {
     h += r.head_sha
-      ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve &amp; merge</button><button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
-         <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
+      ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve</button><button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
+         <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. Setelah MERGED, VPS otomatis <code>git pull</code> folder yang ter-link: pilih <em>dev saja</em> atau <em>semua</em> (termasuk produksi) saat Approve. Folder dengan perubahan lokal dilewati. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
       : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
   }
   $('woDetailBody').innerHTML = h;
@@ -427,28 +428,41 @@ function renderPatch(patch) {
   }).join('\n');
 }
 
-// Approve butuh dua klik (konfirmasi); aksi ini membuat laptop merge dan push.
+// Popup Approve: pilih pull ke dev saja atau semua (dev + produksi). Popup ini sekaligus konfirmasi.
+let approving = null; // { w, done }
+function approveDialog(w, done) {
+  approving = { w, done };
+  $('woApproveTitle').textContent = 'Approve ' + w.id;
+  document.querySelector('input[name="woPull"][value="dev"]').checked = true;
+  $('woApproveErr').textContent = ''; $('woApproveGo').disabled = false;
+  $('woApproveModal').classList.add('open');
+}
+const closeApprove = () => { approving = null; $('woApproveModal').classList.remove('open'); };
+$('woApproveClose').addEventListener('click', closeApprove);
+$('woApproveCancel').addEventListener('click', closeApprove);
+$('woApproveGo').addEventListener('click', async () => {
+  if (!approving) return;
+  const { w, done } = approving, pull = document.querySelector('input[name="woPull"]:checked').value;
+  $('woApproveGo').disabled = true;
+  try {
+    await api('POST', `/api/wo/${encodeURIComponent(w.id)}/approve`, { pull });
+    closeApprove();
+    await done();
+  } catch (e) { $('woApproveErr').textContent = e.message; $('woApproveGo').disabled = false; }
+});
+
 function bindActions(w) {
-  const ap = $('woApprove'), rj = $('woReject');
-  if (!ap) return;
-  const act = async (kind, btn) => {
-    btn.disabled = true; $('woActErr').textContent = '';
+  const rj = $('woReject');
+  if (!rj) return;
+  $('woApprove').addEventListener('click', () => approveDialog(w, async () => { await load(); openDetail(w.id); }));
+  rj.addEventListener('click', async () => {
+    rj.disabled = true; $('woActErr').textContent = '';
     try {
-      await api('POST', `/api/wo/${encodeURIComponent(w.id)}/${kind}`, {});
+      await api('POST', `/api/wo/${encodeURIComponent(w.id)}/reject`, {});
       await load();
       openDetail(w.id);
-    } catch (e) { $('woActErr').textContent = e.message; btn.disabled = false; }
-  };
-  let armed = null;
-  ap.addEventListener('click', () => {
-    if (!armed) {
-      ap.textContent = 'Yakin? Klik lagi untuk merge';
-      armed = setTimeout(() => { armed = null; ap.textContent = 'Approve & merge'; }, 6000);
-      return;
-    }
-    clearTimeout(armed); act('approve', ap);
+    } catch (e) { $('woActErr').textContent = e.message; rj.disabled = false; }
   });
-  rj.addEventListener('click', () => act('reject', rj));
 }
 
 // Dropdown project (form WO dan filter) diisi dari daftar worker + project yang sudah punya WO.

@@ -176,6 +176,21 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="woApproveModal" style="z-index:110">
+  <div class="modal" style="max-width:440px;width:94vw">
+    <div class="modal-head">
+      <span id="woApproveTitle">Approve</span>
+      <button class="btn" id="woApproveClose" style="padding:2px 8px">✕</button>
+    </div>
+    <div class="modal-body" style="white-space:normal">
+      <p style="margin-top:0">Laptop akan merge dan push ke branch target. Setelah MERGED, VPS pull otomatis ke:</p>
+      <label style="display:block;margin:6px 0"><input type="radio" name="woPull" value="dev" checked> <strong>Dev saja</strong> — folder DEV yang ter-link</label>
+      <label style="display:block;margin:6px 0"><input type="radio" name="woPull" value="all"> <strong>Semua</strong> — dev + produksi</label>
+      <p style="color:var(--mut);font-size:12px">Folder dengan perubahan lokal dilewati. Pull produksi ikut menjalankan migrate/build di folder itu.</p>
+      <div class="wo-actions"><button class="btn-sm ok" id="woApproveGo">Approve</button><button class="btn-sm" id="woApproveCancel">Batal</button><span id="woApproveErr" style="color:var(--bad)"></span></div>
+    </div>
+  </div>
+</div>
 <div class="modal-backdrop" id="woImgModal" style="z-index:110">
   <img id="woImgBig" alt="lampiran" style="max-width:94vw;max-height:92vh;border-radius:8px">
 </div>

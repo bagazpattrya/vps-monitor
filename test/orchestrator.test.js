@@ -406,3 +406,22 @@ test('cleanup: lease habis -> PENDING lagi, 2 kali -> FAILED; WO menunggu cleanu
   assert.deepStrictEqual(r.deleted, [id]); // FAILED cleanup tidak menahan hapus
   t.close();
 });
+
+test('MERGED memicu onMerged dengan folder ter-link, hasil tersimpan di autopull', async () => {
+  const calls = [];
+  const t = await boot({ onMerged: async (repos, scope) => { calls.push([repos, scope]); return [{ repo: repos[0], ok: true, detail: 'ok' }]; } });
+  await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [{ repo: 'lapila-dev', url: '' }] });
+  const id = await finished(t);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/approve`, null, { pull: 'prod' })).status, 400);
+  await t.call('POST', `/api/wo/${id}/approve`, null, { pull: 'all' });
+  await t.call('GET', '/api/wo/next', 'wrk');
+  const m = await (await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED' })).json();
+  assert.strictEqual(m.wo.autopull.state, 'RUNNING');
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual(calls, [[['lapila-dev'], 'all']]);
+  const d = await (await t.call('GET', '/api/wo')).json();
+  const w = d.work_orders.find((x) => x.id === id);
+  assert.strictEqual(w.autopull.state, 'DONE');
+  assert.strictEqual(w.autopull.results[0].ok, true);
+  t.close();
+});
