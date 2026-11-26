@@ -508,3 +508,19 @@ test('revisi: branch yang sudah dihapus worker tidak bisa direvisi', async () =>
   assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x' })).status, 409, 'cleanup DONE');
   t.close();
 });
+
+test('revisi: bawa gambar, goals, files_hint, prioritas, limit; gambar bisa diunduh worker', async () => {
+  const t = await boot();
+  const id = await finished(t);
+  const png = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString('base64');
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x', goals: Array(11).fill('g') })).status, 400);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'x', images: [png, png, png, png, png] })).status, 400);
+  const rv = await (await t.call('POST', `/api/wo/${id}/revise`, null, { note: 'lihat gambar', goals: ['tombol biru'], files_hint: ['a.php'], images: [png], priority: 'low', limits: { model: 'opus', max_budget_usd: 9 } })).json();
+  const r = rv.wo.revisions[0];
+  assert.deepStrictEqual([r.goals, r.files_hint, r.images.length], [['tombol biru'], ['a.php'], 1]);
+  assert.deepStrictEqual(rv.wo.images, r.images, 'gambar revisi masuk lampiran WO');
+  assert.strictEqual(rv.wo.priority, 'low');
+  assert.deepStrictEqual([rv.wo.limits.model, rv.wo.limits.max_budget_usd], ['opus', 3]);
+  assert.strictEqual((await t.call('GET', `/api/wo/${id}/img/${r.images[0]}`, 'wrk')).status, 200);
+  t.close();
+});

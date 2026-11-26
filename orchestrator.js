@@ -337,19 +337,11 @@ function create(opts = {}) {
         created_at: t, completed_at: null, created_by: session.user,
         payload: {
           context: b.context, goals: b.goals || [], files_hint: b.files_hint || [], verification: b.verification || {},
-          limits: { max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 3, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' },
+          limits: limitsOf(b),
         },
       };
       if (dbSource) w.payload.db_source = dbSource;
-      if (imgs.length) {
-        const dir = path.join(imgDir, w.id);
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        w.payload.images = imgs.map(({ buf, ext }) => {
-          const name = crypto.randomBytes(8).toString('hex') + '.' + ext;
-          fs.writeFileSync(path.join(dir, name), buf, { mode: 0o600 });
-          return name;
-        });
-      }
+      if (imgs.length) w.payload.images = saveImgs(w.id, imgs);
       wos.push(w); prune(); save();
       audit(session.user, 'wo.create', w.id, b.project_key);
       return send(ctx, 201, { wo: view(w) }), true;
@@ -418,7 +410,7 @@ function create(opts = {}) {
       const w = wos.find((x) => x.id === act[1]);
       if (!w) return send(ctx, 404, { error: 'WO tidak ditemukan' }), true;
       let b = {};
-      try { const raw = await ctx.readBody(req, 8192); b = raw ? JSON.parse(raw) : {}; } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      try { const raw = await ctx.readBody(req, act[2] === 'revise' ? CREATE_LIMIT : 8192); b = raw ? JSON.parse(raw) : {}; } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
       if (act[2] === 'revise') return revise(ctx, w, b), true;
       if (!REVIEWABLE.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
       const r0 = w.result || {};
@@ -447,12 +439,29 @@ function create(opts = {}) {
     return false;
   }
 
+  const limitsOf = (b) => ({ max_budget_usd: clamp(b.limits && b.limits.max_budget_usd, 0.05, 3, 0.5), timeout_sec: clamp(b.limits && b.limits.timeout_sec, 30, 1800, 600), model: (b.limits && b.limits.model) || 'sonnet' });
+
+  // Simpan lampiran WO (sudah lolos decodeImages) ke data/wo-images/<id>/; return nama file.
+  function saveImgs(id, imgs) {
+    const dir = path.join(imgDir, id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return imgs.map(({ buf, ext }) => {
+      const name = crypto.randomBytes(8).toString('hex') + '.' + ext;
+      fs.writeFileSync(path.join(dir, name), buf, { mode: 0o600 });
+      return name;
+    });
+  }
+
   // Kirim WO kembali ke antrean: worker melanjutkan branch yang sama (commit baru di atas head_sha yang direview)
   // dengan catatan reviewer di prompt, lalu hasilnya direview ulang (approve -> merge seperti biasa).
   function revise(ctx, w, b) {
     const session = ctx.session;
     const note = typeof b.note === 'string' ? b.note.trim() : '';
-    if (!note || note.length > 2000) return send(ctx, 400, { error: 'note (alasan revisi) wajib, maks 2000 karakter' });
+    if (!note || note.length > 4000) return send(ctx, 400, { error: 'note (alasan revisi) wajib, maks 4000 karakter' });
+    const err = validate({ ...b, project_key: w.project_key, context: note, verification: undefined }); // goals, files_hint, limits, priority: aturan sama dengan WO baru
+    if (err) return send(ctx, 400, { error: err });
+    let imgs;
+    try { imgs = chats.decodeImages(b.images); } catch (e) { return send(ctx, 400, { error: e.message }); }
     if (!REVISABLE.includes(w.status)) return send(ctx, 409, { error: 'WO berstatus ' + w.status });
     const r = w.result || {};
     const src = BRANCH_RE.test(r.branch || '') && r.head_sha ? r : w.revision; // revisi yang gagal tidak membawa head_sha: pakai branch revisi sebelumnya
@@ -461,7 +470,11 @@ function create(opts = {}) {
     if ((w.revisions || []).length >= MAX_REVISIONS) return send(ctx, 409, { error: `batas ${MAX_REVISIONS} revisi tercapai, buat WO baru` });
     const spent = spentToday();
     if (spent >= dailyBudget) return send(ctx, 429, { error: `budget harian habis ($${spent.toFixed(2)}/$${dailyBudget})` });
-    w.revisions = [...(w.revisions || []), { note, by: session.user, at: new Date(now()).toISOString(), from_status: w.status, head_sha: src.head_sha }];
+    const images = imgs.length ? saveImgs(w.id, imgs) : [];
+    if (images.length) w.payload.images = [...(w.payload.images || []), ...images]; // ikut diunduh worker seperti lampiran WO
+    if (b.limits) w.payload.limits = limitsOf(b);
+    if (b.priority) w.priority = b.priority;
+    w.revisions = [...(w.revisions || []), { note, goals: b.goals || [], files_hint: b.files_hint || [], images, by: session.user, at: new Date(now()).toISOString(), from_status: w.status, head_sha: src.head_sha }];
     w.revision = { n: w.revisions.length, branch: src.branch, head_sha: src.head_sha, base_sha: src.base_sha || null };
     w.status = 'PENDING'; w.attempts = 0; w.lease_until = null;
     w.cleanup = null; w.merge = null; w.merge_attempts = 0; w.autopull = null; w.approved_by = null; w.approved_at = null;

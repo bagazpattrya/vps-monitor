@@ -178,7 +178,7 @@ async function rowAct(btn) {
   const w = orders.find(x => x.id === btn.dataset.id), act = btn.dataset.act;
   if (!w) return;
   if (act === 'approve') return approveDialog(w, load);
-  if (act === 'revise') { btn.disabled = true; try { await reviseWo(w); } catch (e) { alert(e.message); } btn.disabled = false; return; }
+  if (act === 'revise') return openRevise(w);
   if (!confirm(`Reject ${w.id}?`)) return;
   btn.disabled = true;
   try {
@@ -269,7 +269,9 @@ function openDetail(id) {
   if ((w.goals || []).length) h += `<div class="wo-lbl">Goals</div><div class="wo-pre">${escHtml(w.goals.map((g, i) => `${i + 1}. ${g}`).join('\n'))}</div>`;
   if ((w.files_hint || []).length) h += `<div class="wo-lbl">File untuk dimulai</div><div class="wo-pre">${escHtml(w.files_hint.join('\n'))}</div>`;
   if ((w.images || []).length) h += `<div class="wo-lbl">Lampiran</div><div class="chat-thumbs">${w.images.map(n => { const u = `/api/wo/${encodeURIComponent(w.id)}/img/${encodeURIComponent(n)}`; return `<a href="${escHtml(u)}" class="thumb zoom"><img src="${escHtml(u)}" alt="lampiran"></a>`; }).join('')}</div>`;
-  if ((w.revisions || []).length) h += `<div class="wo-lbl">Riwayat revisi</div><div class="wo-pre">${escHtml(w.revisions.map((x, i) => `#${i + 1} · ${x.by || ''} · ${fmtTime(x.at)} (dari ${x.from_status})\n${x.note}`).join('\n\n'))}</div>`;
+  if ((w.revisions || []).length) h += `<div class="wo-lbl">Riwayat revisi</div><div class="wo-pre">${escHtml(w.revisions.map((x, i) => `#${i + 1} · ${x.by || ''} · ${fmtTime(x.at)} (dari ${x.from_status})\n${x.note}`
+    + ((x.goals || []).length ? `\nGoals: ${x.goals.join('; ')}` : '') + ((x.files_hint || []).length ? `\nFile: ${x.files_hint.join(', ')}` : '')
+    + ((x.images || []).length ? `\n${x.images.length} gambar (lihat Lampiran)` : '')).join('\n\n'))}</div>`;
   if (r.patch) h += `<div class="wo-lbl">Patch${r.patch_truncated ? ' (dipotong 200 KB)' : ''}</div><div class="wo-pre wo-patch">${renderPatch(r.patch)}</div>`;
   if (r.diff_stat) h += `<div class="wo-lbl">Diff</div><div class="wo-pre">${escHtml(r.diff_stat)}</div>`;
   if (r.logs) h += `<div class="wo-lbl">Log / jawaban agent</div><div class="wo-pre">${escHtml(r.logs)}</div>`;
@@ -397,7 +399,42 @@ woModal.addEventListener('drop', e => { e.preventDefault(); addFiles(e.dataTrans
 
 const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
 
-const openNew = () => { $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); };
+// Drawer yang sama dipakai untuk WO baru dan untuk revisi (revising = WO yang direvisi).
+// Draf WO baru disimpan saat drawer dipakai revisi, lalu dikembalikan, supaya ketikan tidak hilang.
+let revising = null, draft = null;
+const FORM_IDS = ['woContext', 'woGoals', 'woFiles', 'woPriority', 'woModel', 'woBudgetUsd', 'woTimeout'];
+function setMode(w) {
+  revising = w;
+  $('woNewTitle').textContent = w ? 'Revisi ' + w.id : 'Work Order baru';
+  $('woNewIntro').innerHTML = w
+    ? `Worker melanjutkan branch <code>${escHtml((w.result || {}).branch || (w.revision || {}).branch || '')}</code> (commit baru di atasnya) dengan catatan ini, lalu hasilnya direview ulang.`
+    : 'Dikerjakan oleh worker di laptop pada branch git baru. Satu WO = satu tujuan sempit.';
+  $('woProjBox').style.display = w ? 'none' : '';
+  $('woContextLbl').textContent = w ? 'Apa yang harus diperbaiki' : 'Context';
+  $('woGoals').placeholder = w ? 'Tambahan goals untuk revisi ini (opsional)' : 'Bottom nav tidak tertutup footer\nTanpa horizontal overflow';
+  $('woNewSubmit').textContent = w ? 'Kirim revisi' : 'Kirim ke antrean';
+  $('woNewErr').textContent = '';
+}
+function openRevise(w) {
+  if (!revising) draft = { pending, vals: FORM_IDS.map(i => $(i).value) };
+  setMode(w);
+  ['woContext', 'woGoals', 'woFiles'].forEach(i => { $(i).value = ''; });
+  const l = w.limits || {};
+  $('woPriority').value = w.priority || 'medium'; $('woModel').value = l.model || 'sonnet';
+  $('woBudgetUsd').value = l.max_budget_usd || 0.5; $('woTimeout').value = l.timeout_sec || 600;
+  pending = []; renderThumbs();
+  $('woDetailModal').classList.remove('open');
+  $('woNewModal').classList.add('open'); $('woContext').focus();
+}
+function closeNew() {
+  $('woNewModal').classList.remove('open');
+  if (!revising) return;
+  setMode(null);
+  if (draft) { pending = draft.pending; FORM_IDS.forEach((i, k) => { $(i).value = draft.vals[k]; }); draft = null; }
+  else { ['woContext', 'woGoals', 'woFiles'].forEach(i => { $(i).value = ''; }); pending = []; }
+  renderThumbs();
+}
+const openNew = () => { if (revising) closeNew(); $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); };
 $('woNew').addEventListener('click', openNew);
 // Tab (tanpa fokus di elemen apa pun, tidak ada panel terbuka) = buka drawer WO baru
 document.addEventListener('keydown', e => {
@@ -406,10 +443,11 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('.modal-backdrop.open, .sidebar.open')) return;
   e.preventDefault(); openNew();
 });
-$('woNewClose').addEventListener('click', () => $('woNewModal').classList.remove('open'));
+$('woNewClose').addEventListener('click', closeNew);
 
 $('woNewSubmit').addEventListener('click', async () => {
   const btn = $('woNewSubmit');
+  if (revising) return submitRevise(btn);
   if (!$('woProject').value) { $('woNewErr').textContent = 'Pilih project dulu'; return; }
   const body = {
     project_key: $('woProject').value,
@@ -438,7 +476,7 @@ $('woNewSubmit').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') ['woImgModal', 'woNewModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open'));
+  if (e.key === 'Escape') { ['woImgModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open')); if ($('woNewModal').classList.contains('open')) closeNew(); }
 });
 
 // Patch: tiap baris di-escape lalu diberi kelas warna (nilai berasal dari AI, jangan pernah tanpa escape).
@@ -473,22 +511,28 @@ $('woApproveGo').addEventListener('click', async () => {
   } catch (e) { $('woApproveErr').textContent = e.message; $('woApproveGo').disabled = false; }
 });
 
-// Minta alasan revisi lalu kirim. Return false jika dibatalkan.
-async function reviseWo(w) {
-  const note = prompt(`Revisi ${w.id}: apa yang harus diperbaiki worker?`, '');
-  if (note === null || !note.trim()) return false;
-  await api('POST', `/api/wo/${encodeURIComponent(w.id)}/revise`, { note: note.trim() });
-  await load();
-  return true;
+async function submitRevise(btn) {
+  const w = revising, note = $('woContext').value.trim();
+  if (!note) { $('woNewErr').textContent = 'Tulis apa yang harus diperbaiki'; return; }
+  const body = { note, priority: $('woPriority').value,
+    limits: { model: $('woModel').value, max_budget_usd: Number($('woBudgetUsd').value), timeout_sec: Number($('woTimeout').value) } };
+  const goals = lines($('woGoals').value), files = lines($('woFiles').value);
+  if (goals.length) body.goals = goals;
+  if (files.length) body.files_hint = files;
+  if (pending.length) body.images = pending.map(p => p.dataUrl);
+  btn.disabled = true; $('woNewErr').textContent = '';
+  try {
+    await api('POST', `/api/wo/${encodeURIComponent(w.id)}/revise`, body);
+    pending = [];
+    closeNew();
+    await load();
+  } catch (e) { $('woNewErr').textContent = e.message; }
+  finally { btn.disabled = false; }
 }
 
 function bindActions(w) {
   const rv = $('woRevise');
-  if (rv) rv.addEventListener('click', async () => {
-    rv.disabled = true; $('woActErr').textContent = '';
-    try { if (await reviseWo(w)) openDetail(w.id); } catch (e) { $('woActErr').textContent = e.message; }
-    rv.disabled = false;
-  });
+  if (rv) rv.addEventListener('click', () => openRevise(w));
   const rj = $('woReject');
   if (!rj) return;
   $('woApprove').addEventListener('click', () => approveDialog(w, async () => { await load(); openDetail(w.id); }));

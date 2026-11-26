@@ -130,17 +130,19 @@
 <div class="modal-backdrop drawer-backdrop" id="woNewModal">
   <aside class="drawer" style="width:560px">
     <div class="modal-head">
-      <span>Work Order baru</span>
+      <span id="woNewTitle">Work Order baru</span>
       <button class="btn" id="woNewClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" style="white-space:normal;flex:1">
-      <p style="margin-top:0;color:var(--mut);font-size:12px">Dikerjakan oleh worker di laptop pada branch git baru. Satu WO = satu tujuan sempit.</p>
+      <p id="woNewIntro" style="margin-top:0;color:var(--mut);font-size:12px">Dikerjakan oleh worker di laptop pada branch git baru. Satu WO = satu tujuan sempit.</p>
+      <div id="woProjBox">
       <label class="wo-lbl">Project <span class="wo-hint">(daftar dari worker laptop)</span></label>
       <select id="woProject" class="input" style="width:100%"></select>
       <div class="wo-hint" id="woProjectNote" style="margin-top:4px"></div>
       <div id="woDbBox" style="display:none"><label class="wo-lbl">Sumber DB <span class="wo-hint">(produksi di-restore ke DB lokal worker sebelum agent jalan)</span></label>
       <select id="woDb" class="input" style="width:100%"></select></div>
-      <label class="wo-lbl">Context</label>
+      </div>
+      <label class="wo-lbl" id="woContextLbl">Context</label>
       <textarea id="woContext" class="input" rows="6" style="width:100%" maxlength="4000" placeholder="Apa yang harus diperbaiki dan kenapa"></textarea>
       <label class="wo-lbl">Gambar <span class="wo-hint">(opsional, maks 4 × 5 MB: klik 📎, paste, atau drop)</span></label>
       <button class="btn-sm" id="woAttach" type="button">📎 Lampirkan</button>
