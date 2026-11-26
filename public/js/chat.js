@@ -266,6 +266,24 @@ async function loadList() {
   const list = await j('/api/chats');
   const box = $('chats');
   box.textContent = '';
+  const shared = await j('/api/chats/shared').catch(() => []);
+  if (shared.length) {
+    const lab = document.createElement('div');
+    lab.className = 'chat-group'; lab.textContent = 'Bug report (read-only)';
+    box.appendChild(lab);
+  }
+  for (const c of shared) {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'chat-item';
+    rowEl.dataset.id = c.id;
+    const title = document.createElement('span');
+    title.className = 'chat-item-title';
+    title.textContent = (c.project ? '[' + c.project + '] ' : '') + c.title;
+    title.title = new Date(c.updatedAt).toLocaleString();
+    title.onclick = () => { if (!busy) openChat(c.id, true); };
+    rowEl.append(title);
+    box.appendChild(rowEl);
+  }
   let lastGroup = '';
   for (const c of list) {
     const g = dayGroup(c.updatedAt);
@@ -298,24 +316,6 @@ async function loadList() {
       loadList();
     };
     rowEl.append(title, ren, del);
-    box.appendChild(rowEl);
-  }
-  const shared = await j('/api/chats/shared').catch(() => []);
-  if (shared.length) {
-    const lab = document.createElement('div');
-    lab.className = 'chat-group'; lab.textContent = 'Bug report (read-only)';
-    box.appendChild(lab);
-  }
-  for (const c of shared) {
-    const rowEl = document.createElement('div');
-    rowEl.className = 'chat-item';
-    rowEl.dataset.id = c.id;
-    const title = document.createElement('span');
-    title.className = 'chat-item-title';
-    title.textContent = (c.project ? '[' + c.project + '] ' : '') + c.title;
-    title.title = new Date(c.updatedAt).toLocaleString();
-    title.onclick = () => { if (!busy) openChat(c.id, true); };
-    rowEl.append(title);
     box.appendChild(rowEl);
   }
   markActive();
