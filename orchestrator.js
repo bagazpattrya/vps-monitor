@@ -238,9 +238,11 @@ function create(opts = {}) {
       try { b = JSON.parse(await ctx.readBody(req, 64 * 1024)); } catch { return send(ctx, 400, { error: 'body bukan JSON / terlalu besar' }), true; }
       const list = b && b.projects;
       const okSources = (x) => x.db_sources == null || (Array.isArray(x.db_sources) && x.db_sources.length <= 30 && x.db_sources.every((d) => /^\w{1,64}$/.test(d)) && (x.db_default == null || x.db_sources.includes(x.db_default)));
-      const okItem = (x) => x && typeof x.key === 'string' && /^[\w.-]{1,64}$/.test(x.key) && (x.target == null || (typeof x.target === 'string' && /^[\w][\w./-]{0,99}$/.test(x.target))) && okSources(x);
+      // db_sync_info: {ttl_hours, last:{<sumber atau ''>: ms}} = kapan DB lokal worker terakhir di-restore, untuk info di UI
+      const okSync = (i) => i == null || (typeof i === 'object' && Number.isFinite(i.ttl_hours) && i.last && typeof i.last === 'object' && Object.keys(i.last).length <= 31 && Object.entries(i.last).every(([k, v]) => /^\w{0,64}$/.test(k) && Number.isFinite(v)));
+      const okItem = (x) => x && typeof x.key === 'string' && /^[\w.-]{1,64}$/.test(x.key) && (x.target == null || (typeof x.target === 'string' && /^[\w][\w./-]{0,99}$/.test(x.target))) && okSources(x) && okSync(x.db_sync_info);
       if (!Array.isArray(list) || list.length > 100 || !list.every(okItem) || new Set(list.map((x) => x.key)).size !== list.length) return send(ctx, 400, { error: 'projects tidak valid' }), true;
-      registry = { list: list.map((x) => ({ key: x.key, target: x.target || null, db_sources: x.db_sources || [], db_default: x.db_default || (x.db_sources && x.db_sources[0]) || null })), updated_at: now() };
+      registry = { list: list.map((x) => ({ key: x.key, target: x.target || null, db_sources: x.db_sources || [], db_default: x.db_default || (x.db_sources && x.db_sources[0]) || null, ...(x.db_sync_info ? { db_sync_info: { ttl_hours: x.db_sync_info.ttl_hours, last: x.db_sync_info.last } } : {}) })), updated_at: now() };
       fs.writeFileSync(projFile, JSON.stringify(registry), { mode: 0o660 });
       return send(ctx, 200, { ok: true, count: list.length }), true;
     }
@@ -326,6 +328,7 @@ function create(opts = {}) {
         if (typeof b.db_source !== 'string' || !(reg.db_sources || []).includes(b.db_source)) return send(ctx, 400, { error: `db_source tidak valid. Pilihan: ${(reg.db_sources || []).join(', ') || '(project ini tidak punya sumber DB)'}` }), true;
         dbSource = b.db_source;
       } else if ((reg.db_sources || []).length) dbSource = reg.db_default;
+      if (b.db_sync != null && typeof b.db_sync !== 'boolean') return send(ctx, 400, { error: 'db_sync harus boolean' }), true;
       let imgs;
       try { imgs = chats.decodeImages(b.images); } catch (e) { return send(ctx, 400, { error: e.message }), true; }
       const spent = spentToday();
@@ -342,6 +345,7 @@ function create(opts = {}) {
         },
       };
       if (dbSource) w.payload.db_source = dbSource;
+      if (typeof b.db_sync === 'boolean') w.payload.db_sync = b.db_sync; // true = paksa restore DB, false = pakai DB lokal apa adanya, kosong = ikut TTL worker
       if (b.external_ref) w.payload.external_ref = b.external_ref; // id tiket dari sistem luar (mis. bug report)
       if (imgs.length) w.payload.images = saveImgs(w.id, imgs);
       wos.push(w); prune(); save();
@@ -419,7 +423,7 @@ function create(opts = {}) {
       const r0 = w.result || {};
       if (act[2] === 'approve') {
         const r = w.result || {};
-        if (!r.head_sha || !r.branch) return send(ctx, 409, { error: 'WO ini tidak punya branch/head_sha (dibuat sebelum fitur merge), merge manual di laptop' }), true;
+        if (!r.head_sha || !r.branch) return send(ctx, 409, { error: 'WO ini tidak punya commit untuk di-merge (agent tidak mengubah file, atau WO lama). Kirim Revisi dengan instruksi yang jelas, atau Reject.' }), true;
         if (b.pull !== undefined && b.pull !== 'dev' && b.pull !== 'all') return send(ctx, 400, { error: "pull harus 'dev' atau 'all'" }), true;
         w.status = 'APPROVED'; w.merge = null; w.merge_attempts = 0; w.autopull = null;
         w.pull_scope = b.pull === 'all' ? 'all' : 'dev';

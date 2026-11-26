@@ -159,7 +159,7 @@ function rowActions(w) {
   const a = (act, cls, txt, tip) => `<button class="btn-sm ${cls} wo-act" data-act="${act}" data-id="${escHtml(w.id)}" title="${escHtml(tip)}">${txt}</button>`;
   const st = (txt, tip, color) => `<span class="wo-prog" style="font-size:12px;color:var(${color || '--mut'})" title="${escHtml(tip || '')}">${escHtml(txt)}</span>`;
   const rv = canRevise(w) ? a('revise', '', 'Revisi', 'Kirim balik ke worker dengan catatan, dikerjakan di branch yang sama') : '';
-  if (REVIEWABLE.includes(w.status)) return a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') + rv + a('reject', 'danger', 'Reject', 'Tolak WO');
+  if (REVIEWABLE.includes(w.status)) return ((w.result || {}).head_sha ? a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') : '') + rv + a('reject', 'danger', 'Reject', 'Tolak WO');
   if (rv) return rv;
   const scope = SCOPE_TXT[w.pull_scope] || 'dev';
   if (w.status === 'APPROVED') return st('⏳ menunggu worker merge', 'pull: ' + scope);
@@ -280,7 +280,8 @@ function openDetail(id) {
     h += r.head_sha
       ? `<div class="wo-actions"><button class="btn-sm ok" id="woApprove">Approve</button>${canRevise(w) ? '<button class="btn-sm" id="woRevise">Revisi</button>' : ''}<button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
          <p style="color:var(--mut);font-size:12px">Approve membuat worker di laptop me-merge <code>${escHtml(r.branch || '')}</code> ke branch target yang diatur di <code>projects.json</code> laptop, lalu push. Setelah MERGED, VPS otomatis <code>git pull</code> folder yang ter-link: pilih <em>dev saja</em> atau <em>semua</em> (termasuk produksi) saat Approve. Folder dengan perubahan lokal dilewati. ${w.status === 'NEEDS_REVIEW' ? '<strong>Status NEEDS_REVIEW: ada masalah, baca log dulu.</strong>' : ''}</p>`
-      : `<p style="color:var(--mut);font-size:12px">WO ini tidak punya commit/head_sha (dibuat sebelum fitur merge). Review di laptop: <code>git diff main...${escHtml(r.branch || '')}</code>.</p>`;
+      : `<div class="wo-actions">${canRevise(w) ? '<button class="btn-sm" id="woRevise">Revisi</button>' : ''}<button class="btn-sm danger" id="woReject">Reject</button><span id="woActErr"></span></div>
+         <p style="color:var(--mut);font-size:12px">Tidak ada commit untuk di-merge: agent tidak mengubah file (baca log di atas), atau WO lama. ${canRevise(w) ? 'Kirim <em>Revisi</em> dengan instruksi yang jelas, atau ' : 'Buat WO baru dengan instruksi yang jelas, atau '}<em>Reject</em>.</p>`;
   }
   else if (canRevise(w)) h += `<div class="wo-actions"><button class="btn-sm" id="woRevise">Revisi</button><span id="woActErr"></span></div>
     <p style="color:var(--mut);font-size:12px">Revisi mengirim WO kembali ke worker dengan catatanmu. Worker melanjutkan branch <code>${escHtml(r.branch || (w.revision || {}).branch || '')}</code> (commit baru di atasnya), lalu hasilnya direview ulang.</p>`;
@@ -459,7 +460,8 @@ $('woNewSubmit').addEventListener('click', async () => {
   if (goals.length) body.goals = goals;
   const files = lines($('woFiles').value);
   if (files.length) body.files_hint = files;
-  if ($('woDbBox').style.display !== 'none' && $('woDb').value) body.db_source = $('woDb').value;
+  if ($('woDbSrcBox').style.display !== 'none' && $('woDb').value) body.db_source = $('woDb').value;
+  if ($('woDbBox').style.display !== 'none') body.db_sync = $('woDbSync').checked;
   if (pending.length) body.images = pending.map(p => p.dataUrl);
   btn.disabled = true; $('woNewErr').textContent = '';
   try {
@@ -535,7 +537,7 @@ function bindActions(w) {
   if (rv) rv.addEventListener('click', () => openRevise(w));
   const rj = $('woReject');
   if (!rj) return;
-  $('woApprove').addEventListener('click', () => approveDialog(w, async () => { await load(); openDetail(w.id); }));
+  if ($('woApprove')) $('woApprove').addEventListener('click', () => approveDialog(w, async () => { await load(); openDetail(w.id); }));
   rj.addEventListener('click', async () => {
     rj.disabled = true; $('woActErr').textContent = '';
     try {
@@ -577,11 +579,22 @@ function projectNote() {
 }
 function dbPicker() {
   const p = projects.find(x => x.key === $('woProject').value), src = (p && p.db_sources) || [];
-  $('woDbBox').style.display = src.length ? '' : 'none';
+  $('woDbBox').style.display = src.length || (p && p.db_sync_info) ? '' : 'none';
+  $('woDbSrcBox').style.display = src.length ? '' : 'none';
   $('woDb').innerHTML = src.map(d => `<option value="${escHtml(d)}">${escHtml(d)}${d === p.db_default ? ' (default)' : ''}</option>`).join('');
   if (src.length) $('woDb').value = p.db_default || src[0];
+  dbLast();
+}
+// Info backup DB lokal worker per sumber; default centang jika belum pernah / lebih tua dari TTL worker.
+function dbLast() {
+  const p = projects.find(x => x.key === $('woProject').value), info = p && p.db_sync_info;
+  if (!info) { $('woDbLast').textContent = 'Worker belum melaporkan waktu backup terakhir (update worker laptop).'; $('woDbSync').checked = true; return; }
+  const at = info.last[(p.db_sources || []).length ? $('woDb').value : ''];
+  $('woDbSync').checked = !at || Date.now() - at > info.ttl_hours * 3600e3;
+  $('woDbLast').textContent = at ? `Backup DB lokal terakhir: ${new Date(at).toLocaleString()}` : 'Belum pernah di-backup ke lokal.';
 }
 $('woProject').addEventListener('change', () => { projectNote(); dbPicker(); });
+$('woDb').addEventListener('change', dbLast);
 
 // Deploy WO MERGED. Satu project bisa terhubung ke banyak folder VPS (satu repo GitHub di-clone ke banyak folder).
 // Folder yang di-pull dipilih manual tiap kali (default kosong): deploy ke produksi harus disengaja.

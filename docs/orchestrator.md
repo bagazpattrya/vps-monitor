@@ -55,6 +55,8 @@ Setelah `MERGED`, VPS otomatis `git pull` folder yang ter-link ke project (`/api
 ## Sumber DB per WO
 Worker mendaftarkan `db_sources` + `db_default` per project (dari `db_sync.sources` di `projects.json` laptop) lewat `POST /api/wo/projects`. `POST /api/wo` menerima `db_source` (harus ada di daftar project itu, jika kosong dipakai default); nilainya ikut di payload WO ke worker. Setiap DB harus ada di `ORCH_DUMP_DBS` (isi di `.env`, bukan `ecosystem.config.js` karena nilai ecosystem menimpa `.env`).
 
+`POST /api/wo` juga menerima `db_sync` (boolean, opsional): `true` = worker wajib restore DB dari sumber walau TTL belum habis, `false` = pakai DB lokal worker apa adanya, kosong = ikut TTL. Worker melaporkan `db_sync_info: {ttl_hours, last: {<sumber atau ''>: ms}}` per project saat registrasi (dikirim ulang setelah tiap restore); form WO menampilkan waktu backup DB lokal terakhir dan mencentang "Backup ulang" otomatis jika belum pernah atau lebih tua dari TTL.
+
 ## Link project, Deploy, Hapus
 - `POST /api/wo/links {project_key, repos:[{repo, url}]}` (maks 50) menyimpan folder VPS (relPath, sama seperti `/api/git/pull`) + URL website per folder di `data/wo-links.json`; satu repo GitHub yang di-clone ke banyak folder cukup didaftarkan semuanya. `repos` kosong menghapus link. Di detail WO `MERGED`, admin mencentang folder mana yang di-deploy (default kosong), lalu **Deploy terpilih** menjalankan `/api/git/pull` berurutan per folder; satu gagal tidak menghentikan yang lain, folder dengan perubahan lokal diberi peringatan dan konfirmasi.
 - `POST /api/wo/delete {ids}` (maks 200) hanya menghapus status `MERGED`, `REJECTED`, `FAILED`, `OVER_BUDGET`; sisanya dilaporkan di `skipped`. Screenshot dan lampiran ikut dihapus. Audit: `wo.delete`, `wo.link`.

@@ -309,6 +309,22 @@ test('db_source: default dari registry, pilihan valid, tolak di luar daftar', as
   t.close();
 });
 
+test('db_sync: info sync terakhir dari worker, pilihan sync per WO', async () => {
+  const t = await boot();
+  const reg = (projects) => t.call('POST', '/api/wo/projects', 'wrk', { projects });
+  assert.strictEqual((await reg([{ key: 'lapila', db_sync_info: { ttl_hours: 6, last: { 'a;b': 1 } } }])).status, 400);
+  assert.strictEqual((await reg([{ key: 'lapila', db_sync_info: { ttl_hours: 'x', last: {} } }])).status, 400);
+  assert.strictEqual((await reg([{ key: 'lapila', db_sources: ['a_db'], db_sync_info: { ttl_hours: 6, last: { a_db: 1700000000000 } } }])).status, 200);
+  const list = await (await t.call('GET', '/api/wo')).json();
+  assert.deepStrictEqual(list.projects[0].db_sync_info, { ttl_hours: 6, last: { a_db: 1700000000000 } });
+  const mk = async (b) => t.call('POST', '/api/wo', null, { ...good, ...b });
+  assert.strictEqual((await (await mk({ db_sync: false })).json()).wo.db_sync, false);
+  assert.strictEqual((await (await mk({ db_sync: true })).json()).wo.db_sync, true);
+  assert.strictEqual((await (await mk({})).json()).wo.db_sync, undefined);
+  assert.strictEqual((await mk({ db_sync: 'ya' })).status, 400);
+  t.close();
+});
+
 test('links: simpan daftar repo, dedupe, hapus, tolak url/repo buruk, viewer 403', async () => {
   const t = await boot();
   const L = { project_key: 'lapila', repos: [{ repo: 'hr-kti', url: 'https://kti.test' }, { repo: 'hr-oso', url: '' }, { repo: 'hr-kti', url: 'https://dup.test' }] };
