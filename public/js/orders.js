@@ -518,10 +518,11 @@ let approving = null; // { w, done }
 function approveDialog(w, done) {
   approving = { w, done };
   $('woApproveTitle').textContent = 'Approve ' + w.id;
-  // Daftar folder ter-link, dikelompokkan DEV / PRODUKSI; default hanya DEV yang dicentang.
+  // Daftar folder ter-link, dikelompokkan DEV / PRODUKSI; default semua folder yang ditemukan dicentang.
+  // Tiap grup punya tombol Select all (toggle centang semua / kosongkan).
   const rs = linkRepos(w).map(r => ({ repo: r.repo, g: gitList.find(x => x.relPath === r.repo) }));
-  const grp = (title, list) => !list.length ? '' : `<div style="margin:8px 0 2px;font-size:12px;color:var(--mut)">${title}</div>` + list.map(({ repo, g }) =>
-    `<label style="display:block;margin:4px 0"><input type="checkbox" class="wo-pull-chk" value="${escHtml(repo)}"${g && g.isDev ? ' checked' : ''}> <code>${escHtml(repo)}</code>${g ? ` <span style="color:var(--mut);font-size:12px">${escHtml(g.branch || '')}${g.dirty ? ' · ⚠ perubahan lokal' : ''}</span>` : ' <span style="color:var(--bad);font-size:12px">folder tidak ditemukan</span>'}</label>`).join('');
+  const grp = (title, list) => !list.length ? '' : `<div class="wo-pull-grp"><div style="margin:8px 0 2px;font-size:12px;color:var(--mut);display:flex;align-items:center;gap:8px">${title}${list.some(x => x.g) ? ' <button type="button" class="btn-sm wo-pull-all" style="padding:0 6px;font-size:11px">Select all</button>' : ''}</div>` + list.map(({ repo, g }) =>
+    `<label style="display:block;margin:4px 0"><input type="checkbox" class="wo-pull-chk" value="${escHtml(repo)}"${g ? ' checked' : ''}> <code>${escHtml(repo)}</code>${g ? ` <span style="color:var(--mut);font-size:12px">${escHtml(g.branch || '')}${g.dirty ? ' · ⚠ perubahan lokal' : ''}</span>` : ' <span style="color:var(--bad);font-size:12px">folder tidak ditemukan</span>'}</label>`).join('') + '</div>';
   $('woPullRepos').innerHTML = rs.length
     ? grp('DEV', rs.filter(r => r.g && r.g.isDev)) + grp('PRODUKSI', rs.filter(r => r.g && !r.g.isDev)) + grp('LAINNYA', rs.filter(r => !r.g))
     : '<p style="color:var(--mut)">Belum ada folder VPS ter-link ke project ini: tidak ada pull. Atur lewat tombol "Folder VPS".</p>';
@@ -531,6 +532,13 @@ function approveDialog(w, done) {
 const closeApprove = () => { approving = null; $('woApproveModal').classList.remove('open'); };
 $('woApproveClose').addEventListener('click', closeApprove);
 $('woApproveCancel').addEventListener('click', closeApprove);
+// Select all per grup: jika semua sudah dicentang -> kosongkan, selain itu centang semua.
+$('woPullRepos').addEventListener('click', e => {
+  const b = e.target.closest('.wo-pull-all'); if (!b) return;
+  const chks = [...b.closest('.wo-pull-grp').querySelectorAll('.wo-pull-chk')];
+  const all = chks.every(c => c.checked);
+  chks.forEach(c => { c.checked = !all; });
+});
 $('woApproveGo').addEventListener('click', async () => {
   if (!approving) return;
   const { w, done } = approving, repos = [...document.querySelectorAll('.wo-pull-chk:checked')].map(c => c.value);
