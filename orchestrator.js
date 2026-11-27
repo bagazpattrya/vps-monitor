@@ -65,6 +65,7 @@ function create(opts = {}) {
   const dumpBin = opts.dumpBin || 'mysqldump';
   const now = opts.now || Date.now;
   const audit = opts.audit || (() => {});
+  const hasCommit = opts.hasCommit || null; // (repo, sha) => bool: commit merge WO sudah ada di riwayat folder VPS itu
   const onMerged = opts.onMerged || null; // (repos, scope 'dev'|'all') => Promise<[{repo, ok, detail}]>: pull folder VPS ter-link setelah MERGED
   const file = path.join(dataDir, 'work-orders.json');
   const shotDir = path.join(dataDir, 'wo-shots');
@@ -99,6 +100,8 @@ function create(opts = {}) {
       review_note: w.review_note || null, merge: w.merge || null, autopull: w.autopull || null, pull_scope: w.pull_scope || null,
       cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
       revision: w.revision || null, revisions: w.revisions || [],
+      // folder ter-link yang sudah berisi commit merge WO ini, termasuk yang di-pull di luar WO (mis. produksi lewat halaman Git)
+      pulled_in: hasCommit && w.status === 'MERGED' && w.merge && w.merge.sha ? repoDirs(w.project_key).filter((r) => hasCommit(r, w.merge.sha)) : null,
     };
   }
 

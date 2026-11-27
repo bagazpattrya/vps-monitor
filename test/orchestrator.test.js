@@ -457,6 +457,20 @@ test('deploy manual dari modal: /pulled menimpa hasil autopull per folder ter-li
   t.close();
 });
 
+test('pulled_in: folder ter-link yang sudah berisi sha merge WO (mis. produksi di-pull di luar WO)', async () => {
+  const sha = 'abc1234';
+  const t = await boot({ onMerged: async (repos) => repos.map((repo) => ({ repo, ok: true })), hasCommit: (repo, s) => s === sha && repo !== 'lapila-x' });
+  await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [{ repo: 'lapila-dev', url: '' }, { repo: 'lapila-prod', url: '' }, { repo: 'lapila-x', url: '' }] });
+  const id = await finished(t);
+  assert.strictEqual((await (await t.call('GET', `/api/wo/${id}`)).json()).wo.pulled_in, null); // belum MERGED
+  await t.call('POST', `/api/wo/${id}/approve`, null, { pull: 'dev' });
+  await t.call('GET', '/api/wo/next', 'wrk');
+  await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED', sha });
+  const w = (await (await t.call('GET', `/api/wo/${id}`)).json()).wo;
+  assert.deepStrictEqual(w.pulled_in, ['lapila-dev', 'lapila-prod']);
+  t.close();
+});
+
 test('priority: default highest, worker ambil prioritas tertinggi dulu (seri FIFO), bisa diubah selama antre', async () => {
   const t = await boot();
   assert.ok(orch.validate({ ...good, priority: 'urgent' }));

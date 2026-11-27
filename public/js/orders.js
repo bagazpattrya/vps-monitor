@@ -104,6 +104,8 @@ async function load() {
     projects = d.projects || [];
     links = d.links || {};
     fillProjects();
+    // isDev tiap folder, untuk label dev/produksi di rowActions. Cache server 30 detik.
+    api('GET', '/api/git/projects').then(g => { gitList = g.projects || []; render(); }).catch(() => {});
     $('woBudget').textContent = `Biaya hari ini: ${fmtUsd(d.cost_today_usd)} dari batas harian $${d.daily_budget_usd}. Angka biaya dari total_cost_usd yang dilaporkan worker (notional jika memakai login subscription).`;
     render();
   } catch (e) {
@@ -161,7 +163,7 @@ function rowActions(w) {
   const rv = canRevise(w) ? a('revise', '', 'Revisi', 'Kirim balik ke worker dengan catatan, dikerjakan di branch yang sama') : '';
   if (REVIEWABLE.includes(w.status)) return ((w.result || {}).head_sha ? a('approve', 'ok', 'Approve', 'Merge ke branch target, lalu pilih pull ke dev saja atau semua') : '') + rv + a('reject', 'danger', 'Reject', 'Tolak WO');
   if (rv) return rv;
-  const scope = SCOPE_TXT[w.pull_scope] || 'dev';
+  let scope = SCOPE_TXT[w.pull_scope] || 'dev';
   if (w.status === 'APPROVED') return st('⏳ menunggu worker merge', 'pull: ' + scope);
   if (w.status === 'MERGING') return st('⏳ merging…', 'pull: ' + scope);
   if (w.status !== 'MERGED') return '';
@@ -169,8 +171,13 @@ function rowActions(w) {
   if (!ap) return st('✓ merged', linkRepos(w).length ? '' : 'Belum ada folder VPS ter-link: tidak ada pull', '--ok');
   if (ap.state === 'RUNNING') return st(`⏳ git pull (${scope})…`);
   if (ap.state === 'FAILED') return st('✕ pull gagal', ap.detail, '--bad');
-  const res = ap.results || [], ok = res.filter(r => r.ok).length;
-  const tip = res.map(r => `${r.ok ? '✓' : '✕'} ${r.repo}${r.ok ? '' : ': ' + r.detail}`).join('\n');
+  // Folder ter-link yang tidak ikut di-pull tapi sudah berisi commit merge WO (server: w.pulled_in) dihitung pulled.
+  const g = r => gitList.find(x => x.relPath === r) || {};
+  const same = (w.pulled_in || []).filter(r => !(ap.results || []).some(x => x.repo === r && x.ok));
+  const res = [...(ap.results || []).filter(r => !same.includes(r.repo)), ...same.map(repo => ({ repo, ok: true, same: true }))];
+  const ok = res.filter(r => r.ok).length;
+  if (res.some(r => r.ok && g(r.repo).isDev === false)) scope = SCOPE_TXT.all;
+  const tip = res.map(r => `${r.ok ? '✓' : '✕'} ${r.repo}${r.same ? ' (commit sudah ada)' : r.ok ? '' : ': ' + r.detail}`).join('\n');
   if (!res.length) return st('✓ merged · tanpa folder ' + scope, '', '--ok');
   return st(`${ok === res.length ? '✓' : '⚠'} pulled ${ok}/${res.length} (${scope})`, tip, ok === res.length ? '--ok' : '--warn-tx');
 }

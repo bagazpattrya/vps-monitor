@@ -4117,6 +4117,24 @@ async function autoPull(rels, scope) {
   return out;
 }
 
+// Apakah commit sha ada di riwayat HEAD folder rel. Pakai cache scan git (tidak memicu scan sinkron);
+// hasil disimpan per (folder, HEAD, sha) sehingga git hanya jalan lagi kalau HEAD folder berubah.
+const hasCommitCache = new Map();
+function repoHasCommit(rel, sha) {
+  if (!/^[0-9a-f]{7,40}$/.test(String(sha))) return false;
+  const full = path.normalize(path.join(SCAN_ROOT, String(rel)));
+  const g = (gitCache.projects || []).find((x) => x.path === full);
+  if (!g || g.broken) return false;
+  const k = `${full}|${g.hash}|${sha}`;
+  if (!hasCommitCache.has(k)) {
+    if (hasCommitCache.size > 5000) hasCommitCache.clear();
+    let ok = false;
+    try { execSync(gitCmdFor(full, `merge-base --is-ancestor ${sha} HEAD`), { timeout: 2000, stdio: 'ignore' }); ok = true; } catch {}
+    hasCommitCache.set(k, ok);
+  }
+  return hasCommitCache.get(k);
+}
+
 // Antrean WO untuk worker laptop. Aktif untuk worker hanya jika ORCH_WORKER_TOKEN diisi (lihat docs/orchestrator.md).
 const orch = orchestrator.create({
   dataDir: DATA_DIR,
@@ -4125,6 +4143,7 @@ const orch = orchestrator.create({
   dailyBudget: process.env.ORCH_DAILY_BUDGET_USD,
   audit: logActivity,
   onMerged: autoPull,
+  hasCommit: repoHasCommit,
 });
 
 // API eksternal (mis. sistem bug report): Bearer EXT_API_TOKEN. Hanya boleh buat WO, lihat satu WO, dan AI chat
