@@ -588,9 +588,6 @@ renderChat(null);
     modelSel.value = m.models.includes(saved) ? saved : m.default;
     if (m.shell || m.tinker) $('modeBadge').textContent = 'read-only · ' + (m.shell && m.tinker ? 'commands & tinker need approval' : m.shell ? 'commands need approval' : 'tinker needs approval');
     loadUsage();
-    const list = await loadList();
-    const last = localStorage.getItem('chatCurrent');
-    const id = list.some((c) => c.id === last) ? last : '';
-    if (id) await openChat(id);
+    await loadList(); // selalu mulai dari chat baru saat masuk /chat
   } catch (e) {}
 })();

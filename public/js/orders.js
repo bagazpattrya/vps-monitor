@@ -210,7 +210,7 @@ $('woList').addEventListener('click', e => {
   if (tr) openDetail(tr.dataset.id);
 });
 $('woFilter').addEventListener('change', render);
-$('woProjectFilter').addEventListener('change', () => { $('woProjLink').style.display = $('woProjectFilter').value ? '' : 'none'; render(); });
+$('woProjectFilter').addEventListener('change', () => { try { localStorage.setItem('woProjectFilter', $('woProjectFilter').value); } catch { /* abaikan */ } $('woProjLink').style.display = $('woProjectFilter').value ? '' : 'none'; render(); });
 // Atur folder per project tanpa harus menunggu ada WO MERGED.
 function projLink(key) {
   const w = { project_key: key };
@@ -585,14 +585,20 @@ function fillProjects() {
   const keys = [...new Set([...projects.map(p => p.key), ...Object.keys(count)])].sort();
   const sig = JSON.stringify([keys, count, projects]);
   if (sig === projectSig) return;
+  // Build pertama: pulihkan pilihan project terakhir dari localStorage.
+  let keepF = $('woProjectFilter').value;
+  if (!projectSig) try { keepF = localStorage.getItem('woProjectFilter') || ''; } catch { /* storage diblokir */ }
   projectSig = sig;
 
-  const pf = $('woProjectFilter'), keepF = pf.value;
+  const pf = $('woProjectFilter');
   pf.innerHTML = '<option value="">Semua project</option>' + keys.map(k => `<option value="${escHtml(k)}">${escHtml(k)} (${count[k] || 0})</option>`).join('');
   pf.value = keys.includes(keepF) ? keepF : '';
   $('woProjLink').style.display = pf.value ? '' : 'none';
 
-  const sel = $('woProject'), keep = sel.value;
+  // Form WO: kosong → pakai project WO terakhir.
+  const sel = $('woProject');
+  let keep = sel.value;
+  if (!keep) try { keep = localStorage.getItem('woProject') || ''; } catch { /* storage diblokir */ }
   if (!projects.length) {
     sel.innerHTML = '<option value="">Belum ada project terdaftar — jalankan worker di laptop</option>';
     sel.disabled = true; $('woNewSubmit').disabled = true;
@@ -623,7 +629,7 @@ function dbLast() {
   $('woDbSync').checked = !at || Date.now() - at > info.ttl_hours * 3600e3;
   $('woDbLast').textContent = at ? `Backup DB lokal terakhir: ${new Date(at).toLocaleString()}` : 'Belum pernah di-backup ke lokal.';
 }
-$('woProject').addEventListener('change', () => { projectNote(); dbPicker(); });
+$('woProject').addEventListener('change', () => { try { localStorage.setItem('woProject', $('woProject').value); } catch { /* abaikan */ } projectNote(); dbPicker(); });
 $('woDb').addEventListener('change', dbLast);
 
 // Deploy WO MERGED. Satu project bisa terhubung ke banyak folder VPS (satu repo GitHub di-clone ke banyak folder).
