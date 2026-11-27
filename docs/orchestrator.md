@@ -33,7 +33,7 @@ curl -b jar -H 'Content-Type: application/json' -d '{"project_key":"lapila","con
 ## Review dan merge (Approve)
 `complete` ikut membawa `result.patch` (maks 200 KB), `result.head_sha`, dan `result.branch` (`wo/...`). UI menampilkan patch berwarna.
 
-Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve**, lalu memilih pull ke **Dev saja** atau **Semua** di popup -> `APPROVED` -> worker mengambilnya (`GET /api/wo/next` mengembalikan `kind: "merge"`) -> `MERGING` -> `MERGED` atau `MERGE_FAILED`. `Reject` membuat `REJECTED`. `MERGE_FAILED` boleh di-approve ulang.
+Alur: `COMPLETED` / `NEEDS_REVIEW` -> admin klik **Approve**, lalu mencentang folder ter-link (dikelompokkan DEV / PRODUKSI, default hanya DEV) yang di-pull setelah MERGED (body `{ repos: [...] }`; `pull: dev|all` lama tetap diterima) -> `APPROVED` -> worker mengambilnya (`GET /api/wo/next` mengembalikan `kind: "merge"`) -> `MERGING` -> `MERGED` atau `MERGE_FAILED`. `Reject` membuat `REJECTED`. `MERGE_FAILED` boleh di-approve ulang.
 
 Setelah `MERGED`, VPS otomatis `git pull` folder yang ter-link ke project (`/api/wo/links`). Pilihan saat approve (`POST /api/wo/:id/approve` body `{ "pull": "dev" | "all" }`, default `dev`): `dev` hanya folder ber-flag `isDev`, `all` termasuk produksi. Folder dengan perubahan lokal dilewati. Worker tidak berubah: pull dikerjakan VPS. Progres (menunggu worker, merging, git pull, hasil) tampil di kolom aksi daftar WO; output lengkap di detail WO (`autopull`).
 

@@ -97,7 +97,7 @@ function create(opts = {}) {
       screenshot_url: w.screenshot ? `/api/wo/shot/${w.screenshot}` : null, cost_usd: w.cost_usd,
       created_at: new Date(w.created_at).toISOString(), completed_at: w.completed_at ? new Date(w.completed_at).toISOString() : null,
       created_by: w.created_by || null, approved_by: w.approved_by || null, approved_at: w.approved_at ? new Date(w.approved_at).toISOString() : null,
-      review_note: w.review_note || null, merge: w.merge || null, autopull: w.autopull || null, pull_scope: w.pull_scope || null,
+      review_note: w.review_note || null, merge: w.merge || null, autopull: w.autopull || null, pull_scope: w.pull_scope || null, pull_repos: w.pull_repos || null,
       cleanup: w.cleanup ? { state: w.cleanup.state, detail: w.cleanup.detail || null } : null,
       revision: w.revision || null, revisions: w.revisions || [],
       // folder ter-link yang sudah berisi commit merge WO ini, termasuk yang di-pull di luar WO (mis. produksi lewat halaman Git)
@@ -267,11 +267,13 @@ function create(opts = {}) {
       if (w.status !== 'MERGING') return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
       w.status = body.status; w.lease_until = null;
       w.merge = { status: body.status, detail: String(body.detail || '').slice(0, 2000), sha: /^[0-9a-f]{7,40}$/.test(body.sha || '') ? body.sha : null, target: String(body.target || '').slice(0, 100), at: now() };
-      const repos = (links[w.project_key] || {}).repos || [];
+      const linked = ((links[w.project_key] || {}).repos || []).map((r) => r.repo);
+      // pull_repos = folder yang dipilih admin saat Approve (null = WO lama: semua folder ter-link, disaring scope).
+      const repos = Array.isArray(w.pull_repos) ? linked.filter((r) => w.pull_repos.includes(r)) : linked;
       if (body.status === 'MERGED' && onMerged && repos.length) w.autopull = { state: 'RUNNING', results: [], at: now() };
       save(); audit('worker', 'wo.merge', w.id, `${body.status} ${w.merge.target}`);
       if (w.autopull && w.autopull.state === 'RUNNING') { // jalan di belakang: worker tidak menunggu git pull
-        Promise.resolve().then(() => onMerged(repos.map((r) => r.repo), w.pull_scope === 'all' ? 'all' : 'dev'))
+        Promise.resolve().then(() => onMerged(repos, Array.isArray(w.pull_repos) || w.pull_scope === 'all' ? 'all' : 'dev'))
           .then((results) => { w.autopull = { state: 'DONE', results, at: now() }; })
           .catch((e) => { w.autopull = { state: 'FAILED', results: [], detail: String((e && e.message) || e).slice(0, 500), at: now() }; })
           .then(() => { save(); audit('system', 'wo.autopull', w.id, w.autopull.state); });
@@ -445,11 +447,15 @@ function create(opts = {}) {
       if (act[2] === 'approve') {
         const r = w.result || {};
         if (!r.head_sha || !r.branch) return send(ctx, 409, { error: 'WO ini tidak punya commit untuk di-merge (agent tidak mengubah file, atau WO lama). Kirim Revisi dengan instruksi yang jelas, atau Reject.' }), true;
+        if (b.repos !== undefined && (!Array.isArray(b.repos) || b.repos.some((x) => typeof x !== 'string'))) return send(ctx, 400, { error: 'repos harus array nama folder' }), true;
         if (b.pull !== undefined && b.pull !== 'dev' && b.pull !== 'all') return send(ctx, 400, { error: "pull harus 'dev' atau 'all'" }), true;
         w.status = 'APPROVED'; w.merge = null; w.merge_attempts = 0; w.autopull = null;
         w.pull_scope = b.pull === 'all' ? 'all' : 'dev';
+        // Folder pilihan admin; hanya yang ter-link ke project ini yang dipakai.
+        const linked = ((links[w.project_key] || {}).repos || []).map((x) => x.repo);
+        w.pull_repos = b.repos === undefined ? null : linked.filter((x) => b.repos.includes(x));
         w.approved_by = session.user; w.approved_at = now();
-        audit(session.user, 'wo.approve', w.id, `${r.branch} pull=${w.pull_scope}`);
+        audit(session.user, 'wo.approve', w.id, `${r.branch} pull=${w.pull_repos ? w.pull_repos.join(',') || '-' : w.pull_scope}`);
       } else {
         w.status = 'REJECTED'; w.approved_by = session.user; w.approved_at = now();
         if (BRANCH_RE.test(r0.branch || '')) w.cleanup = { state: 'PENDING', attempts: 0 }; // worker menghapus branch lokal WO ini

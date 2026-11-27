@@ -190,9 +190,8 @@
       <button class="btn" id="woApproveClose" style="padding:2px 8px">✕</button>
     </div>
     <div class="modal-body" style="white-space:normal">
-      <p style="margin-top:0">Laptop akan merge dan push ke branch target. Setelah MERGED, VPS pull otomatis ke:</p>
-      <label style="display:block;margin:6px 0"><input type="radio" name="woPull" value="dev" checked> <strong>Dev saja</strong> — folder DEV yang ter-link</label>
-      <label style="display:block;margin:6px 0"><input type="radio" name="woPull" value="all"> <strong>Semua</strong> — dev + produksi</label>
+      <p style="margin-top:0">Laptop akan merge dan push ke branch target. Setelah MERGED, VPS pull otomatis ke folder yang dicentang:</p>
+      <div id="woPullRepos"></div>
       <p style="color:var(--mut);font-size:12px">Folder dengan perubahan lokal dilewati. Pull produksi ikut menjalankan migrate/build di folder itu.</p>
       <div class="wo-actions"><button class="btn-sm ok" id="woApproveGo">Approve</button><button class="btn-sm" id="woApproveCancel">Batal</button><span id="woApproveErr" style="color:var(--bad)"></span></div>
     </div>

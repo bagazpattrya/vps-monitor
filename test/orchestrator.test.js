@@ -442,6 +442,21 @@ test('MERGED memicu onMerged dengan folder ter-link, hasil tersimpan di autopull
   t.close();
 });
 
+test('approve dengan repos: hanya folder ter-link yang dipilih di-pull, tanpa filter dev', async () => {
+  const calls = [];
+  const t = await boot({ onMerged: async (repos, scope) => { calls.push([repos, scope]); return []; } });
+  await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [{ repo: 'lapila-dev', url: '' }, { repo: 'lapila-prod', url: '' }] });
+  const id = await finished(t);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/approve`, null, { repos: 'lapila-prod' })).status, 400);
+  const a = await (await t.call('POST', `/api/wo/${id}/approve`, null, { repos: ['lapila-prod', 'bukan-link'] })).json();
+  assert.deepStrictEqual(a.wo.pull_repos, ['lapila-prod']);
+  await t.call('GET', '/api/wo/next', 'wrk');
+  await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED' });
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual(calls, [[['lapila-prod'], 'all']]);
+  t.close();
+});
+
 test('deploy manual dari modal: /pulled menimpa hasil autopull per folder ter-link', async () => {
   const t = await boot({ onMerged: async (repos) => repos.map((repo) => ({ repo, ok: false, detail: 'dilewati: ada perubahan lokal' })) });
   await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [{ repo: 'lapila-dev', url: '' }, { repo: 'lapila-prod', url: '' }] });
