@@ -384,9 +384,20 @@ const autosize = () => { input.style.height = 'auto'; input.style.height = Math.
 input.addEventListener('input', autosize);
 
 // ---- send ----
+// Emergency stop: aborting the fetch closes the stream; server kills the claude process and keeps the partial answer.
+let abortCtl = null;
+const stopRun = () => { if (abortCtl) abortCtl.abort(); };
+const setSendBtn = (running) => {
+  const b = $('send');
+  b.textContent = running ? '■' : '↑';
+  b.title = running ? 'Stop (Esc)' : 'Send';
+  b.classList.toggle('stop', running);
+};
+
 async function sendMessage(message, images) {
   busy = true;
-  $('send').disabled = true;
+  abortCtl = new AbortController();
+  setSendBtn(true);
   stick = true;
   addUser(message, images);
   const bot = addBot(modelSel.value);
@@ -408,7 +419,7 @@ async function sendMessage(message, images) {
   bot.row.appendChild(status);
   scrollDown(true);
   try {
-    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId: currentId || undefined, model: modelSel.value || undefined, images: images.length ? images : undefined }) });
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, chatId: currentId || undefined, model: modelSel.value || undefined, images: images.length ? images : undefined }), signal: abortCtl.signal });
     if (r.status === 401) { location.href = '/login'; return; }
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
@@ -444,14 +455,15 @@ async function sendMessage(message, images) {
       }
     }
   } catch (e) {
-    addErr('Connection lost');
+    addErr(e.name === 'AbortError' ? 'Stopped' : 'Connection lost');
   } finally {
     clearInterval(timer);
     loadUsage();
     status.remove();
     if (!replyText) bot.row.remove();
     busy = false;
-    $('send').disabled = false;
+    abortCtl = null;
+    setSendBtn(false);
     input.focus();
     loadList().catch(() => {});
   }
@@ -467,8 +479,9 @@ function submitText(text) {
   sendMessage(t || 'Please look at the attached image(s).', images);
 }
 
-$('chatForm').addEventListener('submit', (e) => { e.preventDefault(); submitText(input.value); });
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('chatForm').requestSubmit(); } });
+$('chatForm').addEventListener('submit', (e) => { e.preventDefault(); if (busy) stopRun(); else submitText(input.value); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && busy) { e.preventDefault(); stopRun(); } });
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) $('chatForm').requestSubmit(); } });
 $('newChat').onclick = newChat;
 $('toggleList').onclick = () => $('chatList').classList.toggle('open');
 modelSel.addEventListener('change', () => localStorage.setItem('chatModel', modelSel.value));

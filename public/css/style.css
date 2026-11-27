@@ -1388,3 +1388,4 @@ body:has(.modal-backdrop.open) .wo-fab { display: none; } /* sembunyi saat drawe
 .wo-ctx { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wo-acts { white-space: nowrap; }
 .wo-acts .btn-sm { margin-right: 4px; }
+.send-btn.stop { background: var(--bad); font-size: 13px; }

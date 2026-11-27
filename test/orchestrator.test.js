@@ -442,6 +442,21 @@ test('MERGED memicu onMerged dengan folder ter-link, hasil tersimpan di autopull
   t.close();
 });
 
+test('deploy manual dari modal: /pulled menimpa hasil autopull per folder ter-link', async () => {
+  const t = await boot({ onMerged: async (repos) => repos.map((repo) => ({ repo, ok: false, detail: 'dilewati: ada perubahan lokal' })) });
+  await t.call('POST', '/api/wo/links', null, { project_key: 'lapila', repos: [{ repo: 'lapila-dev', url: '' }, { repo: 'lapila-prod', url: '' }] });
+  const id = await finished(t);
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/pulled`, null, { results: [{ repo: 'lapila-dev', ok: true }] })).status, 409); // belum MERGED
+  await t.call('POST', `/api/wo/${id}/approve`, null, { pull: 'all' });
+  await t.call('GET', '/api/wo/next', 'wrk');
+  await t.call('POST', `/api/wo/${id}/merge-result`, 'wrk', { status: 'MERGED' });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual((await t.call('POST', `/api/wo/${id}/pulled`, null, { results: [{ repo: 'other', ok: true }] })).status, 400);
+  const w = (await (await t.call('POST', `/api/wo/${id}/pulled`, null, { results: [{ repo: 'lapila-dev', ok: true, detail: 'ok' }] })).json()).wo;
+  assert.deepStrictEqual(w.autopull.results.map((r) => [r.repo, r.ok]).sort(), [['lapila-dev', true], ['lapila-prod', false]]);
+  t.close();
+});
+
 test('priority: default highest, worker ambil prioritas tertinggi dulu (seri FIFO), bisa diubah selama antre', async () => {
   const t = await boot();
   assert.ok(orch.validate({ ...good, priority: 'urgent' }));

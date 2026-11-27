@@ -653,20 +653,24 @@ async function deployBox(w) {
     if (dirty.length && !confirm('Folder ini punya perubahan lokal yang belum di-commit:\n' + dirty.join('\n') + '\n\nTetap deploy?')) return;
     $('woDeployBtn').disabled = true;
     let ok = 0;
+    const done = [];
     for (const i of picked) { // berurutan: satu gagal tidak menghentikan yang lain
       const res = box.querySelector(`.wo-deploy-row[data-i="${i}"] .dep-res`);
       res.textContent = '⏳ pulling…';
       try {
         const r = await api('POST', '/api/git/pull', { relPath: rs[i].repo });
         res.innerHTML = '<span style="color:var(--ok)">✓ ok</span>'; ok++;
+        done.push({ repo: rs[i].repo, ok: true, detail: r.output || 'ok' });
         res.title = r.output || '';
         $('woDeployOut').innerHTML += `<div class="wo-lbl">${escHtml(rs[i].repo)}</div><div class="wo-pre">${escHtml(r.output || 'Selesai')}</div>`;
       } catch (e) {
         res.innerHTML = '<span style="color:var(--bad)">✕ gagal</span>';
+        done.push({ repo: rs[i].repo, ok: false, detail: e.message });
         $('woDeployOut').innerHTML += `<div class="wo-lbl">${escHtml(rs[i].repo)}</div><div class="wo-pre" style="color:var(--bad)">${escHtml(e.message)}</div>`;
       }
     }
     $('woDeployBtn').textContent = `Selesai: ${ok}/${picked.length} berhasil`;
+    try { await api('POST', `/api/wo/${encodeURIComponent(w.id)}/pulled`, { results: done }); load(); } catch (e) { /* status daftar saja, deploy tetap jalan */ }
     $('woDeployBtn').disabled = false;
   };
 }

@@ -1529,7 +1529,7 @@ function getGitProjects(force = false) {
     }
     try {
       const log = execSync(gitCmdFor(d, 'log -1 --format="%h|%cr|%s" 2>/dev/null'), { timeout: 2000 }).toString().trim().split('|');
-      const dirty = execSync(gitCmdFor(d, 'status --porcelain 2>/dev/null'), { timeout: 2000 }).toString().trim().length > 0;
+      const dirty = execSync(gitCmdFor(d, 'status --porcelain --untracked-files=no 2>/dev/null'), { timeout: 2000 }).toString().trim().length > 0;
       let remote = '';
       try { remote = execSync(gitCmdFor(d, 'remote get-url origin 2>/dev/null'), { timeout: 1500 }).toString().trim(); } catch {}
       let lastPull = null;
@@ -1575,7 +1575,8 @@ async function scanGitRepoAsync(d) {
   const branch = head.output.trim() || 'unknown';
   const [log, status, remote] = await Promise.all([
     git('log -1 --format="%h%x1f%cr%x1f%ct%x1f%s"', 2000),
-    git('status --porcelain', 5000),
+    // untracked (.env.bak, lockfile) tidak dihitung dirty: git pull tidak menimpanya, jadi tidak perlu memblokir auto-pull.
+    git('status --porcelain --untracked-files=no', 5000),
     git('remote get-url origin', 1500),
   ]);
   if (!log.ok && !status.ok) {

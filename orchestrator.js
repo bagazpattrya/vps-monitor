@@ -412,6 +412,24 @@ function create(opts = {}) {
       audit(session.user, 'wo.priority', w.id, `${old} -> ${w.priority}`);
       return send(ctx, 200, { wo: view(w) }), true;
     }
+    // Deploy manual dari modal WO: catat hasilnya ke autopull supaya status "pulled x/y" di daftar ikut ter-update.
+    const pd = /^\/api\/wo\/([\w.-]+)\/pulled$/.exec(p);
+    if (pd && req.method === 'POST') {
+      const w = wos.find((x) => x.id === pd[1]);
+      if (!w) return send(ctx, 404, { error: 'WO tidak ditemukan' }), true;
+      if (w.status !== 'MERGED') return send(ctx, 409, { error: 'WO berstatus ' + w.status }), true;
+      let b;
+      try { b = JSON.parse(await ctx.readBody(req, 16384)); } catch { return send(ctx, 400, { error: 'Bad request' }), true; }
+      const allowed = new Set(repoDirs(w.project_key));
+      const got = (Array.isArray(b && b.results) ? b.results : []).filter((r) => r && allowed.has(r.repo))
+        .map((r) => ({ repo: r.repo, ok: !!r.ok, detail: String(r.detail || '').slice(-1500) }));
+      if (!got.length) return send(ctx, 400, { error: 'results kosong / folder tidak ter-link' }), true;
+      const prev = ((w.autopull || {}).results || []).filter((r) => !got.some((g) => g.repo === r.repo));
+      w.autopull = { state: 'DONE', results: [...prev, ...got], at: now(), manual: session.user };
+      save();
+      audit(session.user, 'wo.pulled', w.id, got.map((r) => `${r.ok ? 'ok' : 'fail'} ${r.repo}`).join(', '));
+      return send(ctx, 200, { wo: view(w) }), true;
+    }
     const act = /^\/api\/wo\/([\w.-]+)\/(approve|reject|revise)$/.exec(p);
     if (act && req.method === 'POST') {
       const w = wos.find((x) => x.id === act[1]);
