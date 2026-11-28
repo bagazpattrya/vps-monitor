@@ -458,7 +458,7 @@ function closeNew() {
   else { ['woContext', 'woGoals', 'woFiles'].forEach(i => { $(i).value = ''; }); pending = []; }
   renderThumbs();
 }
-const openNew = () => { if (revising) closeNew(); $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProject').focus(); };
+const openNew = () => { if (revising) closeNew(); $('woNewErr').textContent = ''; $('woNewModal').classList.add('open'); $('woProjectSearch').focus(); };
 $('woNew').addEventListener('click', openNew);
 // Tab (tanpa fokus di elemen apa pun, tidak ada panel terbuka) = buka drawer WO baru
 document.addEventListener('keydown', e => {
@@ -618,6 +618,7 @@ function fillProjects() {
     sel.disabled = false; $('woNewSubmit').disabled = false;
     sel.innerHTML = '<option value="">— pilih project —</option>' + projects.map(p => `<option value="${escHtml(p.key)}">${escHtml(p.key)}</option>`).join('');
     sel.value = projects.some(p => p.key === keep) ? keep : '';
+    filterProjects();
   }
   projectNote(); dbPicker();
 }
@@ -641,6 +642,21 @@ function dbLast() {
   $('woDbSync').checked = !at || Date.now() - at > info.ttl_hours * 3600e3;
   $('woDbLast').textContent = at ? `Backup DB lokal terakhir: ${new Date(at).toLocaleString()}` : 'Belum pernah di-backup ke lokal.';
 }
+// Cari project: saring opsi select; pilih otomatis match pertama bila pilihan sekarang tersaring.
+function filterProjects() {
+  const q = $('woProjectSearch').value.trim().toLowerCase(), sel = $('woProject');
+  let first = null;
+  for (const o of sel.options) {
+    if (!o.value) { o.hidden = !!q; continue; }
+    const hit = !q || o.value.toLowerCase().includes(q);
+    o.hidden = !hit;
+    if (hit && !first) first = o;
+  }
+  const cur = sel.selectedOptions[0];
+  if (q && first && (!cur || cur.hidden) && sel.value !== first.value) { sel.value = first.value; sel.dispatchEvent(new Event('change')); }
+}
+$('woProjectSearch').addEventListener('input', filterProjects);
+$('woProjectSearch').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('woContext').focus(); } });
 $('woProject').addEventListener('change', () => { try { localStorage.setItem('woProject', $('woProject').value); } catch { /* abaikan */ } projectNote(); dbPicker(); });
 $('woDb').addEventListener('change', dbLast);
 
