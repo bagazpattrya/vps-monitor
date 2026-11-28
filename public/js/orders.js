@@ -501,7 +501,11 @@ $('woNewSubmit').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { ['woImgModal', 'woDetailModal'].forEach(i => $(i).classList.remove('open')); if ($('woNewModal').classList.contains('open')) closeNew(); }
+  if (e.key !== 'Escape') return;
+  // Gambar terbuka: tutup gambarnya saja, modal detail tetap terbuka.
+  if ($('woImgModal').classList.contains('open')) { $('woImgModal').classList.remove('open'); return; }
+  $('woDetailModal').classList.remove('open');
+  if ($('woNewModal').classList.contains('open')) closeNew();
 });
 
 // Patch: tiap baris di-escape lalu diberi kelas warna (nilai berasal dari AI, jangan pernah tanpa escape).
